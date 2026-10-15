@@ -1,0 +1,21 @@
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        - G204 # Commands are argument arrays built from config, never shell strings.
+        - G304 # Paths come from our own state and log directories.
+        - G122 # Diagnostics directories are ours, created moments earlier.
+        - G703 # Test fixtures build paths under t.TempDir().
+formatters:
+  enable:
+    - gofmt

@@ -1,0 +1,2 @@
+# Keep tracked text LF across platforms; automatic detection preserves binaries.
+* text=auto eol=lf

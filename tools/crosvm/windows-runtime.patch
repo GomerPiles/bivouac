@@ -1,0 +1,180 @@
+diff --git a/devices/device_virtio_net/src/vhost_user/sys/windows.rs b/devices/device_virtio_net/src/vhost_user/sys/windows.rs
+index cabf446..06bffa8 100644
+--- a/devices/device_virtio_net/src/vhost_user/sys/windows.rs
++++ b/devices/device_virtio_net/src/vhost_user/sys/windows.rs
+@@ -162,7 +162,7 @@ pub(crate) fn start_queue<T: 'static + IntoAsync + TapT>(
+     queue: virtio::Queue,
+     _mem: GuestMemory,
+ ) -> anyhow::Result<()> {
+-    if backend.workers.get(idx).is_some() {
++    if backend.workers[idx].is_some() {
+         warn!("Starting new queue handler without stopping old handler");
+         backend.stop_queue(idx)?;
+     }
+diff --git a/devices/src/virtio/input/mod.rs b/devices/src/virtio/input/mod.rs
+index 8e805e3..f22faca 100644
+--- a/devices/src/virtio/input/mod.rs
++++ b/devices/src/virtio/input/mod.rs
+@@ -509,6 +509,21 @@ impl<T: EventSource> Worker<T> {
+                         }
+                     }
+                     Token::InputEventsAvailable => match self.event_source.receive_events() {
++                        Err(InputError::EventsReadError(ref e))
++                            if cfg!(windows) && e.kind() == std::io::ErrorKind::WouldBlock =>
++                        {
++                            // Windows NOWAIT pipes are signaled even without input.
++                            // Preserve the source while avoiding a busy read/error loop.
++                            std::thread::sleep(std::time::Duration::from_millis(20));
++                        }
++                        Err(InputError::EventsReadError(ref e))
++                            if e.kind() == std::io::ErrorKind::BrokenPipe
++                                || e.kind() == std::io::ErrorKind::UnexpectedEof
++                                || (cfg!(windows) && e.raw_os_error() == Some(109)) =>
++                        {
++                            warn!("input event source for '{}' disconnected", self.name);
++                            let _ = wait_ctx.delete(&self.event_source);
++                        }
+                         Err(e) => error!("error receiving events: {}", e),
+                         Ok(_cnt) => eventq_needs_interrupt |= self.send_events(),
+                     },
+diff --git a/disk/src/qcow/mod.rs b/disk/src/qcow/mod.rs
+index 6b08c84..40242c5 100644
+--- a/disk/src/qcow/mod.rs
++++ b/disk/src/qcow/mod.rs
+@@ -169,7 +169,7 @@ const CLUSTER_USED_FLAG: u64 = 1 << 63;
+ const COMPATIBLE_FEATURES_LAZY_REFCOUNTS: u64 = 1 << 0;
+ 
+ // The format supports a "header extension area".
+-const QCOW2_EXT_MAGIC_BACKING_FORMAT: u32 = 0xe279_268f;
++const QCOW2_EXT_MAGIC_BACKING_FORMAT: u32 = 0xe279_2aca;
+ 
+ // Defined by the specification
+ const MAX_BACKING_FILE_SIZE: u32 = 1023;
+diff --git a/third_party/libslirp-rs/src/context.rs b/third_party/libslirp-rs/src/context.rs
+index 11c12f4..9228388 100644
+--- a/third_party/libslirp-rs/src/context.rs
++++ b/third_party/libslirp-rs/src/context.rs
+@@ -55,6 +55,10 @@ use crate::slirp::SlirpError;
+ use crate::Error;
+ use crate::Result;
+ 
++#[path = "bivouac_public.rs"]
++mod bivouac_public;
++use bivouac_public::PublicIpv4;
++
+ /// An instance of libslirp is represented by a Context, which provides methods that consumers use
+ /// to interact with Slirp. The Context is also where consumers register their CallbackHandler,
+ /// which provides required functions to libslirp, and allows libslirp to communicate back to the
+@@ -82,6 +86,7 @@ pub struct Context<H> {
+     slirp: *mut Slirp,
+     callbacks: SlirpCb,
+     callback_handler: H,
++    public_policy: Option<PublicIpv4>,
+ }
+ 
+ impl<H> Drop for Context<H> {
+@@ -308,9 +313,11 @@ extern "C" fn send_packet_handler<H: CallbackHandler>(
+     // SAFETY:
+     // Safe because we pass in opaque as exactly this type when constructing the Slirp object.
+     let res = unsafe {
+-        (*(opaque as *mut Context<H>))
+-            .callback_handler
+-            .send_packet(slice)
++        let context = &mut *(opaque as *mut Context<H>);
++        if let Some(policy) = context.public_policy.as_mut() {
++            policy.observe_host_packet(slice);
++        }
++        context.callback_handler.send_packet(slice)
+     };
+ 
+     match res {
+@@ -456,6 +463,8 @@ impl<H: CallbackHandler> Context<H> {
+         dns_server_domain_name: Option<String>,
+         callback_handler: H,
+     ) -> Result<Box<Context<H>>> {
++        let public_policy = PublicIpv4::from_environment(host_v4_address, dhcp_start_addr);
++        let filtered = public_policy.is_some();
+         let mut ret = Box::new(Context {
+             slirp: std::ptr::null_mut(),
+             callbacks: SlirpCb {
+@@ -470,6 +479,7 @@ impl<H: CallbackHandler> Context<H> {
+                 notify: Some(notify_handler::<H>),
+             },
+             callback_handler,
++            public_policy,
+         });
+ 
+         let cstr_dns_search: Vec<_> = virtual_network_dns_search_domains
+@@ -493,7 +503,7 @@ impl<H: CallbackHandler> Context<H> {
+             vnetwork: virtual_network_v4_address.into(),
+             vnetmask: virtual_network_v4_mask.into(),
+             vhost: host_v4_address.into(),
+-            in6_enabled: ipv6_enabled,
++            in6_enabled: ipv6_enabled && !filtered,
+             vprefix_addr6: virtual_network_v6_address.into(),
+             vprefix_len: virtual_network_v6_prefix_len,
+             vhost6: host_v6_address.into(),
+@@ -508,7 +518,7 @@ impl<H: CallbackHandler> Context<H> {
+             vdomainname: as_ptr(&dns_server_domain_name),
+             if_mtu: 0,
+             if_mru: 0,
+-            disable_host_loopback: disable_access_to_host,
++            disable_host_loopback: disable_access_to_host || filtered,
+             enable_emu: false,
+             outbound_addr: std::ptr::null(),
+             outbound_addr6: std::ptr::null(),
+@@ -540,6 +550,24 @@ impl<H: CallbackHandler> Context<H> {
+             _ => {}
+         }
+         ret.slirp = slirp;
++        // Optional CI management endpoint, restricted to the host's loopback interface.
++        // No forwarding is installed unless the launcher explicitly requests it.
++        if let Ok(value) = std::env::var("CROSVM_SLIRP_SSH_PORT") {
++            let port: u16 = value.parse().expect("Invalid CROSVM_SLIRP_SSH_PORT");
++            assert!(port != 0, "SSH forwarding port must be nonzero");
++            // SAFETY: the Slirp context is live and both addresses are valid IPv4 values.
++            let result = unsafe {
++                slirp_add_hostfwd(
++                    ret.slirp,
++                    0,
++                    Ipv4Addr::LOCALHOST.into(),
++                    i32::from(port),
++                    dhcp_start_addr.into(),
++                    22,
++                )
++            };
++            assert_eq!(result, 0, "Cannot bind the loopback SSH forwarding port");
++        }
+         Ok(ret)
+     }
+ 
+@@ -549,16 +577,20 @@ impl<H: CallbackHandler> Context<H> {
+         loop {
+             match self.callback_handler.end_read_from_guest() {
+                 Ok(ethernet_frame) => {
+-                    // SAFETY:
+-                    // Safe because the buffer (ethernet_frame) is valid & libslirp is provided
+-                    // with the data's underlying length.
+-                    unsafe {
+-                        slirp_input(
+-                            self.slirp,
+-                            ethernet_frame.as_ptr(),
+-                            ethernet_frame.len() as i32,
+-                        );
++                    let admitted = self.public_policy.as_mut().map_or(true, |policy| {
++                        policy.allow_guest_packet(ethernet_frame)
++                    });
++                    if admitted {
++                        // SAFETY: the frame is valid and its length is supplied to libslirp.
++                        unsafe {
++                            slirp_input(
++                                self.slirp,
++                                ethernet_frame.as_ptr(),
++                                ethernet_frame.len() as i32,
++                            );
++                        }
+                     }
++                    // Denied frames still reach begin_read_from_guest below.
+                 }
+                 Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                     error!("error reading packet from guest: {}", e);

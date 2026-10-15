@@ -1,0 +1,144 @@
+{
+  "Groups": [
+    {
+      "Type": 4,
+      "SubType": 1,
+      "Id": "in",
+      "Name": "BivouacIsolation",
+      "Flags": 0,
+      "Priority": 100,
+      "Conditions": [],
+      "GroupMatchType": 0,
+      "MatchConditionTypes": []
+    },
+    {
+      "Type": 4,
+      "SubType": 2,
+      "Id": "out",
+      "Name": "BivouacIsolation",
+      "Flags": 0,
+      "Priority": 100,
+      "Conditions": [],
+      "GroupMatchType": 0,
+      "MatchConditionTypes": []
+    },
+    {
+      "Type": 4,
+      "SubType": 3,
+      "Id": "inv6",
+      "Name": "BivouacIsolation",
+      "Flags": 0,
+      "Priority": 100,
+      "Conditions": [],
+      "GroupMatchType": 0,
+      "MatchConditionTypes": []
+    },
+    {
+      "Type": 4,
+      "SubType": 4,
+      "Id": "outv6",
+      "Name": "BivouacIsolation",
+      "Flags": 0,
+      "Priority": 100,
+      "Conditions": [],
+      "GroupMatchType": 0,
+      "MatchConditionTypes": []
+    }
+  ],
+  "Layer": {
+    "Type": 3,
+    "SubType": 1,
+    "Id": "owned",
+    "Name": "BivouacIsolation",
+    "Flags": 1,
+    "Priority": 10
+  },
+  "Rules": {
+    "in": [
+      {
+        "$type": "Microsoft.Azure.Networking.Host.Diagnostics.BlockRuleItem, VfpDiagnostics",
+        "Type": 5,
+        "SubType": 2,
+        "Id": "block0",
+        "Name": "BivouacBlock",
+        "Flags": 1,
+        "Priority": 100,
+        "Conditions": [
+          {
+            "$type": "Microsoft.Azure.Networking.Host.Diagnostics.SourceIPConditionList, VfpDiagnostics",
+            "ConditionType": 2,
+            "SourceIPList": [
+              {
+                "A": "240.0.0.0",
+                "C": 4
+              }
+            ]
+          }
+        ],
+        "TimeToLive": 0,
+        "MssDelta": 0,
+        "ReverseMssDelta": 0,
+        "RuleFlags": 0
+      }
+    ],
+    "out": [
+      {
+        "$type": "Microsoft.Azure.Networking.Host.Diagnostics.BlockRuleItem, VfpDiagnostics",
+        "Type": 5,
+        "SubType": 2,
+        "Id": "block0",
+        "Name": "BivouacBlock",
+        "Flags": 1,
+        "Priority": 100,
+        "Conditions": [
+          {
+            "$type": "Microsoft.Azure.Networking.Host.Diagnostics.DestinationIPConditionList, VfpDiagnostics",
+            "ConditionType": 3,
+            "DestinationIPList": [
+              {
+                "A": "240.0.0.0",
+                "C": 4
+              }
+            ]
+          }
+        ],
+        "TimeToLive": 0,
+        "MssDelta": 0,
+        "ReverseMssDelta": 0,
+        "RuleFlags": 0
+      }
+    ],
+    "inv6": [
+      {
+        "$type": "Microsoft.Azure.Networking.Host.Diagnostics.BlockRuleItem, VfpDiagnostics",
+        "Type": 5,
+        "SubType": 2,
+        "Id": "block6",
+        "Name": "BivouacBlock",
+        "Flags": 1,
+        "Priority": 100,
+        "Conditions": [],
+        "TimeToLive": 0,
+        "MssDelta": 0,
+        "ReverseMssDelta": 0,
+        "RuleFlags": 0
+      }
+    ],
+    "outv6": [
+      {
+        "$type": "Microsoft.Azure.Networking.Host.Diagnostics.BlockRuleItem, VfpDiagnostics",
+        "Type": 5,
+        "SubType": 2,
+        "Id": "block6",
+        "Name": "BivouacBlock",
+        "Flags": 1,
+        "Priority": 100,
+        "Conditions": [],
+        "TimeToLive": 0,
+        "MssDelta": 0,
+        "ReverseMssDelta": 0,
+        "RuleFlags": 0
+      }
+    ]
+  }
+}
