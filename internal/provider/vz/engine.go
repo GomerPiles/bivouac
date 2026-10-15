@@ -54,7 +54,7 @@ func (p *Provider) pairStatus(ctx context.Context, name string) (provider.Status
 // recorded both names. Any failure retains the record for ownership-checked retry.
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if p.cfg.Containers == nil {
-		return p.createVM(ctx, spec)
+		return p.createVM(ctx, spec, "darwin")
 	}
 	i, err := p.pairRecord(spec.Name)
 	if err != nil {
@@ -76,14 +76,14 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		}
 	}
 	spec.Meta.EngineName = i.EngineName
-	if err = p.createVM(ctx, spec); err != nil {
+	if err = p.createVM(ctx, spec, "darwin"); err != nil {
 		return err
 	}
 	meta := spec.Meta
 	meta.EngineName = ""
 	meta.ParentName = spec.Name
 	e := p.cfg.Containers
-	return p.createVM(ctx, provider.Spec{Name: i.EngineName, Baseline: e.Baseline, CPU: e.CPU, MemoryMB: e.MemoryGB * 1024, Meta: meta})
+	return p.createVM(ctx, provider.Spec{Name: i.EngineName, Baseline: e.Baseline, CPU: e.CPU, MemoryMB: e.MemoryGB * 1024, Meta: meta}, "linux")
 }
 
 func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error {

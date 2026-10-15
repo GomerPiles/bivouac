@@ -23,9 +23,7 @@ const fixtureName = "bivouac-macos-fixture"
 
 func writeMarker(t *testing.T, p *Provider, name string) {
 	t.Helper()
-	if err := os.MkdirAll(p.vmDir(name), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeTestManifest(t, p.vmDir(name), "darwin")
 	data, _ := json.Marshal(provider.Metadata{ControllerID: p.controllerID, InstanceID: "fixture"})
 	if err := os.WriteFile(filepath.Join(p.vmDir(name), markerFile), data, 0o600); err != nil {
 		t.Fatal(err)

@@ -9,10 +9,10 @@ import (
 )
 
 // Clone is unavailable off macOS.
-func (Store) Clone(string, string) error { return ErrUnsupported }
+func (Store) Clone(string, string, CloneOptions) error { return ErrUnsupported }
 
-// Resize is unavailable off macOS.
-func (Store) Resize(string, int, int) error { return ErrUnsupported }
+// Import is unavailable off macOS.
+func (Store) Import(string, string, Guest) error { return ErrUnsupported }
 
 // List is unavailable off macOS.
 func (Store) List() ([]Entry, error) { return nil, ErrUnsupported }

@@ -34,12 +34,6 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 			t.Fatal(err)
 		}
 	}
-	for _, b := range []struct{ name, os string }{{"base", "darwin"}, {"linux-base", "linux"}} {
-		data, _ := json.Marshal(map[string]string{"os": b.os, "arch": "arm64"})
-		if err := os.WriteFile(filepath.Join(p.vmDir(b.name), "config.json"), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	// Minimal ELF header for architecture preflight; never executed.
 	h := make([]byte, 64)
 	copy(h, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 3})

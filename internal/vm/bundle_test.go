@@ -3,71 +3,97 @@ package vm
 import (
 	"encoding/json"
 	"net"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-const testConfig = `{"version":1,"os":"darwin","arch":"arm64","cpuCount":4,"cpuCountMin":2,
+// tartFixture is a Tart-format config.json.
+const tartFixture = `{"version":1,"os":"darwin","arch":"arm64","cpuCount":4,"cpuCountMin":2,
 "memorySize":8589934592,"memorySizeMin":4294967296,"macAddress":"86:a8:41:17:aa:30",
 "hardwareModel":"aGFyZHdhcmU=","ecid":"ZWNpZA==","diskFormat":"asif",
 "display":{"width":1024,"height":768},"futureField":{"kept":true}}`
 
-func writeConfig(t *testing.T, body string) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ConfigFile), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
+func testManifest() Manifest {
+	return Manifest{
+		Version: ManifestVersion, OS: "darwin", Arch: "arm64", CPU: 4, CPUMin: 2, MemoryMiB: 8192, MemoryMinMiB: 4096,
+		MAC: "86:a8:41:17:aa:30", Display: Display{Width: 1024, Height: 768},
+		MacOS: &MacOSPlatform{HardwareModel: []byte("hardware"), MachineID: []byte("ecid")},
+		Guest: Guest{AgentVersion: 1, RunnerDir: "/Users/admin/actions-runner", Sudo: true},
 	}
-	return dir
 }
 
-func TestReadConfigDecodesTheTartFormat(t *testing.T) {
-	c, err := ReadConfig(writeConfig(t, testConfig))
+func TestTartConfigImportsAsManifest(t *testing.T) {
+	c, err := parseTartConfig([]byte(tartFixture))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.CPUCount != 4 || c.MemorySize != 8<<30 || string(c.HardwareModel) != "hardware" || string(c.ECID) != "ecid" || c.Display.Width != 1024 {
-		t.Fatalf("decoded %+v", c)
+	want := testManifest()
+	got, err := c.manifest(want.Guest)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("manifest = %+v, %v", got, err)
 	}
-}
-
-func TestReadConfigRejectsUnsupported(t *testing.T) {
+	linux := strings.NewReplacer(`"os":"darwin"`, `"os":"linux"`, `"ecid":"ZWNpZA=="`, `"ecid":""`).Replace(tartFixture)
+	if c, err = parseTartConfig([]byte(linux)); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := c.manifest(Guest{AgentVersion: 1}); err != nil || m.MacOS != nil {
+		t.Fatalf("Linux guests need no Mac identity: %+v, %v", m, err)
+	}
 	for _, edit := range []struct{ from, to string }{
 		{`"version":1`, `"version":2`},
 		{`"arch":"arm64"`, `"arch":"amd64"`},
-		{`"os":"darwin"`, `"os":"windows"`},
 		{`"cpuCount":4`, `"cpuCount":0`},
-		{`"macAddress":"86:a8:41:17:aa:30"`, `"macAddress":"nope"`},
+		{`"memorySize":8589934592`, `"memorySize":8589934593`},
 		{`"ecid":"ZWNpZA=="`, `"ecid":""`},
 	} {
-		if _, err := ReadConfig(writeConfig(t, strings.Replace(testConfig, edit.from, edit.to, 1))); err == nil {
-			t.Errorf("accepted %s", edit.to)
+		c, err := parseTartConfig([]byte(strings.Replace(tartFixture, edit.from, edit.to, 1)))
+		if err == nil {
+			_, err = c.manifest(want.Guest)
 		}
-	}
-	linux := strings.NewReplacer(`"os":"darwin"`, `"os":"linux"`, `"ecid":"ZWNpZA=="`, `"ecid":""`).Replace(testConfig)
-	if _, err := ReadConfig(writeConfig(t, linux)); err != nil {
-		t.Errorf("Linux guests need no Mac identity: %v", err)
+		if err == nil {
+			t.Errorf("imported %s", edit.to)
+		}
 	}
 }
 
-func TestUpdateConfigKeepsUnknownFields(t *testing.T) {
-	dir := writeConfig(t, testConfig)
-	if err := updateConfig(dir, map[string]any{"cpuCount": 6, "macAddress": "02:00:00:00:00:01"}); err != nil {
+func TestManifestRoundTripsAndRejectsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeManifest(dir, testManifest()); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFile))
+	if m, err := ReadManifest(dir); err != nil || !reflect.DeepEqual(m, testManifest()) {
+		t.Fatalf("read back %+v, %v", m, err)
+	}
+	for name, edit := range map[string]func(*Manifest){
+		"version":         func(m *Manifest) { m.Version = 2 },
+		"arch":            func(m *Manifest) { m.Arch = "amd64" },
+		"os":              func(m *Manifest) { m.OS = "windows" },
+		"cpu":             func(m *Manifest) { m.CPU = 0 },
+		"cpu below min":   func(m *Manifest) { m.CPU = 1 },
+		"memory":          func(m *Manifest) { m.MemoryMiB = 1024 },
+		"mac":             func(m *Manifest) { m.MAC = "nope" },
+		"multicast mac":   func(m *Manifest) { m.MAC = "01:00:5e:00:00:01" },
+		"no mac identity": func(m *Manifest) { m.MacOS = nil },
+		"linux identity":  func(m *Manifest) { m.OS = "linux" },
+		"agent":           func(m *Manifest) { m.Guest.AgentVersion = 0 },
+		"runner dir":      func(m *Manifest) { m.Guest.RunnerDir = "actions-runner" },
+		"half display":    func(m *Manifest) { m.Display.Height = 0 },
+	} {
+		m := testManifest()
+		edit(&m)
+		if err := m.validate(); err == nil {
+			t.Errorf("%s: accepted %+v", name, m)
+		}
+	}
+	data, err := json.Marshal(testManifest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if raw["cpuCount"] != 6.0 || raw["macAddress"] != "02:00:00:00:00:01" || raw["futureField"] == nil || raw["hardwareModel"] != "aGFyZHdhcmU=" {
-		t.Fatalf("rewrote %s", data)
+	unknown := strings.Replace(string(data), `{"version"`, `{"future":true,"version"`, 1)
+	if _, err := parseManifest([]byte(unknown)); err == nil {
+		t.Error("accepted an unknown field")
 	}
 }
 
@@ -119,6 +145,8 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 	for _, o := range []RunOptions{
 		{Dir: dir, AgentPort: 7, AgentSocket: sock},
 		{Dir: dir, Share: abs("share"), Input: true, AgentPort: 9, AgentSocket: sock, Softnet: &SoftnetOptions{Binary: abs("softnet"), Sudo: true, Block: "@host,10.0.0.0/8"}},
+		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 1920, Height: 1080}, DiskSync: "none"}},
+		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 2560, Height: 1600, PPI: 144}, DiskSync: "fsync"}},
 	} {
 		got, err := ParseArgs(o.Args())
 		if err != nil {
@@ -136,6 +164,11 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "extra"},
 		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--softnet-block", "@host"},
 		{"--dir", dir, "--agent-port", "4294967296", "--agent-socket", sock},
+		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--disk-sync", "unsafe"},
+		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--display", "1920"},
+		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--display", "1920x1080@0"},
+		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--display", "0x0"},
+		{"--dir", dir, "--agent-port", "1", "--agent-socket", sock, "--display", "99999x1080"},
 	} {
 		if _, err := ParseArgs(bad); err == nil {
 			t.Errorf("accepted %q", bad)

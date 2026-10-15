@@ -48,9 +48,13 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 		return err
 	}
 	defer func() { _ = lock.Release() }()
-	// Read the configuration only through the lock: reopening config.json
-	// would release it.
-	c, err := lock.Config()
+	// Read the manifest only through the lock: reopening it would release
+	// the lock.
+	c, err := lock.Manifest()
+	if err != nil {
+		return err
+	}
+	diskSync, err := diskSyncMode(opts.Machine.DiskSync)
 	if err != nil {
 		return err
 	}
@@ -60,10 +64,10 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	defer signal.Stop(signals)
 
-	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input}
+	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync}
 	var sn *softnet
 	if opts.Softnet != nil {
-		sn, err = startSoftnet(*opts.Softnet, c.MACAddress, log)
+		sn, err = startSoftnet(*opts.Softnet, c.MAC, log)
 		if err != nil {
 			return err
 		}
@@ -77,7 +81,7 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err := m.start(); err != nil {
 		return err
 	}
-	logf("started %s guest with %d CPUs and %d MiB", c.OS, c.CPUCount, c.MemorySize>>20)
+	logf("started %s guest with %d CPUs and %d MiB", c.OS, c.CPU, c.MemoryMiB)
 
 	// Holding the lock proves any existing socket file is stale: the socket
 	// is named after this VM alone.

@@ -73,7 +73,7 @@ func TestConfigurationsValidate(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, DiskFile), make([]byte, 1<<20), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			c := Config{Version: 1, OS: guest, Arch: "arm64", CPUCount: 2, MemorySize: 4 << 30, MACAddress: "02:00:00:00:00:01"}
+			c := Manifest{Version: ManifestVersion, OS: guest, Arch: "arm64", CPU: 2, MemoryMiB: 4096, MAC: "02:00:00:00:00:01", Guest: Guest{AgentVersion: 1}}
 			var setupErr string
 			f.onQueue(queue, func() {
 				var nsErr objc.ID
@@ -88,8 +88,7 @@ func TestConfigurationsValidate(t *testing.T) {
 					setupErr = "unsupported macOS hardware model"
 					return
 				}
-				c.HardwareModel = model
-				c.ECID = bytesOf(f, f.send(f.send(f.class("VZMacMachineIdentifier"), "new"), "dataRepresentation"))
+				c.MacOS = &MacOSPlatform{HardwareModel: model, MachineID: bytesOf(f, f.send(f.send(f.class("VZMacMachineIdentifier"), "new"), "dataRepresentation"))}
 				if f.send(f.send(f.class("VZMacAuxiliaryStorage"), "alloc"), "initCreatingStorageAtURL:hardwareModel:options:error:", f.url(filepath.Join(dir, NVRAMFile)), hw, uint64(0), errOut(&nsErr)) == 0 {
 					setupErr = f.errorText(nsErr)
 				}
@@ -97,10 +96,13 @@ func TestConfigurationsValidate(t *testing.T) {
 			if setupErr != "" {
 				t.Skipf("%s guest on this host: %s", guest, setupErr)
 			}
+			display := Display{}.withDefaults(c.Display)
 			for _, opts := range []machineOptions{
-				{networkFD: -1},
-				{networkFD: -1, input: true, share: dir},
-				{networkFD: fds[0]},
+				{networkFD: -1, display: display},
+				{networkFD: -1, display: display, input: true, share: dir},
+				{networkFD: fds[0], display: display},
+				{networkFD: -1, display: Display{Width: 2560, Height: 1600, PPI: 144}, diskSync: syncNone},
+				{networkFD: -1, display: display, diskSync: syncFsync},
 			} {
 				var buildErr error
 				var valid bool

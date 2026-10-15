@@ -3,7 +3,7 @@
 package vz
 
 // Real-host validation of the VM runtime. Run on an Apple Silicon Mac with a
-// baseline in the VM store (BIVOUAC_HOME's when set) that has the bivouac
+// baseline imported into the VM store (BIVOUAC_HOME's when set) with the bivouac
 // guest agent installed, and a bivouac binary signed with
 // tools/macos/bivouac.entitlements:
 //
@@ -47,7 +47,7 @@ func TestRealGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := vm.Store(layout.VMs)
-	cfg := config.VZ{Baseline: baseline, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2, ForeignSlots: 1}
+	cfg := config.VZ{Baseline: baseline, HostVMLimit: 2, ForeignSlots: 1}
 	p, err := New("macos", cfg, "integration-ctl", layout.VMs, &local{store: store, exe: exe})
 	if err != nil {
 		t.Fatal(err)

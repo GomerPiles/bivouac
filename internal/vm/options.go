@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // RunOptions are the helper's arguments.
@@ -18,6 +19,44 @@ type RunOptions struct {
 	// AgentSocket is the Unix socket the helper serves AgentPort on.
 	AgentSocket string
 	Softnet     *SoftnetOptions
+	Machine     MachineOptions
+}
+
+// MachineOptions are typed overrides of how one VM runs; zero values keep
+// the manifest's or the framework's defaults.
+type MachineOptions struct {
+	// Display overrides the manifest's display (macOS guests).
+	Display Display
+	// DiskSync is "full" (default: guest flushes reach the disk), "fsync",
+	// or "none" (flushes are ignored; disposable guests only).
+	DiskSync string
+}
+
+// VZDiskImageSynchronizationMode values.
+const (
+	syncFull  = 1
+	syncFsync = 2
+	syncNone  = 3
+)
+
+func diskSyncMode(name string) (int, error) {
+	switch name {
+	case "", "full":
+		return syncFull, nil
+	case "fsync":
+		return syncFsync, nil
+	case "none":
+		return syncNone, nil
+	}
+	return 0, fmt.Errorf("disk sync mode %q is not full, fsync, or none", name)
+}
+
+// Validate checks the options without a VM.
+func (o MachineOptions) Validate() error {
+	if _, err := diskSyncMode(o.DiskSync); err != nil {
+		return err
+	}
+	return o.Display.Validate()
 }
 
 // SoftnetOptions isolate the guest behind Softnet instead of shared NAT.
@@ -43,7 +82,38 @@ func (o RunOptions) validate() error {
 	if s := o.Softnet; s != nil && (!filepath.IsAbs(s.Binary) || s.Block == "") {
 		return errors.New("softnet needs an absolute binary and a block list")
 	}
-	return nil
+	return o.Machine.Validate()
+}
+
+// displayArg encodes a display as WIDTHxHEIGHT[@PPI].
+func displayArg(d Display) string {
+	s := strconv.Itoa(d.Width) + "x" + strconv.Itoa(d.Height)
+	if d.PPI != 0 {
+		s += "@" + strconv.Itoa(d.PPI)
+	}
+	return s
+}
+
+func parseDisplayArg(s string) (Display, error) {
+	var d Display
+	size, ppi, hasPPI := strings.Cut(s, "@")
+	w, h, ok := strings.Cut(size, "x")
+	var err error
+	if d.Width, err = strconv.Atoi(w); err != nil || !ok {
+		return d, fmt.Errorf("invalid display %q", s)
+	}
+	if d.Height, err = strconv.Atoi(h); err != nil {
+		return d, fmt.Errorf("invalid display %q", s)
+	}
+	if hasPPI {
+		if d.PPI, err = strconv.Atoi(ppi); err != nil || d.PPI == 0 {
+			return d, fmt.Errorf("invalid display %q", s)
+		}
+	}
+	if d.Width == 0 {
+		return d, fmt.Errorf("invalid display %q", s)
+	}
+	return d, d.Validate()
 }
 
 // Args is the helper's argument array after `vm run`. It is recorded in
@@ -61,6 +131,12 @@ func (o RunOptions) Args() []string {
 		if s.Sudo {
 			args = append(args, "--softnet-sudo")
 		}
+	}
+	if d := o.Machine.Display; d.Width != 0 {
+		args = append(args, "--display", displayArg(d))
+	}
+	if o.Machine.DiskSync != "" {
+		args = append(args, "--disk-sync", o.Machine.DiskSync)
 	}
 	return args
 }
@@ -81,6 +157,9 @@ func ParseArgs(args []string) (RunOptions, error) {
 	fs.StringVar(&softnet, "softnet", "", "")
 	fs.StringVar(&block, "softnet-block", "", "")
 	fs.BoolVar(&sudo, "softnet-sudo", false, "")
+	var display string
+	fs.StringVar(&display, "display", "", "")
+	fs.StringVar(&o.Machine.DiskSync, "disk-sync", "", "")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
@@ -88,6 +167,13 @@ func ParseArgs(args []string) (RunOptions, error) {
 		return o, errors.New("invalid vm run arguments")
 	}
 	o.AgentPort = uint32(port)
+	if display != "" {
+		d, err := parseDisplayArg(display)
+		if err != nil {
+			return o, err
+		}
+		o.Machine.Display = d
+	}
 	if softnet != "" || block != "" || sudo {
 		o.Softnet = &SoftnetOptions{Binary: softnet, Block: block, Sudo: sudo}
 	}
