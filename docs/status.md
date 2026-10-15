@@ -80,6 +80,22 @@ Open:
   Windows-only tests pass on a Windows host without elevation; the native
   credential round trip is opt-in and was not run.
 
+## Windows: direct HCS spike
+
+A separate `hcs-spike` executable implements offline VM configuration, native
+HCS lifecycle, differencing disks, post-start GPU-PV assignment, bounded copies
+of selected GPU drivers, guest-agent initialization and ephemeral authenticated
+SSH over HvSocket. It is not wired into the CI manager. App Sandbox guest
+components remain required; generalized template provisioning is not implemented.
+Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
+Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
+Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow
+has not run for this spike.
+The ordinary-token DLL-export check passes on the Windows host; configuration
+planning also passes without opening any image or contacting the HCS service.
+No live VM trial has run: boot, hardware rendering, desktop/input, native
+cleanup/recovery and isolation remain unverified. See [`hcs-spike.md`](hcs-spike.md).
+
 ## Windows: Crosvm (Linux GPU guests)
 
 Validated live:

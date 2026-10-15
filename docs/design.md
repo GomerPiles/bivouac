@@ -593,6 +593,29 @@ even with loopback reported disabled. The broker now applies this recipe as
 described above. Private-peer and lifecycle tests remain necessary; no
 production isolation guarantee is inferred from the prototype.
 
+### Direct HCS Windows spike
+
+`cmd/hcs-spike` and `internal/hcsspike` are an isolated experiment, not a
+registered CI provider. A direct HCS launcher can create an offline Windows
+amd64 VM with a differencing disk, post-start GPU-PV assignment and fixed
+HvSocket guest-agent/SSH initialization, without an App Sandbox host daemon.
+It retains the upstream guest service/display-driver dependency and requires
+a separate specialized, unenrolled image; generalized template provisioning
+and per-instance resources ISO generation are not implemented.
+
+Only `check` (DLL export resolution/token report) and `plan` (pure configuration
+validation/JSON generation) are intended for ordinary-token execution. Native
+trial/cleanup require explicit administrator startup, a separate protected
+`HCS-Spike` root, immutable image hash, journal/child/native ownership proof,
+and bounded resources. They never request elevation or use the installed broker.
+No NIC, GitHub registration, CI configuration or production lifecycle is involved.
+Driver-only shares use copies inside the recorded disposable child. Ephemeral
+SSH keys stay in memory. The trial owns its HCS handles and terminates on last
+handle close; it does not promise the manager's adoption behaviour. Cleanup
+requires confirmed native absence before removing disks and retains uncertain
+records. Native boot/GPU/SSH and all isolation/lifecycle claims remain unverified.
+See [`hcs-spike.md`](hcs-spike.md) for prerequisites and the elevated trial gate.
+
 ## Optional containers on macOS
 
 `providers.<name>.tart.containers` opts a macOS runner into a disposable

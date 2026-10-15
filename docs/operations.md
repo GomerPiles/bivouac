@@ -26,6 +26,10 @@ storage, and [`crosvm.md`](crosvm.md) for the ordinary-user Linux GPU supervisor
 Keep production controllers and labels unchanged until the operator approves
 cutover after the relevant live validation. Remaining isolation gates still apply.
 
+The independent [direct HCS spike](hcs-spike.md) has ordinary-token `check` and
+`plan` commands. Its native trial is a separate elevated validation gate; it
+does not replace the installed Windows provider or change CI routing.
+
 ## Windows development boundary
 
 Windows providers remain experimental; do not point them at existing production
