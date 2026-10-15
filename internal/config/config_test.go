@@ -11,7 +11,7 @@ func TestExampleParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := c.Providers["macos"]
-	if p.Tart.Binary != "tart" || p.Tart.HostVMLimit != 2 {
+	if p.Tart.RunnerDir == "" || p.Tart.HostVMLimit != 2 {
 		t.Fatalf("defaults not applied: %+v", p.Tart)
 	}
 	if c.Budget.JobTimeout.Hours() != 2 {
@@ -26,13 +26,6 @@ func TestIsolatedContainersConfiguration(t *testing.T) {
 			t.Fatal(err)
 		}
 		p := c.Providers["macos"]
-		for _, a := range []string{"--dir=/tmp:ro", "--disk=/dev/disk1", "--net-host", "--net-softnet-allow=0.0.0.0/0", "--net-softnet-block=127.0.0.0/8", "--net-bridged=en0", "--net-softnet-expose=2375:2375", "--rosetta=host", "--nested"} {
-			p.Tart.ExtraArgs = []string{a}
-			if c.Validate() == nil {
-				t.Fatalf("accepted isolation override %q", a)
-			}
-		}
-		p.Tart.ExtraArgs = nil
 		p.Tart.BootstrapShare = "/tmp"
 		if c.Validate() == nil {
 			t.Fatal("accepted host share")
@@ -65,14 +58,13 @@ func TestRejects(t *testing.T) {
 		"unknown key":      strings.Replace(Example, "reserve_cpu", "reserve_cpus", 1),
 		"baseline prefix":  strings.Replace(Example, `baseline = "ci-macos"`, `baseline = "bivouac-base"`, 1),
 		"scaleset prefix":  strings.Replace(Example, `scaleset = "bivouac-macos-experimental"`, `scaleset = "macos"`, 1),
-		"shell string arg": strings.Replace(Example, `"--no-audio"`, `"--no-audio --no-clipboard"`, 1),
 		"foreign slots":    strings.Replace(Example, `foreign_slots = 1`, `foreign_slots = 2`, 1),
 		"missing key":      strings.Replace(Example, `private_key_secret = "github-app-key"`, ``, 1),
 		"bad url":          strings.Replace(Example, `https://github.com/example-org`, `http://github.com/example-org`, 1),
 		"negative timeout": strings.Replace(Example, `job_timeout = "2h"`, `job_timeout = "-2h"`, 1),
 		"negative idle":    strings.Replace(Example, `idle_timeout = "10m"`, `idle_timeout = "-1s"`, 1),
 		"tart cpu":         strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
-		"tart memory":      strings.Replace(Example, `memory_gb = 8`+"\n"+`extra_args`, `memory_gb = 4096`+"\n"+`extra_args`, 1),
+		"tart memory":      strings.Replace(Example, `memory_gb = 8`+"\n"+`runner_dir`, `memory_gb = 4096`+"\n"+`runner_dir`, 1),
 	}
 	for name, text := range cases {
 		if _, err := Parse([]byte(text)); err == nil {
@@ -134,19 +126,6 @@ func TestCacheConfiguration(t *testing.T) {
 		cfg.Cache = bad
 		if cfg.Validate() == nil {
 			t.Fatal("invalid cache config accepted")
-		}
-	}
-}
-
-func TestTartSerialArgumentRejected(t *testing.T) {
-	for _, a := range []string{"--serial", "--serial=/tmp/console"} {
-		cfg, err := Parse([]byte(Example))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cfg.Providers["macos"].Tart.ExtraArgs = []string{"--no-audio", a}
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "--serial") {
-			t.Fatalf("%s accepted: %v", a, err)
 		}
 	}
 }

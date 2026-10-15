@@ -19,7 +19,7 @@ import (
 // RelayPlan contains no credentials. It selects one recorded pair, never an
 // endpoint supplied by a workflow. The subprocess opens no host network socket.
 type RelayPlan struct {
-	StatePath, Home, Binary                        string
+	StatePath, Home                                string
 	Name, InstanceID, ControllerID, Engine, Policy string
 }
 
@@ -76,7 +76,10 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cli := CLI{Binary: r.Binary, Env: []string{"TART_HOME=" + r.Home, "TART_NO_AUTO_PRUNE=1"}}
+	rt, err := newLocal(r.Home)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		stopCtx, done := context.WithTimeout(context.Background(), 40*time.Second)
 		defer done()
@@ -100,14 +103,14 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 					continue
 				}
 			}
-			_, _ = output(stopCtx, cli, []string{"stop", name, "--timeout", "1"}, nil, defaultOutputLimit)
+			_ = rt.Stop(stopCtx, name, time.Second)
 		}
 	}()
 	policy, err := NetworkPolicy()
 	if err != nil || policy != r.Policy {
 		return errors.New("host network changed before relay startup")
 	}
-	mac, err := cli.Duplex(ctx, []string{"exec", "-i", r.Name, engine.GuestHelper, "engine", "listen"})
+	mac, err := rt.Duplex(ctx, r.Name, []string{engine.GuestHelper, "engine", "listen"})
 	if err != nil {
 		return err
 	}
@@ -126,8 +129,7 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 					return
 				}
 				checkCtx, done := context.WithTimeout(ctx, 5*time.Second)
-				p := Provider{exec: cli}
-				vms, err := p.list(checkCtx)
+				vms, err := rt.List(checkCtx)
 				done()
 				macRunning, linuxRunning := false, false
 				for _, v := range vms {
@@ -149,6 +151,6 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 		if r.verify() != nil {
 			return nil, provider.ErrNotOwned
 		}
-		return cli.Duplex(ctx, []string{"exec", "-i", r.Name + "-engine", engine.GuestHelper, "engine", "dial", r.Engine})
+		return rt.Duplex(ctx, r.Name+"-engine", []string{engine.GuestHelper, "engine", "dial", r.Engine})
 	})
 }

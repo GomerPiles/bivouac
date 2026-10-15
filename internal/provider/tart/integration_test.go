@@ -2,14 +2,16 @@
 
 package tart
 
-// Real-host validation against the Tart CLI. Run on an Apple Silicon Mac
-// with a local baseline:
+// Real-host validation of the VM runtime. Run on an Apple Silicon Mac with a
+// local baseline that has the bivouac guest agent installed, and a bivouac
+// binary signed with tools/macos/bivouac.entitlements:
 //
-//	BIVOUAC_TART_BASELINE=<baseline> go test -tags integration -run TestRealGuest -v ./internal/provider/tart/
+//	BIVOUAC_TART_BASELINE=<baseline> BIVOUAC_EXE=<signed bivouac> \
+//	  go test -tags integration -run TestRealGuest -v ./internal/provider/tart/
 //
 // It clones the baseline twice, proves the guest agent session is Aqua, that
-// `--no-graphics` and extra arguments reach the launched process, that a
-// sentinel written in one clone is absent in the next, that cleanup refuses
+// the helper receives exactly its argument array and holds Tart's lock, that
+// a sentinel written in one clone is absent in the next, that cleanup refuses
 // the baseline, and it prints clone, boot, and teardown timings.
 
 import (
@@ -26,6 +28,7 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func TestRealGuest(t *testing.T) {
@@ -33,8 +36,16 @@ func TestRealGuest(t *testing.T) {
 	if baseline == "" {
 		t.Skip("BIVOUAC_TART_BASELINE not set")
 	}
-	cfg := config.Tart{Baseline: baseline, ExtraArgs: []string{"--no-audio", "--no-clipboard"}, RunnerDir: "/Users/admin/actions-runner", Binary: "tart", HostVMLimit: 2, ForeignSlots: 1}
-	p, err := New("macos", cfg, "integration-ctl", nil)
+	exe := os.Getenv("BIVOUAC_EXE")
+	if exe == "" {
+		t.Skip("BIVOUAC_EXE not set")
+	}
+	home, err := Home()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Tart{Baseline: baseline, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2, ForeignSlots: 1}
+	p, err := New("macos", cfg, "integration-ctl", &local{home: vm.Home(home), exe: exe})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +60,7 @@ func TestRealGuest(t *testing.T) {
 	var sentinelName string
 	for round := 1; round <= 2; round++ {
 		name := "bivouac-macos-it" + strconv.FormatInt(time.Now().Unix(), 36)
-		spec := provider.Spec{Name: name, Baseline: baseline, Launch: provider.Launch{Args: cfg.ExtraArgs}, Meta: provider.Metadata{ControllerID: "integration-ctl", InstanceID: name, CreatedAt: time.Now().UTC().Format(time.RFC3339)}}
+		spec := provider.Spec{Name: name, Baseline: baseline, Meta: provider.Metadata{ControllerID: "integration-ctl", InstanceID: name, CreatedAt: time.Now().UTC().Format(time.RFC3339)}}
 		t0 := time.Now()
 		if err := p.Create(ctx, spec); err != nil {
 			t.Fatal(err)
@@ -72,25 +83,26 @@ func TestRealGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		args := strings.TrimSpace(string(ps))
-		for _, want := range []string{"--no-graphics", "--no-audio", "--no-clipboard", name} {
-			if !strings.Contains(args, want) {
-				t.Fatalf("launched process %q lacks %q", args, want)
-			}
+		if want := strings.Join(append([]string{exe}, p.LaunchArgs(name)...), " "); args != want {
+			t.Fatalf("launched process %q, want %q", args, want)
 		}
-		t.Logf("round %d: tart run process: %s", round, args)
+		if holder, err := vm.Holder(vm.Home(home).Dir(name)); err != nil || holder != pid {
+			t.Fatalf("lock holder = %d, %v; want helper %d", holder, err, pid)
+		}
+		t.Logf("round %d: helper process: %s", round, args)
 
 		// The guest agent runs commands in the Aqua session.
-		out, err := p.output(ctx, []string{"exec", name, guestPath, "session"}, nil)
+		out, err := p.output(ctx, name, []string{guestPath, "session"}, nil)
 		if err != nil || strings.TrimSpace(string(out)) != "Aqua" {
 			t.Fatalf("guest session = %q, %v; want Aqua", out, err)
 		}
 
 		// Sentinel: present in the clone that wrote it, absent in the next.
 		sentinel := "/Users/admin/bivouac-sentinel"
-		if _, err := p.output(ctx, []string{"exec", name, "ls", sentinel}, nil); err == nil {
+		if _, err := p.output(ctx, name, []string{"ls", sentinel}, nil); err == nil {
 			t.Fatalf("round %d: sentinel from a previous guest is present", round)
 		}
-		if _, err := p.output(ctx, []string{"exec", name, "touch", sentinel}, nil); err != nil {
+		if _, err := p.output(ctx, name, []string{"touch", sentinel}, nil); err != nil {
 			t.Fatal(err)
 		}
 		sentinelName = name

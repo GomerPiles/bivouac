@@ -1,6 +1,6 @@
 # Status
 
-Bivouac runs real CI for a downstream project on a macOS host (Tart) and a
+Bivouac runs real CI for a downstream project on a macOS host and a
 Windows host (App Sandbox Windows guests and Crosvm Linux GPU guests). This
 page records what is validated live, what only tests cover, and the open
 gates. No provider is ready for untrusted (for example fork) pull requests.
@@ -12,9 +12,16 @@ The latest review fixes are covered by tests only, not yet validated live.
 builds for macOS arm64/amd64, Windows amd64, and Linux amd64 pass locally and
 in the hosted Linux/macOS/Windows workflow.
 
-## macOS: Tart
+## macOS
 
-Validated with real jobs:
+Bivouac runs macOS guests itself (Virtualization.framework through
+purego, its own guest agent); Tart only builds baselines. The real-guest
+integration test passes on this runtime: Aqua session, helper argument
+array and Tart lock, clone isolation, cleanup refusing the baseline. Timings:
+clone 2 ms, boot to guest agent 22–28 s, teardown 1.2 s.
+
+Validated with real jobs on the earlier Tart CLI runtime, not yet repeated
+on this one:
 
 - Scale-set demand and the REST JIT fallback (idle pool of one). Each job ran
   in a fresh guest; a sentinel check proved no state carried over.
@@ -26,17 +33,21 @@ Validated with real jobs:
 - Actions archive cache and the release proxy: cold and warm hits, and
   fallback to upstream when the cache endpoint is stopped mid-job.
 - Credential-pattern scans of state, logs, and diagnostics found no matches.
-- Typical timings: clone 0.05 s, boot to guest agent 22–29 s, JIT to
-  listening 3–8 s, guest teardown 1.4–3.4 s.
+- Typical Tart CLI timings: clone 0.05 s, boot to guest agent 22–29 s, JIT
+  to listening 3–8 s, guest teardown 1.4–3.4 s.
 
 Open:
 
+- Real jobs, drain/stop/off, SIGKILL adoption, and guest loss on the bivouac
+  VM runtime; a production baseline with the guest agent installed.
+- Softnet launched by the VM helper (container pairs) and Linux guests on
+  this runtime.
 - Host reboot persistence of drain, stop, and off.
 - Repository-scoped registration, custom runner groups, GHES, pools larger
   than one, multiple providers, and simultaneous failures.
 - Resource and cache summaries from a real job (deployed, not yet observed).
 - Docker/Podman engine companions are implemented but not validated: they
-  need a Linux Tart baseline, Softnet privileges, public-only network checks
+  need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 - The Aqua session check, process-group launch, and cache bind to

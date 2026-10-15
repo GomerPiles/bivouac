@@ -14,7 +14,7 @@ const (
 	SSHReset
 	SSHClosed
 	// GuestAgentUnavailable and GuestAgentTimeout are failures of a non-SSH
-	// guest channel, such as the Tart guest agent behind `tart exec`.
+	// guest channel, such as the macOS guest agent socket.
 	GuestAgentUnavailable
 	GuestAgentTimeout
 	SSHAuthentication

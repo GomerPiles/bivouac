@@ -24,3 +24,6 @@ func Holder(string) (int, error) { return 0, ErrUnsupported }
 
 // RunHelper is unavailable off macOS.
 func RunHelper(context.Context, RunOptions, io.Writer) error { return ErrUnsupported }
+
+// CheckEntitlement is unavailable off macOS.
+func CheckEntitlement(context.Context, string) error { return ErrUnsupported }

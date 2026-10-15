@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -218,8 +217,8 @@ func (e env) secretCmd(ctx context.Context, args []string) error {
 	return errUsage
 }
 
-// tartCmd inspects and cleans up Tart guests through the provider, with the
-// same ownership checks the daemon uses.
+// tartCmd inspects and cleans up macOS guests through the provider, with
+// the same ownership checks the daemon uses.
 func (e env) tartCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errUsage
@@ -311,16 +310,10 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 	case "run-args":
 		for _, name := range cfg.ProviderNames() {
 			if tp, ok := providers[name].(*tart.Provider); ok {
-				fmt.Printf("%s: tart %s\n", name, strings.Join(tp.RunArgs("<name>", cfg.Providers[name].Tart.ExtraArgs), " "))
+				fmt.Printf("%s: bivouac %s\n", name, strings.Join(tp.LaunchArgs("<name>"), " "))
 			}
 		}
 		return nil
 	}
 	return errUsage
-}
-
-// tartVersion runs the configured binary for doctor.
-func tartVersion(ctx context.Context, binary string) (string, error) {
-	out, err := exec.CommandContext(ctx, binary, "--version").Output()
-	return strings.TrimSpace(string(out)), err
 }

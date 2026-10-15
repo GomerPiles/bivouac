@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,16 +13,6 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/redact"
 )
-
-// Exec runs the tart binary. Tests substitute a recorder.
-type Exec interface {
-	// Run runs args to completion with optional stdin, streaming stdout to w.
-	// A write error from w stops the command and fails the call. Stderr is
-	// bounded by the implementation.
-	Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error
-	// Start launches a long-running command whose output goes to sink.
-	Start(ctx context.Context, args []string, sink io.Writer) (Process, error)
-}
 
 // Output bounds. Guest commands can print anything, so every call has a cap
 // and exceeding it fails the call instead of truncating.
@@ -41,10 +30,10 @@ const execWaitDelay = 5 * time.Second
 // ErrOutputLimit reports a command whose stdout or stderr exceeded its bound.
 var ErrOutputLimit = errors.New("output exceeded its bound")
 
-// output runs args and returns at most limit bytes of stdout.
-func output(ctx context.Context, e Exec, args []string, stdin io.Reader, limit int) ([]byte, error) {
+// output runs a host command and returns at most limit bytes of stdout.
+func output(ctx context.Context, c CLI, args []string, limit int) ([]byte, error) {
 	b := &boundedBuffer{limit: limit}
-	err := e.Run(ctx, args, stdin, b)
+	err := c.Run(ctx, args, nil, b)
 	if b.exceeded {
 		return nil, &Error{Args: args, Err: fmt.Errorf("stdout %w of %d bytes", ErrOutputLimit, limit)}
 	}
@@ -93,68 +82,6 @@ func (f *failWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Duplex attaches a binary-safe, non-PTY guest exec stream. Stderr is discarded:
-// an untrusted guest must not send container credentials into host diagnostics.
-func (c CLI) Duplex(ctx context.Context, args []string) (net.Conn, error) {
-	cmd := exec.CommandContext(ctx, c.Binary, args...)
-	cmd.Env = append(os.Environ(), c.Env...)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = in.Close()
-		return nil, err
-	}
-	cmd.Stderr = io.Discard
-	// Killing this `tart exec` stream never affects the VM. WaitDelay bounds
-	// Close and cancellation when a grandchild still holds a pipe open.
-	cmd.WaitDelay = execWaitDelay
-	if err = cmd.Start(); err != nil {
-		_ = in.Close()
-		_ = out.Close()
-		return nil, errors.New("start guest transport")
-	}
-	s := &execConn{cmd: cmd, in: in, out: out, done: make(chan struct{})}
-	go func() { _ = cmd.Wait(); close(s.done) }()
-	return s, nil
-}
-
-type execConn struct {
-	cmd  *exec.Cmd
-	in   io.WriteCloser
-	out  io.ReadCloser
-	done chan struct{}
-}
-
-func (s *execConn) Read(p []byte) (int, error)  { return s.out.Read(p) }
-func (s *execConn) Write(p []byte) (int, error) { return s.in.Write(p) }
-func (s *execConn) CloseWrite() error           { return s.in.Close() }
-func (s *execConn) Close() error {
-	_ = s.in.Close()
-	_ = s.out.Close()
-	_ = s.cmd.Process.Kill()
-	<-s.done
-	return nil
-}
-func (*execConn) LocalAddr() net.Addr  { return execAddr("host-vsock") }
-func (*execConn) RemoteAddr() net.Addr { return execAddr("guest-vsock") }
-func (*execConn) SetDeadline(time.Time) error {
-	return errors.New("exec stream uses context deadlines")
-}
-func (*execConn) SetReadDeadline(time.Time) error {
-	return errors.New("exec stream uses context deadlines")
-}
-func (*execConn) SetWriteDeadline(time.Time) error {
-	return errors.New("exec stream uses context deadlines")
-}
-
-type execAddr string
-
-func (a execAddr) Network() string { return "vsock" }
-func (a execAddr) String() string  { return string(a) }
-
 // Process is a started command.
 type Process interface {
 	PID() int
@@ -165,15 +92,17 @@ type Process interface {
 	Kill() error
 }
 
-// CLI runs the real binary.
+// CLI runs a host binary: the VM helper, the container relay, softnet's
+// probes, and ps.
 type CLI struct {
 	Binary string
-	// Env entries are appended to the environment (TART_HOME, TART_NO_AUTO_PRUNE).
+	// Env entries are appended to the environment.
 	Env []string
 }
 
-// Run implements Exec. Stderr beyond stderrLimit fails the call; a failing
-// stdout writer stops the command.
+// Run runs args to completion with optional stdin, streaming stdout to w.
+// Stderr beyond stderrLimit fails the call; a failing stdout writer stops
+// the command.
 func (c CLI) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -201,13 +130,8 @@ func (c CLI) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.
 	return nil
 }
 
-// Start implements Exec.
-func (c CLI) Start(ctx context.Context, args []string, sink io.Writer) (Process, error) {
-	return c.startInput(ctx, args, nil, sink)
-}
-
-// startInput launches a child that must survive the daemon (`tart run`, the
-// container relay): it gets its own process group so a terminal interrupt
+// startInput launches a child that must survive the daemon (the VM helper,
+// the container relay): it gets its own process group so a terminal interrupt
 // aimed at a foreground daemon does not reach it.
 //
 // It is deliberately not bound to ctx, which is checked only before starting:
@@ -256,20 +180,18 @@ func (p *process) Kill() error {
 	return err
 }
 
-// Error is a failed tart invocation. Stderr holds at most stderrLimit bytes
-// for classification; Error() never includes guest-controlled text.
+// Error is a failed host command. Stderr holds at most stderrLimit bytes.
 type Error struct {
 	Args   []string
 	Err    error
 	Stderr string
 }
 
-// Error reports the arguments and failure. Stderr from Tart's own commands is
-// included redacted, on one line, and clipped; stderr of `tart exec` comes
-// from the guest and is omitted.
+// Error reports the arguments and failure, with stderr redacted, on one
+// line, and clipped. Host commands never relay guest output.
 func (e *Error) Error() string {
-	msg := fmt.Sprintf("tart %s: %v", clip(strings.Join(e.Args, " "), 256), e.Err)
-	if e.Stderr != "" && (len(e.Args) == 0 || e.Args[0] != "exec") {
+	msg := fmt.Sprintf("%s: %v", clip(strings.Join(e.Args, " "), 256), e.Err)
+	if e.Stderr != "" {
 		msg += ": " + clip(oneLine(redact.String(e.Stderr)), 512)
 	}
 	return msg
@@ -296,13 +218,3 @@ func clip(s string, n int) string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
-
-// absent reports whether an error says the VM does not exist.
-func absent(err error) bool {
-	var te *Error
-	if !errors.As(err, &te) {
-		return false
-	}
-	s := strings.ToLower(te.Stderr)
-	return strings.Contains(s, "not found") || strings.Contains(s, "does not exist") || strings.Contains(s, "doesn't exist")
-}

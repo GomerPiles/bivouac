@@ -24,6 +24,9 @@ const (
 	AgentSocket = "agent.sock"
 )
 
+// Entitlement is required of the executable that runs VMs.
+const Entitlement = "com.apple.security.virtualization"
+
 // maxSocketPath is sun_path's capacity on macOS, minus its terminator.
 const maxSocketPath = 103
 

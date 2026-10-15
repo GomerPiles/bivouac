@@ -54,14 +54,14 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 	budget := newDiagBudget()
 	var errs []error
 	for _, part := range []struct{ mode, sub string }{{"diag", "guest"}, {"diag-runner", "runner"}} {
-		args := []string{"exec", name, guestPath, part.mode, p.cfg.RunnerDir}
-		if err := p.collectArchive(ctx, args, filepath.Join(dir, part.sub), budget); err != nil {
+		argv := []string{guestPath, part.mode, p.cfg.RunnerDir}
+		if err := p.collectArchive(ctx, name, argv, filepath.Join(dir, part.sub), budget); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", part.mode, err))
 		}
 	}
 	if pid := p.LaunchPID(name); pid > 0 {
 		ps := CLI{Binary: "/bin/ps"}
-		if out, err := output(ctx, ps, []string{"-o", "args=", "-p", strconv.Itoa(pid)}, nil, 4<<10); err == nil {
+		if out, err := output(ctx, ps, []string{"-o", "args=", "-p", strconv.Itoa(pid)}, 4<<10); err == nil {
 			_ = os.WriteFile(filepath.Join(dir, "launch-process.txt"), redact.Bytes(out), 0o600)
 		}
 	}
@@ -75,13 +75,13 @@ func (r runFailure) Error() string { return r.err.Error() }
 func (r runFailure) Unwrap() error { return r.err }
 
 // collectArchive streams one gzip tar from the guest into dir.
-func (p *Provider) collectArchive(ctx context.Context, args []string, dir string, budget *diagBudget) error {
+func (p *Provider) collectArchive(ctx context.Context, name string, argv []string, dir string, budget *diagBudget) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pr, pw := io.Pipe()
 	ran := make(chan error, 1)
 	go func() {
-		err := p.exec.Run(ctx, args, nil, &capWriter{w: pw, remaining: budget.stream})
+		err := p.rt.Exec(ctx, name, argv, nil, &capWriter{w: pw, remaining: budget.stream})
 		if err != nil {
 			_ = pw.CloseWithError(runFailure{err})
 		} else {

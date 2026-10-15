@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/provider/tart"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 type check struct {
@@ -162,33 +164,24 @@ func (e env) doctor(ctx context.Context, args []string) error {
 
 func (e env) doctorTart(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
 	t := p.Tart
-	bin, err := exec.LookPath(t.Binary)
-	if err != nil {
-		add("FAIL", "tart "+name, fmt.Sprintf("binary %q not found", t.Binary))
-		return
-	}
-	v, err := tartVersion(ctx, bin)
-	if err != nil {
-		add("FAIL", "tart "+name, fmt.Sprintf("%s --version: %v", bin, err))
-		return
-	}
-	add("PASS", "tart "+name, bin+" version "+v)
-	out, err := exec.CommandContext(ctx, bin, "list", "--source", "local", "--quiet").Output()
-	if err != nil {
-		add("FAIL", "tart "+name, "tart list: "+err.Error())
-		return
-	}
-	names := strings.Fields(string(out))
-	found := false
-	for _, n := range names {
-		if n == t.Baseline {
-			found = true
-		}
-	}
-	if !found {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q is not a local VM (have: %s)", t.Baseline, strings.Join(names, ", ")))
+	if exe, err := os.Executable(); err != nil {
+		add("FAIL", "vm "+name, err.Error())
+	} else if err := vm.CheckEntitlement(ctx, exe); err != nil {
+		add("FAIL", "vm "+name, err.Error())
 	} else {
-		add("PASS", "baseline "+name, t.Baseline)
+		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
+	}
+	home, err := tart.Home()
+	if err != nil {
+		add("FAIL", "baseline "+name, err.Error())
+		return
+	}
+	if c, err := vm.ReadConfig(vm.Home(home).Dir(t.Baseline)); err != nil {
+		add("FAIL", "baseline "+name, fmt.Sprintf("%q: %v", t.Baseline, err))
+	} else if c.OS != "darwin" {
+		add("FAIL", "baseline "+name, fmt.Sprintf("%q is a %s VM, not macOS", t.Baseline, c.OS))
+	} else {
+		add("PASS", "baseline "+name, t.Baseline+"; its guest agent is checked when a guest boots")
 	}
 	cpu, mem := t.CPU, t.MemoryGB
 	if e := t.Containers; e != nil {
