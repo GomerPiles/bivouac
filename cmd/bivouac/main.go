@@ -19,6 +19,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/engine"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/paths"
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
@@ -108,6 +109,12 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 	if cmd == "appsandbox" {
 		return appsandboxCmd(ctx, args, os.Stdout)
+	}
+	if cmd == "guest-agent" {
+		if len(args) != 0 {
+			return errUsage
+		}
+		return guestagent.RunAgent(ctx)
 	}
 	if cmd == "vm" {
 		if len(args) == 0 || args[0] != "run" {
