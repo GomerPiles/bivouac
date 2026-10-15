@@ -74,6 +74,9 @@ exits after retrying for 2 s, longer than any liveness probe holds its
 shared lock. `tart cleanup` holds the same lock while it runs.
 `AbandonProcessGroup=true` prevents launchd from killing VM helpers
 when the controller crashes, so reconciliation can adopt the live guest.
+The LaunchAgent has one label and runs the default layout, so with
+`BIVOUAC_HOME` set, macOS install, uninstall, and kickstart refuse; such a
+home runs in the foreground only.
 
 On Windows the optional Task Scheduler entry uses the installing user's
 interactive token and `LeastPrivilege`, a user-specific logon trigger, no
