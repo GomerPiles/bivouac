@@ -108,6 +108,12 @@ fallback after cache loss. Windows and Linux guests reach the cache over
 SSH on guest loopback. Not covered: container images, npm/Cargo/rustup,
 private releases, and GHES; tools with their own trust stores need setup.
 
+Categorized store, fill and delivery diagnostics passed isolated Windows-host
+jobs; object labels and in-flight SSH loss reports are covered by tests only.
+The cause of a downstream project's earlier Linux release miss and two archive
+fill fallbacks is unknown; legacy logs could not distinguish eviction,
+invalidation and upstream change.
+
 ## Telemetry
 
 Host and guest CPU, memory, disk, and (Windows) commit summaries appear in

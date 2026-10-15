@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,14 @@ import (
 // A real SSH handshake and forwarded-tcpip channels, with no shell/exec or
 // general direct forwarding. Keys are synthetic and exist only in t.TempDir.
 func cacheSSHFixture(t *testing.T) SSHBinding {
+	t.Helper()
+	binding, _ := droppableSSHFixture(t)
+	return binding
+}
+
+// droppableSSHFixture also returns a function that closes every guest-side
+// SSH connection, as deleting a guest before revocation does.
+func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
 	t.Helper()
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -71,13 +80,16 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 	}
 	var mu sync.Mutex
 	var connections []net.Conn
-	t.Cleanup(func() {
-		_ = listener.Close()
+	drop := func() {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range connections {
 			_ = c.Close()
 		}
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		drop()
 	})
 	go func() {
 		for {
@@ -168,7 +180,7 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 	if err = os.WriteFile(b.KnownHosts, []byte(knownhosts.Line([]string{b.Address}, host.PublicKey())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return b
+	return b, drop
 }
 
 func sshCacheClient(t *testing.T, s *Service, name string, binding SSHBinding) (Bootstrap, *http.Client) {
@@ -363,4 +375,69 @@ func TestSSHReleaseCacheAndDirectFallback(t *testing.T) {
 	if err != nil || string(data) != "direct" {
 		t.Fatal("guest proxy did not fall back after SSH/cache loss")
 	}
+}
+
+func TestSSHTransportLossIsReportedOnlyDuringRequests(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"same"`)
+		w.Header().Set("Content-Length", "7")
+		if r.Method == http.MethodGet {
+			started <- struct{}{}
+			<-release
+		}
+	}))
+	defer backend.Close()
+	defer close(release)
+	s, _, _ := testService(t, backend)
+	var logs syncBuffer
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	for _, busy := range []bool{false, true} {
+		binding, drop := droppableSSHFixture(t)
+		b, client := sshCacheClient(t, s, "guest-name", binding)
+		if busy {
+			lease := makeLease(t, b, client, backend.URL+"/archive?sig=synthetic-secret")
+			go func() {
+				if response, err := client.Get(lease); err == nil {
+					_ = response.Body.Close()
+				}
+			}()
+			<-started
+		}
+		drop()
+		if !busy {
+			time.Sleep(300 * time.Millisecond) // Give an unwanted report time to appear.
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for busy && !strings.Contains(logs.String(), "transport ended") && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		reported := strings.Contains(logs.String(), "transport ended")
+		if reported != busy {
+			t.Fatalf("busy=%v reported=%v", busy, reported)
+		}
+	}
+	text := logs.String()
+	if !strings.Contains(text, "guest=guest-name") || !strings.Contains(text, "active_requests=1") || strings.Contains(text, "synthetic-secret") {
+		t.Fatal("transport loss diagnostic", text)
+	}
+}
+
+// syncBuffer collects logs written by transport goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
