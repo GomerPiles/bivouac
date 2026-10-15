@@ -332,7 +332,8 @@ Never use a process-name search to stop or wait for the daemon.
 
 The daemon runs every VM through `bivouac vm run` from its own executable, so
 that copy must carry the `com.apple.security.virtualization` entitlement;
-`doctor` checks it. Tart is needed only to build and edit baselines.
+the daemon refuses to start without it, and `doctor` checks it. Tart is
+needed only to build and edit baselines.
 
 **macOS baseline.** Bivouac reaches the guest through its own agent, not
 Tart's (which exits on hosts that are not Tart). Boot the baseline with Tart,

@@ -408,9 +408,10 @@ them so APFS can share blocks. Tart builds baselines; bivouac runs them.
   10 s after the command exits is reported as a failure, never as success.
   The agent accepts only the host's context ID, and its LaunchAgent abandons
   its process group, so an agent restart leaves a started runner alone.
-- Ready: the agent runs `true`. The bootstrap script is then copied to
-  `/tmp/bivouac-guest`, and its `session` mode must report `Aqua`, or
-  readiness fails.
+- Ready: the agent runs `true`. Only an unreachable agent is retried; an
+  agent of another protocol version names its own, and readiness fails at
+  once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
+  its `session` mode must report `Aqua`, or readiness fails.
 - Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
   when the cap is exceeded. Errors never include guest output.
 - Every guest operation first checks the prefix and our marker.

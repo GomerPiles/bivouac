@@ -30,25 +30,20 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
   5–10 s, teardown 1.3–1.8 s (power-off, as `tart stop` did).
 
-Validated earlier on the Tart CLI runtime only:
+Passed on the earlier Tart CLI runtime but not yet repeated on this one:
+the REST JIT fallback (idle pool of one), off/on with queued work, retained
+cleanup across restart, the Actions archive cache with fallback when its
+endpoint stops mid-job, and windowed Metal, focus, and input tests.
 
-- Scale-set demand and the REST JIT fallback (idle pool of one). Each job ran
-  in a fresh guest; a sentinel check proved no state carried over.
-- Drain, stop, and off/on mid-job and with queued work; controller SIGKILL
-  with adoption of the live guest; guest loss mid-job. VM capacity returns
-  before remote deregistration, and retained cleanup survives restart.
-- The runner executes in the Aqua session of a `--no-graphics` guest.
-  Windowed Metal rendering and app lifecycle, focus, and input tests pass.
-- Actions archive cache and the release proxy: cold and warm hits, and
-  fallback to upstream when the cache endpoint is stopped mid-job.
-- Credential-pattern scans of state, logs, and diagnostics found no matches.
-- Typical Tart CLI timings: clone 0.05 s, boot to guest agent 22–29 s, JIT
-  to listening 3–8 s, guest teardown 1.4–3.4 s.
+Tests only: a guest agent of another protocol version fails readiness at
+once; the daemon refuses to start from an executable without the
+virtualization entitlement; macOS CI signs a test binary and has the
+framework validate every helper device combination (skipped where the host
+cannot virtualize).
 
 Open:
 
-- Production cutover to a baseline with the guest agent installed; windowed
-  Metal, focus, and input tests on this runtime; the archive cache.
+- Production cutover to a baseline with the guest agent installed.
 - Softnet launched by the VM helper (container pairs) and Linux guests on
   this runtime.
 - Host reboot persistence of drain, stop, and off.
