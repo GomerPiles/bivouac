@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"strings"
 )
 
 // CheckEntitlement reports whether exe is signed with Entitlement. Without
@@ -14,7 +13,7 @@ func CheckEntitlement(ctx context.Context, exe string) error {
 	if err != nil {
 		return errors.New("read code signature: " + err.Error())
 	}
-	if !strings.Contains(string(out), "<key>"+Entitlement+"</key><true/>") {
+	if !entitled(out, Entitlement) {
 		return errors.New("executable lacks the " + Entitlement + " entitlement; sign it with tools/macos/bivouac.entitlements")
 	}
 	return nil

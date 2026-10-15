@@ -56,6 +56,14 @@ func newLocal(home string) (*local, error) {
 	return &local{home: vm.Home(home), exe: exe}, nil
 }
 
+// check reports whether this executable can run VM helpers.
+func (l *local) check(ctx context.Context) error {
+	if err := vm.CheckEntitlement(ctx, l.exe); err != nil {
+		return fmt.Errorf("%s: %w", l.exe, err)
+	}
+	return nil
+}
+
 func (l *local) Clone(_ context.Context, baseline, name string) error {
 	return l.home.Clone(baseline, name)
 }

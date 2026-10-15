@@ -86,6 +86,16 @@ func New(name string, cfg config.Tart, controllerID string, rt Runtime) (*Provid
 	return &Provider{name: name, cfg: cfg, controllerID: controllerID, home: home, rt: rt, procs: map[string]Process{}}, nil
 }
 
+// CheckRuntime fails when this host cannot run guests: the executable that
+// launches VM helpers lacks the virtualization entitlement. The daemon calls
+// it at startup, so an unsigned build never accepts a job.
+func (p *Provider) CheckRuntime(ctx context.Context) error {
+	if l, ok := p.rt.(*local); ok {
+		return l.check(ctx)
+	}
+	return nil
+}
+
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return p.name }
 

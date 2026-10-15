@@ -171,9 +171,12 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store)
 			out[name] = wp
 		case "tart":
 			tp, err := tart.New(name, *p.Tart, store.ControllerID(), nil)
+			if err == nil {
+				err = tp.CheckRuntime(ctx)
+			}
 			if err != nil {
 				closeProviders(out)
-				return nil, err
+				return nil, fmt.Errorf("provider %q: %w", name, err)
 			}
 			out[name] = tp
 			tp.SetRecords(store)
