@@ -341,7 +341,9 @@ then install the darwin/arm64 `bivouac` binary as `/usr/local/bin/bivouac`
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
 in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
 automatically; the agent runs only in that Aqua session. Shut the baseline
-down cleanly. Reinstall the agent only when its protocol version changes.
+down cleanly. To replace the agent binary, write a new file and `mv` it over
+the old one; overwriting the running binary in place corrupts it. Reinstall
+it only when its protocol version changes.
 
 **Moving from the Tart CLI runtime.** Drain to idle first: guests started by
 `tart run` have no agent socket and are not adopted. Remove `binary` and

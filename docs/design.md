@@ -425,9 +425,10 @@ them so APFS can share blocks. Tart builds baselines; bivouac runs them.
   is a retryable transport failure while the VM runs; only `absent` or a
   stopped or missing VM confirms exit.
 - Stop: only a lock holder whose arguments are `vm run --dir <this VM>` is
-  signalled (anything else, such as `tart run`, is refused). SIGTERM asks the
-  guest to shut down; SIGKILL after the timeout powers the VM off, since the
-  framework ends a VM whose owning process exits. Resizing holds the lock
+  signalled (anything else, such as `tart run`, is refused). SIGTERM powers
+  the VM off at once, as `tart stop` did: a macOS guest ignores a shutdown
+  request, and the clone is deleted anyway. SIGKILL after the timeout ends a
+  hung helper, and the framework ends a VM whose owning process exits. Resizing holds the lock
   while it rewrites `config.json`; the helper reads its configuration only
   through its own lock, and clones refuse a running baseline.
 - Diagnostics: `_diag` and the runner log stream out as tar through the

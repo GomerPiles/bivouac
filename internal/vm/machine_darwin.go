@@ -276,22 +276,6 @@ func (m *machine) start() error {
 // stop powers the VM off at once.
 func (m *machine) stop() error { return m.completion("stopWithCompletionHandler:") }
 
-// requestStop asks the guest to shut down, like a power button press.
-func (m *machine) requestStop() error {
-	var err error
-	m.f.onQueue(m.queue, func() {
-		if !objc.Send[bool](m.vm, m.f.sel("canRequestStop")) {
-			err = errors.New("guest cannot be asked to stop")
-			return
-		}
-		var nsErr objc.ID
-		if !objc.Send[bool](m.vm, m.f.sel("requestStopWithError:"), errOut(&nsErr)) {
-			err = errors.New(m.f.errorText(nsErr))
-		}
-	})
-	return err
-}
-
 func (m *machine) state() int {
 	var s int
 	m.f.onQueue(m.queue, func() { s = objc.Send[int](m.vm, m.f.sel("state")) })

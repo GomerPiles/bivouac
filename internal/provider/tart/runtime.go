@@ -27,7 +27,7 @@ type Runtime interface {
 	Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout io.Writer) error
 	// Duplex attaches a binary-safe stream to argv's stdin and stdout.
 	Duplex(ctx context.Context, name string, argv []string) (net.Conn, error)
-	// Stop asks the guest to shut down and powers it off after timeout.
+	// Stop powers the VM off; timeout bounds the helper's exit.
 	Stop(ctx context.Context, name string, timeout time.Duration) error
 	// Delete removes a stopped VM; fs.ErrNotExist when it is absent.
 	Delete(ctx context.Context, name string) error
@@ -102,7 +102,7 @@ func (l *local) Duplex(ctx context.Context, name string, argv []string) (net.Con
 }
 
 // Stop signals the VM's helper, proven by its lock and its arguments:
-// SIGTERM asks the guest to shut down, SIGKILL after timeout powers it off.
+// SIGTERM powers the VM off; SIGKILL after timeout ends a helper that hangs.
 func (l *local) Stop(ctx context.Context, name string, timeout time.Duration) error {
 	dir := l.home.Dir(name)
 	pid, err := vm.HelperPID(dir)

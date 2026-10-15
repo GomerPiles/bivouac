@@ -22,9 +22,10 @@ const connectTimeout = 5 * time.Second
 
 // RunHelper is `bivouac vm run`: it holds dir's lock, boots the VM, proxies
 // AgentSocket connections to the guest agent's vsock port, and exits when
-// the guest stops. SIGTERM or SIGINT asks the guest to shut down; a second
-// one powers it off. Killing the helper powers the VM off too, because the
-// framework ends a VM whose owning process exits.
+// the guest stops. SIGTERM or SIGINT powers the VM off at once, as `tart
+// stop` does: guests are disposable, so a guest shutdown only delays
+// teardown (a macOS guest ignores the request). Killing the helper powers
+// the VM off too, because the framework ends a VM whose owning process exits.
 //
 // Output is host-side status only; the guest console is never attached.
 func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
@@ -105,25 +106,14 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	cancelled := ctx.Done()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
-	requested := false
 	for {
 		select {
 		case <-cancelled:
 			cancelled = nil
 			_ = m.stop()
 		case <-signals:
-			if requested {
-				logf("powering off")
-				_ = m.stop()
-				break
-			}
-			requested = true
-			if err := m.requestStop(); err != nil {
-				logf("guest stop request failed (%v); powering off", err)
-				_ = m.stop()
-			} else {
-				logf("asked the guest to shut down")
-			}
+			logf("powering off")
+			_ = m.stop()
 		case <-softnetDone:
 			logf("softnet exited; powering off")
 			softnetDone = nil
