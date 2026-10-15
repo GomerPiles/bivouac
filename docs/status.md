@@ -15,16 +15,22 @@ in the hosted Linux/macOS/Windows workflow.
 ## macOS
 
 Bivouac runs macOS guests itself (Virtualization.framework through
-purego, its own guest agent); Tart only builds baselines. On this runtime
-the real-guest integration test passes (Aqua session, helper argument array
-and Tart lock, clone isolation, cleanup refusing the baseline), and one real
-scale-set job succeeded from a baseline with the guest agent: Aqua session,
-fresh-guest sentinel, diagnostics with `_diag` and performance report, no
-credential patterns in state, logs, or diagnostics. Timings: clone 2 ms,
-boot to guest agent 22–31 s, JIT to listening 5 s, teardown 1.2–1.6 s.
+purego, its own guest agent); Tart only builds baselines. Validated on this
+runtime with real scale-set jobs from a baseline with the guest agent:
 
-Validated with real jobs on the earlier Tart CLI runtime, not yet repeated
-on this one:
+- Jobs run in the Aqua session of a fresh guest (sentinel check), back to
+  back, through assigned-job and sweep runners.
+- Release-proxy cache cold and warm, with guest resource and cache summaries
+  in the job log; diagnostics with `_diag` and the performance report; no credential patterns in state, logs, or diagnostics.
+- Drain, stop, and off mid-job; controller SIGKILL with adoption of the live
+  guest; guest loss (helper killed), whose runner cleanup retried until
+  GitHub released the busy runner.
+- The real-guest integration test (helper arguments, Tart lock, cleanup
+  refusing the baseline).
+- Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
+  5–10 s, teardown 1.3–1.8 s (power-off, as `tart stop` did).
+
+Validated earlier on the Tart CLI runtime only:
 
 - Scale-set demand and the REST JIT fallback (idle pool of one). Each job ran
   in a fresh guest; a sentinel check proved no state carried over.
@@ -41,15 +47,13 @@ on this one:
 
 Open:
 
-- On the bivouac VM runtime: more than one real job, the cache, drain/stop/off
-  mid-job, SIGKILL adoption, and guest loss; production cutover to a baseline
-  with the guest agent installed.
+- Production cutover to a baseline with the guest agent installed; windowed
+  Metal, focus, and input tests on this runtime; the archive cache.
 - Softnet launched by the VM helper (container pairs) and Linux guests on
   this runtime.
 - Host reboot persistence of drain, stop, and off.
 - Repository-scoped registration, custom runner groups, GHES, pools larger
   than one, multiple providers, and simultaneous failures.
-- Resource and cache summaries from a real job (deployed, not yet observed).
 - Docker/Podman engine companions are implemented but not validated: they
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
