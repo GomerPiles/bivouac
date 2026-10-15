@@ -172,10 +172,11 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool
 	if err = j.write(recordName(c), r, true); err != nil {
 		return report, err
 	}
+	var created system
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		defer cancel()
-		err := cleanup(cleanupCtx, c, j, api)
+		err := cleanupHeld(cleanupCtx, c, j, api, created)
 		report.Cleaned = err == nil
 		result = errors.Join(result, err)
 	}()
@@ -194,7 +195,11 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool
 	}
 	s, settled, err := api.Create(ctx, c)
 	if s != nil {
-		defer s.Close()
+		if err == nil {
+			created = s
+		} else {
+			s.Close()
+		}
 	}
 	if settled {
 		r.CreateSettled = true
@@ -248,6 +253,17 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool
 }
 
 func cleanup(ctx context.Context, c Config, j *journal, api backend) error {
+	return cleanupHeld(ctx, c, j, api, nil)
+}
+
+// Keep the trial's last live handle until ownership is verified and termination
+// completes. Closing it first starts an asynchronous automatic teardown, during
+// which property queries can fail with HCS_E_INVALID_STATE.
+func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held system) error {
+	if held != nil {
+		defer held.Close()
+	}
+
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -278,7 +294,11 @@ func cleanup(ctx context.Context, c Config, j *journal, api backend) error {
 		}
 		return removeJournal(c, j)
 	}
-	s, err := api.Open(ctx, c.name())
+	s := held
+	var err error
+	if s == nil {
+		s, err = api.Open(ctx, c.name())
+	}
 	if err == nil {
 		defer s.Close()
 		if !r.Attempted {

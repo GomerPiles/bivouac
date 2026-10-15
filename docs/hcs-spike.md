@@ -7,16 +7,20 @@ it does not replace `bivouac`.
 
 ## Current elevated attempt
 
-The protected lab uses an independent immutable template copy. Disk/state-file
-preparation and the corrected VM-account payload ACL checks pass. The native
-attempt reached HCS but returned `HCS_E_INVALID_JSON`; its first properties query
-and cleanup used the unsupported compute-system selector `"Basic"`. The journal
-and child remain retained until exact native ownership/absence is verified.
-The corrected query requests default basic properties with `{}`, as specified
-by the schema. Native errors now identify the originating operation and HRESULT,
-without exposing result documents. Race tests, vet and lint pass; the corrected
-query still needs an explicitly approved elevated retry. No startup component
-or production configuration was changed.
+An approved offline trial against an independent immutable template copy reached
+HCS `Running` state and accepted post-start GPU-PV assignment. The prior retained
+instance was cleaned up after replacing the invalid `"Basic"` compute-system
+selector with the schema's default properties query. Guest initialization was
+skipped: Windows setup completion, desktop readiness and hardware rendering are
+not established by these observations.
+
+Automatic teardown retained the latest journal and child: the trial closed its
+last live handle before cleanup queried ownership, and that query returned
+`HCS_E_INVALID_STATE` during asynchronous teardown. Cleanup now keeps the created
+handle through ownership verification and explicit termination, then closes it
+before confirming native absence. Race tests, vet and lint pass, including a
+handle-order regression. This correction still needs an approved elevated retry.
+No startup component or production configuration was changed.
 
 ## What is implemented
 
@@ -54,8 +58,8 @@ or production configuration was changed.
 The spike deliberately uses `ShouldTerminateOnLastHandleClosed=true`: its VM
 should terminate when its last HCS handle closes, including process loss. This
 is a trial lifetime, not the CI provider's controller-crash adoption contract.
-An independent cleanup command handles retained disk/journal state. Native
-termination, handle-close behaviour and VM cleanup still require live validation.
+An independent cleanup command handles retained disk/journal state. The complete native
+termination/absence/storage cleanup path still requires live validation.
 
 ## Checks without UAC
 

@@ -93,15 +93,16 @@ Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflo
 has not run for this spike.
 The ordinary-token DLL-export check passes on the Windows host; configuration
 planning also passes without opening any image or contacting the HCS service.
-An operator-approved native-only attempt staged an independent immutable image
-copy and prepared the differencing disk/state files. VM-account payload grants
-now pass with exact file/ACL binding. The attempt reached HCS but returned
-`HCS_E_INVALID_JSON`; the unsupported compute-system `"Basic"` property selector
-also prevented cleanup. Its journal and child are retained pending exact native
-ownership/absence verification. The default-query correction and operation-aware
-HRESULT errors pass race tests, vet and lint, but have not run elevated. Boot,
-GPU assignment, hardware rendering, desktop/input, native cleanup/recovery and
-isolation remain unverified. See [`hcs-spike.md`](hcs-spike.md).
+An approved offline native-only trial reached HCS `Running` state and accepted
+GPU-PV assignment against an independent immutable template copy. The default
+properties query also allowed cleanup of the previous retained instance.
+The latest trial retained its journal/child when a cleanup property query raced
+last-handle automatic teardown (`HCS_E_INVALID_STATE`). The fix keeps that handle
+through ownership verification and explicit termination, then closes it before
+confirming native absence. Race tests, vet and lint pass, but this lifetime fix
+has not run elevated. Windows setup/guest readiness, hardware rendering,
+desktop/input, complete native cleanup/recovery and isolation remain unverified.
+See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)
 

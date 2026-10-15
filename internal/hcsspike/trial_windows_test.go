@@ -13,6 +13,7 @@ import (
 )
 
 type fakeBackend struct {
+	closeBeforeStop                                 bool
 	c                                               Config
 	vm                                              *fakeSystem
 	createFault                                     string
@@ -36,7 +37,11 @@ func (s *fakeSystem) Terminate(ctx context.Context) error {
 	s.api.vm = nil
 	return nil
 }
-func (*fakeSystem) Close() {}
+func (s *fakeSystem) Close() {
+	if s.api.vm != nil && s.api.stops == 0 {
+		s.api.closeBeforeStop = true
+	}
+}
 func (f *fakeBackend) Open(_ context.Context, name string) (system, error) {
 	if f.openErr != nil {
 		return nil, f.openErr
@@ -314,5 +319,19 @@ func TestBootOnlyNeverInitializesGuest(t *testing.T) {
 	}
 	if f.probes != 0 || report.AgentConnected || report.DisplayReady || report.SSHAuthenticated {
 		t.Fatal("native-only test admitted or claimed guest initialization")
+	}
+}
+
+func TestTrialKeepsCreatedHandleUntilOwnedTermination(t *testing.T) {
+	for _, bootOnly := range []bool{false, true} {
+		c, j := testJournal(t)
+		f := &fakeBackend{c: c}
+		report, err := trial(context.Background(), c, j, f, bootOnly)
+		if err != nil || !report.Cleaned {
+			t.Fatalf("trial failed: %v", err)
+		}
+		if f.closeBeforeStop {
+			t.Fatal("last trial handle closed before owned termination")
+		}
 	}
 }
