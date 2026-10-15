@@ -172,13 +172,32 @@ func (a *native) wait(ctx context.Context, op uintptr, wantResult bool) ([]byte,
 	return boundedResult(result)
 }
 
+// Start/Terminate reserve their options argument and require NULL, not an
+// empty JSON object or even a pointer to an empty UTF-16 string.
+func operationInput(method, document string) (*uint16, error) {
+	switch method {
+	case "HcsStartComputeSystem", "HcsTerminateComputeSystem":
+		if document != "" {
+			return nil, errors.New("HCS lifecycle options must be absent")
+		}
+		return nil, nil
+	case "HcsGetComputeSystemProperties", "HcsModifyComputeSystem":
+		if !json.Valid([]byte(document)) {
+			return nil, errors.New("invalid HCS document")
+		}
+		return windows.UTF16PtrFromString(document)
+	default:
+		return nil, errors.New("unsupported HCS operation")
+	}
+}
+
 func (a *native) operation(ctx context.Context, method string, handle uintptr, document string, wantResult bool) ([]byte, error) {
 	if _, err := operationTimeout(ctx); err != nil {
 		return nil, err
 	}
-	p, err := windows.UTF16PtrFromString(document)
+	p, err := operationInput(method, document)
 	if err != nil {
-		return nil, errors.New("invalid HCS document")
+		return nil, err
 	}
 	op, _, _ := a.proc("HcsCreateOperation").Call(0, 0)
 	if op == 0 {
@@ -281,7 +300,7 @@ func (s *nativeSystem) Properties(ctx context.Context) (properties, error) {
 	return p, nil
 }
 func (s *nativeSystem) Start(ctx context.Context) error {
-	_, err := s.api.operation(ctx, "HcsStartComputeSystem", s.handle, "{}", false)
+	_, err := s.api.operation(ctx, "HcsStartComputeSystem", s.handle, "", false)
 	return err
 }
 func (s *nativeSystem) GPU(ctx context.Context) error {
@@ -289,7 +308,7 @@ func (s *nativeSystem) GPU(ctx context.Context) error {
 	return err
 }
 func (s *nativeSystem) Terminate(ctx context.Context) error {
-	_, err := s.api.operation(ctx, "HcsTerminateComputeSystem", s.handle, "{}", false)
+	_, err := s.api.operation(ctx, "HcsTerminateComputeSystem", s.handle, "", false)
 	return err
 }
 func (s *nativeSystem) Close() {

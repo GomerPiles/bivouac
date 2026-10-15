@@ -156,4 +156,8 @@ No upstream binaries, drivers, images or keys are vendored. Microsoft's
 defines the ephemeral compute-system lifecycle. The pure-Go
 [`go-winio`](https://github.com/microsoft/go-winio/tree/v0.6.2) dependency handles
 HvSocket transport and the VHDX ABI, reusing the version already selected by the
-existing dependency graph. The spike adds no cgo requirement.
+existing dependency graph. The spike adds no cgo requirement. Start/terminate pass native NULL for the
+reserved options parameter, as required by Microsoft's
+[start](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsstartcomputesystem)
+and [terminate](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsterminatecomputesystem)
+contracts; regression tests reject substituting an empty JSON document.
