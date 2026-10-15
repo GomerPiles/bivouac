@@ -15,10 +15,13 @@ in the hosted Linux/macOS/Windows workflow.
 ## macOS
 
 Bivouac runs macOS guests itself (Virtualization.framework through
-purego, its own guest agent); Tart only builds baselines. The real-guest
-integration test passes on this runtime: Aqua session, helper argument
-array and Tart lock, clone isolation, cleanup refusing the baseline. Timings:
-clone 2 ms, boot to guest agent 22–28 s, teardown 1.2 s.
+purego, its own guest agent); Tart only builds baselines. On this runtime
+the real-guest integration test passes (Aqua session, helper argument array
+and Tart lock, clone isolation, cleanup refusing the baseline), and one real
+scale-set job succeeded from a baseline with the guest agent: Aqua session,
+fresh-guest sentinel, diagnostics with `_diag` and performance report, no
+credential patterns in state, logs, or diagnostics. Timings: clone 2 ms,
+boot to guest agent 22–31 s, JIT to listening 5 s, teardown 1.2–1.6 s.
 
 Validated with real jobs on the earlier Tart CLI runtime, not yet repeated
 on this one:
@@ -38,8 +41,9 @@ on this one:
 
 Open:
 
-- Real jobs, drain/stop/off, SIGKILL adoption, and guest loss on the bivouac
-  VM runtime; a production baseline with the guest agent installed.
+- On the bivouac VM runtime: more than one real job, the cache, drain/stop/off
+  mid-job, SIGKILL adoption, and guest loss; production cutover to a baseline
+  with the guest agent installed.
 - Softnet launched by the VM helper (container pairs) and Linux guests on
   this runtime.
 - Host reboot persistence of drain, stop, and off.
