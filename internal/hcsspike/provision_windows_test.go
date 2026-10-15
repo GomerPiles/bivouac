@@ -185,3 +185,16 @@ func jolietRootNames(t *testing.T, data []byte) []string {
 	t.Fatal("Joliet descriptor missing")
 	return nil
 }
+
+func TestEmptySetupAssetsHaveStableJournalRoundTrip(t *testing.T) {
+	c := exampleConfig()
+	data, _ := json.Marshal(c)
+	document := strings.TrimSuffix(string(data), "}") + `,"setup_assets":[]}`
+	decoded, err := DecodeConfig(strings.NewReader(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.SetupAssets != nil {
+		t.Fatal("empty asset slice differs after journal round trip")
+	}
+}

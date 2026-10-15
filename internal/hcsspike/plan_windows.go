@@ -72,6 +72,9 @@ func DecodeConfig(r io.Reader) (Config, error) {
 	if len(c.Drivers) == 0 {
 		c.Drivers = nil
 	}
+	if len(c.SetupAssets) == 0 {
+		c.SetupAssets = nil
+	}
 	return c, c.Validate()
 }
 
