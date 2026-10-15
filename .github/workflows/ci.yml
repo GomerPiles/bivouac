@@ -37,6 +37,14 @@ jobs:
           BIVOUAC_WINDOWS_CREDENTIAL_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
           CGO_ENABLED: '1'
         run: go test -race ./...
+      - name: VM configurations (signed test binary)
+        if: runner.os == 'macOS'
+        env:
+          BIVOUAC_VM_SIGNED_TESTS: '1'
+        run: |
+          go test -c -o "$RUNNER_TEMP/vm.test" ./internal/vm
+          codesign --force --sign - --entitlements tools/macos/bivouac.entitlements "$RUNNER_TEMP/vm.test"
+          "$RUNNER_TEMP/vm.test" -test.run 'TestConfigurationsValidate|TestEntitled' -test.v
       - name: Crosvm packet filter tests
         if: runner.os == 'Linux'
         run: |
