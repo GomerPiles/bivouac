@@ -124,7 +124,9 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		if err != nil {
 			return err
 		}
-		return vm.RunHelper(ctx, opts, os.Stdout)
+		// The helper handles SIGTERM and SIGINT itself (first: guest shutdown,
+		// second: power off); the shared signal context would power off at once.
+		return vm.RunHelper(context.WithoutCancel(ctx), opts, os.Stdout)
 	}
 	if cmd == "engine" {
 		if len(args) == 1 {

@@ -97,7 +97,12 @@ func handle(ctx context.Context, conn io.ReadWriteCloser) {
 		_ = w.frame(frameFailed, []byte("command lost"))
 		return
 	}
-	_ = err // the exit status below covers every outcome
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// A background child kept a pipe open past outputDelay: output may be
+		// incomplete, so success must not be reported.
+		_ = w.frame(frameFailed, []byte("output incomplete"))
+		return
+	}
 	var code [4]byte
 	binary.BigEndian.PutUint32(code[:], uint32(exitCode(cmd.ProcessState))) //nolint:gosec // Two's complement on purpose.
 	_ = w.frame(frameExit, code[:])

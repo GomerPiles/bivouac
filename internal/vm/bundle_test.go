@@ -105,9 +105,11 @@ func TestNamesStayInsideHome(t *testing.T) {
 }
 
 func TestHelperArgumentsRoundTrip(t *testing.T) {
+	abs := func(name string) string { return filepath.Join(t.TempDir(), name) }
+	dir := abs("a")
 	for _, o := range []RunOptions{
-		{Dir: "/vms/a", AgentPort: 7},
-		{Dir: "/vms/a", Share: "/share", Input: true, AgentPort: 9, Softnet: &SoftnetOptions{Binary: "/bin/softnet", Sudo: true, Block: "@host,10.0.0.0/8"}},
+		{Dir: dir, AgentPort: 7},
+		{Dir: dir, Share: abs("share"), Input: true, AgentPort: 9, Softnet: &SoftnetOptions{Binary: abs("softnet"), Sudo: true, Block: "@host,10.0.0.0/8"}},
 	} {
 		got, err := ParseArgs(o.Args())
 		if err != nil {
@@ -119,10 +121,10 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 	}
 	for _, bad := range [][]string{
 		{"--dir", "relative", "--agent-port", "1"},
-		{"--dir", "/a"},
-		{"--dir", "/a", "--agent-port", "1", "extra"},
-		{"--dir", "/a", "--agent-port", "1", "--softnet-block", "@host"},
-		{"--dir", "/a", "--agent-port", "4294967296"},
+		{"--dir", dir},
+		{"--dir", dir, "--agent-port", "1", "extra"},
+		{"--dir", dir, "--agent-port", "1", "--softnet-block", "@host"},
+		{"--dir", dir, "--agent-port", "4294967296"},
 	} {
 		if _, err := ParseArgs(bad); err == nil {
 			t.Errorf("accepted %q", bad)

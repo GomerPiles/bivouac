@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -114,6 +115,13 @@ func TestLockMatchesTartRunningState(t *testing.T) {
 	if err := home.Resize("base", 4, 0); err == nil {
 		t.Fatal("resized a running VM")
 	}
+	if err := home.Clone("base", "bivouac-copy"); err == nil {
+		t.Fatal("cloned a running baseline")
+	}
+	// The holder is a test binary, not `bivouac vm run --dir <dir>`.
+	if _, err := HelperPID(dir); !errors.Is(err, ErrForeignHolder) {
+		t.Fatalf("HelperPID = %v, want ErrForeignHolder", err)
+	}
 	if entries, _ := home.List(); len(entries) != 1 || !entries[0].Running {
 		t.Fatalf("list = %+v", entries)
 	}
@@ -131,4 +139,19 @@ func holdLock(t *testing.T) {
 	}
 	defer func() { _ = lock.Release() }()
 	_, _ = os.Stdin.Read(make([]byte, 1))
+}
+
+func TestProcessArgsIdentifyHelpers(t *testing.T) {
+	args, err := processArgs(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(args, os.Args) {
+		t.Fatalf("processArgs = %q, want %q", args, os.Args)
+	}
+	opts := RunOptions{Dir: "/vms/x", AgentPort: 1}
+	helper := append([]string{"/opt/bivouac", "vm", "run"}, opts.Args()...)
+	if !isHelper(helper, "/vms/x") || isHelper(helper, "/vms/y") || isHelper([]string{"tart", "run", "x"}, "/vms/x") {
+		t.Fatal("helper argument match is wrong")
+	}
 }

@@ -4,6 +4,7 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"io"
 )
 
@@ -27,3 +28,9 @@ func RunHelper(context.Context, RunOptions, io.Writer) error { return ErrUnsuppo
 
 // CheckEntitlement is unavailable off macOS.
 func CheckEntitlement(context.Context, string) error { return ErrUnsupported }
+
+// ErrForeignHolder reports a VM lock held by something other than its helper.
+var ErrForeignHolder = errors.New("VM is held by a process that is not its bivouac helper")
+
+// HelperPID is unavailable off macOS.
+func HelperPID(string) (int, error) { return 0, ErrUnsupported }

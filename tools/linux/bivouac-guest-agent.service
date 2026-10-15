@@ -8,6 +8,8 @@ Description=bivouac guest agent
 ExecStart=/usr/local/bin/bivouac guest-agent
 Restart=always
 RestartSec=1
+# Commands' background children (the engine helper) outlive an agent restart.
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target

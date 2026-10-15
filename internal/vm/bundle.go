@@ -59,6 +59,10 @@ func ReadConfig(dir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	return parseConfig(data)
+}
+
+func parseConfig(data []byte) (Config, error) {
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, fmt.Errorf("parse %s: %w", ConfigFile, err)
@@ -88,11 +92,16 @@ func (c Config) validate() error {
 // updateConfig rewrites selected top-level fields of dir's config.json and
 // keeps every other field as Tart wrote it.
 func updateConfig(dir string, fields map[string]any) error {
-	path := filepath.Join(dir, ConfigFile)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Join(dir, ConfigFile))
 	if err != nil {
 		return err
 	}
+	return rewriteConfig(dir, data, fields)
+}
+
+// rewriteConfig replaces dir's config.json with data plus fields, by rename.
+func rewriteConfig(dir string, data []byte, fields map[string]any) error {
+	path := filepath.Join(dir, ConfigFile)
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("parse %s: %w", ConfigFile, err)

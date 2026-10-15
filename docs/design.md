@@ -404,7 +404,10 @@ them so APFS can share blocks. Tart builds baselines; bivouac runs them.
   proxies each connection to the guest's vsock port, where
   `bivouac guest-agent` runs one command per connection: request, stdin
   frames, stdout frames, exit status. Guest stderr is dropped. A closed
-  connection kills the command. The agent accepts only the host's context ID.
+  connection kills the command. Output still held open by a background child
+  10 s after the command exits is reported as a failure, never as success.
+  The agent accepts only the host's context ID, and its LaunchAgent abandons
+  its process group, so an agent restart leaves a started runner alone.
 - Ready: the agent runs `true`. The bootstrap script is then copied to
   `/tmp/bivouac-guest`, and its `session` mode must report `Aqua`, or
   readiness fails.
@@ -421,9 +424,12 @@ them so APFS can share blocks. Tart builds baselines; bivouac runs them.
   or `exited <code>` from the pid and the runner log. A failed status command
   is a retryable transport failure while the VM runs; only `absent` or a
   stopped or missing VM confirms exit.
-- Stop: SIGTERM to the lock holder asks the guest to shut down; SIGKILL after
-  the timeout powers the VM off, since the framework ends a VM whose owning
-  process exits.
+- Stop: only a lock holder whose arguments are `vm run --dir <this VM>` is
+  signalled (anything else, such as `tart run`, is refused). SIGTERM asks the
+  guest to shut down; SIGKILL after the timeout powers the VM off, since the
+  framework ends a VM whose owning process exits. Resizing holds the lock
+  while it rewrites `config.json`; the helper reads its configuration only
+  through its own lock, and clones refuse a running baseline.
 - Diagnostics: `_diag` and the runner log stream out as tar through the
   agent, are redacted before reaching disk, and are capped at 1024 entries
   and 128 MiB extracted.

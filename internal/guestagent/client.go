@@ -27,8 +27,9 @@ func DialUnix(path string) Dialer {
 // connection ended before the command's exit status arrived.
 var ErrUnavailable = errors.New("guest agent unavailable")
 
-// ErrNotStarted reports that the agent refused or failed to start the command.
-var ErrNotStarted = errors.New("guest agent could not start the command")
+// ErrFailed reports that the agent refused the command, could not start it,
+// or could not deliver all of its output.
+var ErrFailed = errors.New("guest agent could not run the command")
 
 // ExitError is a command that ran and exited with a non-zero status.
 type ExitError struct{ Code int }
@@ -36,7 +37,8 @@ type ExitError struct{ Code int }
 func (e *ExitError) Error() string { return fmt.Sprintf("guest command exited with status %d", e.Code) }
 
 // Run runs argv in the guest. stdin, when non-nil, is streamed to the
-// command and closed at EOF. Stdout goes to stdout; a write error stops the
+// command and closed at EOF; Run waits for its sender, so stdin must not
+// block indefinitely (pass in-memory data or a regular file). Stdout goes to stdout; a write error stops the
 // command and is returned. The guest's stderr is discarded: an untrusted
 // guest must not reach host logs or errors.
 func Run(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdout io.Writer) error {
@@ -76,7 +78,7 @@ func Run(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdou
 		case frameExit:
 			return exitResult(p)
 		case frameFailed:
-			return ErrNotStarted
+			return ErrFailed
 		default:
 			return errFrame
 		}

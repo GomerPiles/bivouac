@@ -76,7 +76,7 @@ func TestRunStreamsLargeStdin(t *testing.T) {
 
 func TestRunReportsCommandsThatCannotStart(t *testing.T) {
 	dial := agent(t)
-	if err := Run(context.Background(), dial, []string{"/nonexistent/command"}, nil, io.Discard); !errors.Is(err, ErrNotStarted) {
+	if err := Run(context.Background(), dial, []string{"/nonexistent/command"}, nil, io.Discard); !errors.Is(err, ErrFailed) {
 		t.Fatalf("err = %v", err)
 	}
 	if err := Run(context.Background(), dial, nil, nil, io.Discard); err == nil {
@@ -171,5 +171,17 @@ func TestFramesAreBounded(t *testing.T) {
 	header := []byte{frameStdout, 0, 2, 0, 0} // 128 KiB
 	if _, _, err := readFrame(bytes.NewReader(header), nil); !errors.Is(err, errFrame) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLingeringOutputIsNotReportedAsSuccess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for outputDelay")
+	}
+	dial := agent(t)
+	// The background child keeps stdout open past outputDelay.
+	err := Run(context.Background(), dial, []string{"/bin/sh", "-c", "sleep 30 & echo hi"}, nil, io.Discard)
+	if !errors.Is(err, ErrFailed) {
+		t.Fatalf("err = %v, want ErrFailed", err)
 	}
 }

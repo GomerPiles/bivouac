@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -54,7 +55,12 @@ func (l *vsockListener) Accept() (io.ReadWriteCloser, error) {
 			return nil, err
 		}
 		if acceptErr != nil {
-			if errors.Is(acceptErr, unix.ECONNABORTED) || errors.Is(acceptErr, unix.EINTR) {
+			switch {
+			case errors.Is(acceptErr, unix.ECONNABORTED) || errors.Is(acceptErr, unix.EINTR):
+				continue
+			case errors.Is(acceptErr, unix.EMFILE) || errors.Is(acceptErr, unix.ENFILE) || errors.Is(acceptErr, unix.ENOBUFS) || errors.Is(acceptErr, unix.ENOMEM):
+				// Resource exhaustion passes; exiting would restart the agent.
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 			return nil, acceptErr

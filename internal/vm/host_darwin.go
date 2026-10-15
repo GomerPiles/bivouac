@@ -3,6 +3,7 @@ package vm
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,6 +26,10 @@ func (h Home) Clone(baseline, name string) error {
 	src, dst := h.Dir(baseline), h.Dir(name)
 	if _, err := ReadConfig(src); err != nil {
 		return fmt.Errorf("baseline %q: %w", baseline, err)
+	}
+	// A running baseline's disk is not crash-consistent.
+	if pid, err := Holder(src); err != nil || pid != 0 {
+		return fmt.Errorf("baseline %q is running", baseline)
 	}
 	for _, f := range []string{DiskFile, NVRAMFile} {
 		if _, err := os.Stat(filepath.Join(src, f)); err != nil {
@@ -66,8 +71,8 @@ func (h Home) Clone(baseline, name string) error {
 	if err := updateConfig(stage, map[string]any{"macAddress": mac}); err != nil {
 		return err
 	}
-	if err := os.Rename(stage, dst); err != nil {
-		return err
+	if err := unix.RenamexNp(stage, dst, unix.RENAME_EXCL); err != nil {
+		return fmt.Errorf("move clone into place: %w", err)
 	}
 	ok = true
 	return nil
@@ -79,12 +84,20 @@ func (h Home) Resize(name string, cpu, memoryMB int) error {
 		return err
 	}
 	dir := h.Dir(name)
-	c, err := ReadConfig(dir)
+	// Holding the lock across the rewrite keeps a helper from starting on
+	// the old file; the rename then leaves no lock behind on a running VM.
+	lock, err := Acquire(dir)
+	if err != nil {
+		return fmt.Errorf("VM %q must be stopped before resizing: %w", name, err)
+	}
+	defer func() { _ = lock.Release() }()
+	data, err := lock.raw()
 	if err != nil {
 		return err
 	}
-	if pid, err := Holder(dir); err != nil || pid != 0 {
-		return fmt.Errorf("VM %q must be stopped before resizing", name)
+	c, err := parseConfig(data)
+	if err != nil {
+		return err
 	}
 	fields := map[string]any{}
 	if cpu > 0 {
@@ -103,7 +116,8 @@ func (h Home) Resize(name string, cpu, memoryMB int) error {
 	if len(fields) == 0 {
 		return nil
 	}
-	return updateConfig(dir, fields)
+	// Not updateConfig: reopening config.json here would drop the lock.
+	return rewriteConfig(dir, data, fields)
 }
 
 // Lock is the running VM's claim on its directory: an fcntl write lock on
@@ -133,6 +147,20 @@ func Acquire(dir string) (*Lock, error) {
 
 // Release drops the lock.
 func (l *Lock) Release() error { return l.f.Close() }
+
+// Config reads config.json through the locked descriptor, so the file read
+// is the one locked and the lock survives the read.
+func (l *Lock) Config() (Config, error) {
+	data, err := l.raw()
+	if err != nil {
+		return Config{}, err
+	}
+	return parseConfig(data)
+}
+
+func (l *Lock) raw() ([]byte, error) {
+	return io.ReadAll(io.NewSectionReader(l.f, 0, 1<<20))
+}
 
 // Holder returns the pid holding dir's lock, or 0 when the VM is stopped or
 // absent. It must not be called by the lock holder itself.

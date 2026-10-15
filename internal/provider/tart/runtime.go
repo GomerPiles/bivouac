@@ -101,11 +101,11 @@ func (l *local) Duplex(ctx context.Context, name string, argv []string) (net.Con
 	return guestagent.Duplex(ctx, dial, argv)
 }
 
-// Stop signals the process holding the VM's lock: SIGTERM asks the guest to
-// shut down, SIGKILL after timeout powers it off with the helper.
+// Stop signals the VM's helper, proven by its lock and its arguments:
+// SIGTERM asks the guest to shut down, SIGKILL after timeout powers it off.
 func (l *local) Stop(ctx context.Context, name string, timeout time.Duration) error {
 	dir := l.home.Dir(name)
-	pid, err := vm.Holder(dir)
+	pid, err := vm.HelperPID(dir)
 	if err != nil || pid == 0 {
 		return err
 	}
@@ -118,7 +118,7 @@ func (l *local) Stop(ctx context.Context, name string, timeout time.Duration) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if pid, err = vm.Holder(dir); err != nil || pid == 0 {
+	if pid, err = vm.HelperPID(dir); err != nil || pid == 0 {
 		return err
 	}
 	if err := terminate(pid, true); err != nil {

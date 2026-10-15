@@ -23,5 +23,9 @@
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<!-- The runner is backgrounded from an agent command; an agent restart
+	     must not take it down with the job's process group. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
 </dict>
 </plist>

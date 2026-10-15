@@ -38,10 +38,6 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err != nil {
 		return err
 	}
-	c, err := ReadConfig(opts.Dir)
-	if err != nil {
-		return err
-	}
 	socket := filepath.Join(opts.Dir, AgentSocket)
 	if len(socket) > maxSocketPath {
 		return fmt.Errorf("guest agent socket path exceeds %d bytes", maxSocketPath)
@@ -51,6 +47,12 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 		return err
 	}
 	defer func() { _ = lock.Release() }()
+	// Read the configuration only through the lock: reopening config.json
+	// would release it.
+	c, err := lock.Config()
+	if err != nil {
+		return err
+	}
 
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
