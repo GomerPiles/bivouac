@@ -5,22 +5,26 @@ host application and daemon. It is not a manager provider and has no GitHub,
 CI-mode, runner-registration, production configuration or broker API. Building
 it does not replace `bivouac`.
 
-## Current elevated attempt
+## Validated native trial
 
 An approved offline trial against an independent immutable template copy reached
-HCS `Running` state and accepted post-start GPU-PV assignment. The prior retained
-instance was cleaned up after replacing the invalid `"Basic"` compute-system
-selector with the schema's default properties query. Guest initialization was
-skipped: Windows setup completion, desktop readiness and hardware rendering are
-not established by these observations.
-
-Automatic teardown retained the latest journal and child: the trial closed its
-last live handle before cleanup queried ownership, and that query returned
-`HCS_E_INVALID_STATE` during asynchronous teardown. Cleanup now keeps the created
-handle through ownership verification and explicit termination, then closes it
-before confirming native absence. Race tests, vet and lint pass, including a
-handle-order regression. This correction still needs an approved elevated retry.
+HCS `Running` state, accepted post-start GPU-PV assignment, explicitly terminated
+the owned VM, confirmed native absence and removed its journal/disposable child.
+The trial root contains only its lock file. The protected lab retains the
+independent baseline, pinned executables, configurations and bounded result files.
 No startup component or production configuration was changed.
+
+The native property query uses the schema's default basic properties. Cleanup
+keeps the created handle through ownership verification and explicit termination,
+then closes it before confirming native absence; closing it earlier can race
+asynchronous automatic teardown. Regression tests cover both corrections.
+
+Guest initialization was skipped. HCS running state and accepted GPU assignment
+do not establish Windows setup completion, driver readiness, a usable desktop or
+hardware rendering. App Sandbox guest components remain required by the full
+trial. Removing the host application/daemon is feasible at the native VM layer;
+replacing the complete CI provider still requires image provisioning, guest
+readiness, graphics/input, networking/isolation and lifecycle validation.
 
 ## What is implemented
 
@@ -58,8 +62,9 @@ No startup component or production configuration was changed.
 The spike deliberately uses `ShouldTerminateOnLastHandleClosed=true`: its VM
 should terminate when its last HCS handle closes, including process loss. This
 is a trial lifetime, not the CI provider's controller-crash adoption contract.
-An independent cleanup command handles retained disk/journal state. The complete native
-termination/absence/storage cleanup path still requires live validation.
+An independent cleanup command handles retained disk/journal state. The offline native
+start/GPU/explicit termination/absence/storage cleanup path is validated.
+Process-loss cleanup and recovery still need live validation.
 
 ## Checks without UAC
 

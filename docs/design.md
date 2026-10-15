@@ -617,8 +617,9 @@ not relax the separate administrator-only journal/marker rules. Ephemeral
 SSH keys stay in memory. The trial owns its HCS handles and terminates on last
 handle close; it does not promise the manager's adoption behaviour. Cleanup
 requires confirmed native absence before removing disks and retains uncertain
-records. Offline HCS running state and GPU assignment are validated; guest
-readiness, rendering, SSH and complete cleanup/isolation remain unverified.
+records. Offline HCS running state, GPU assignment and explicit native/storage
+cleanup are validated; guest readiness, rendering, SSH, process-loss recovery
+and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

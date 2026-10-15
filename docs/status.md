@@ -93,15 +93,14 @@ Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflo
 has not run for this spike.
 The ordinary-token DLL-export check passes on the Windows host; configuration
 planning also passes without opening any image or contacting the HCS service.
-An approved offline native-only trial reached HCS `Running` state and accepted
-GPU-PV assignment against an independent immutable template copy. The default
-properties query also allowed cleanup of the previous retained instance.
-The latest trial retained its journal/child when a cleanup property query raced
-last-handle automatic teardown (`HCS_E_INVALID_STATE`). The fix keeps that handle
-through ownership verification and explicit termination, then closes it before
-confirming native absence. Race tests, vet and lint pass, but this lifetime fix
-has not run elevated. Windows setup/guest readiness, hardware rendering,
-desktop/input, complete native cleanup/recovery and isolation remain unverified.
+An approved offline native-only trial reached HCS `Running` state, accepted
+GPU-PV assignment, explicitly terminated the owned VM, confirmed native absence
+and removed its journal/disposable child. It used an independent immutable
+template copy with 1 CPU, 2 GiB RAM and no NIC; only the trial lock file remains.
+The default properties query and retaining the created handle through verified
+termination are live validated. Production CI/configuration was unchanged.
+Windows setup/guest readiness, SSH, hardware rendering, desktop/input,
+process-loss cleanup/recovery and networking/isolation remain unverified.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)
