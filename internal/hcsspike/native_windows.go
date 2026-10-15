@@ -23,7 +23,60 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type native struct{ dll *windows.LazyDLL }
+type native struct {
+	dll           *windows.LazyDLL
+	preparedOwner string
+	payloads      []payloadProof
+}
+
+// HcsGrantVmAccess deliberately adds the owned VM account to payload ACLs.
+// Preserve the exact post-grant descriptor and file identity instead of
+// incorrectly applying the administrator-only journal policy to those files.
+type payloadProof struct {
+	path     string
+	identity os.FileInfo
+	security string
+}
+
+func payloadSecurity(path string) (string, error) {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return "", errors.New("cannot inspect spike payload permissions")
+	}
+	text := sd.String()
+	if text == "" {
+		return "", errors.New("cannot encode spike payload permissions")
+	}
+	return text, nil
+}
+
+func capturePayload(path string) (payloadProof, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return payloadProof{}, errors.New("cannot bind spike payload identity")
+	}
+	security, err := payloadSecurity(path)
+	if err != nil {
+		return payloadProof{}, err
+	}
+	return payloadProof{path: path, identity: info, security: security}, nil
+}
+
+func (p payloadProof) verify() error {
+	current, err := os.Stat(p.path)
+	if err != nil || !os.SameFile(p.identity, current) {
+		return errors.New("spike payload file identity changed")
+	}
+	security, err := payloadSecurity(p.path)
+	if err != nil {
+		return err
+	}
+	if security != p.security {
+		return errors.New("spike payload permissions changed after the owned VM grant")
+	}
+	return nil
+}
+
 type nativeSystem struct {
 	api    *native
 	handle uintptr
@@ -164,9 +217,17 @@ func (a *native) Create(ctx context.Context, c Config) (system, bool, error) {
 	if _, err := operationTimeout(ctx); err != nil {
 		return nil, true, err
 	}
-	for _, path := range []string{filepath.Join(c.Root, recordName(c)), filepath.Join(c.Root, markerName(c)), c.disk()} {
+	for _, path := range []string{filepath.Join(c.Root, recordName(c)), filepath.Join(c.Root, markerName(c))} {
 		if err := appsandbox.CheckProtectedFile(path); err != nil {
 			return nil, true, errors.New("spike ownership and payloads must remain administrator-protected")
+		}
+	}
+	if a.preparedOwner != c.owner() || len(a.payloads) == 0 {
+		return nil, true, errors.New("spike payload preparation proof missing")
+	}
+	for _, proof := range a.payloads {
+		if err := proof.verify(); err != nil {
+			return nil, true, err
 		}
 	}
 	plan, err := Plan(c)
@@ -266,6 +327,8 @@ func pinBaseline(c Config) (*os.File, error) {
 }
 
 func (a *native) Prepare(ctx context.Context, c Config) error {
+	a.preparedOwner = ""
+	a.payloads = nil
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -294,9 +357,6 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 		if err := copyDrivers(ctx, c); err != nil {
 			return err
 		}
-		for i := range c.Drivers {
-			paths = append(paths, filepath.Join(c.directory(), "drivers", fmt.Sprint(i)))
-		}
 		// Grant on each copied file as well as its directory; do not depend
 		// on HcsGrantVmAccess recursively changing existing descendants.
 		err := filepath.WalkDir(filepath.Join(c.directory(), "drivers"), func(path string, _ fs.DirEntry, walkErr error) error {
@@ -314,6 +374,12 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	proofs := make([]payloadProof, 0, len(paths))
+	for _, path := range paths {
+		if err := appsandbox.CheckProtectedFile(path); err != nil {
+			return errors.New("new spike payload is not administrator-protected before VM access grant")
+		}
+	}
 	for _, path := range paths {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -326,7 +392,14 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 		if err = hresult("HcsGrantVmAccess", r); err != nil {
 			return err
 		}
+		proof, proofErr := capturePayload(path)
+		if proofErr != nil {
+			return proofErr
+		}
+		proofs = append(proofs, proof)
 	}
+	a.preparedOwner = c.owner()
+	a.payloads = proofs
 	return nil
 }
 

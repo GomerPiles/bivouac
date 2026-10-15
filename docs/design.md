@@ -609,11 +609,18 @@ trial/cleanup require explicit administrator startup, a separate protected
 `HCS-Spike` root, immutable image hash, journal/child/native ownership proof,
 and bounded resources. They never request elevation or use the installed broker.
 No NIC, GitHub registration, CI configuration or production lifecycle is involved.
-Driver-only shares use copies inside the recorded disposable child. Ephemeral
+Driver-only shares use copies inside the recorded disposable child. Payloads
+must be administrator-protected before HCS grants the recorded VM account
+access. Their exact post-grant security descriptors and file identities are
+pinned and rechecked before creation; the VM's required payload access does
+not relax the separate administrator-only journal/marker rules. Ephemeral
 SSH keys stay in memory. The trial owns its HCS handles and terminates on last
 handle close; it does not promise the manager's adoption behaviour. Cleanup
 requires confirmed native absence before removing disks and retains uncertain
 records. Native boot/GPU/SSH and all isolation/lifecycle claims remain unverified.
+The optional `trial --boot-only` mode skips guest initialization and tests only
+HCS running state, GPU assignment and cleanup against an independent template
+copy. It does not establish that Windows completed setup or entered a desktop.
 See [`hcs-spike.md`](hcs-spike.md) for prerequisites and the elevated trial gate.
 
 ## Optional containers on macOS

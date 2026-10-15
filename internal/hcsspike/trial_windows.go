@@ -44,6 +44,7 @@ type backend interface {
 // Report is deliberately limited to observations, never guest-controlled text.
 // Assignment and agent display readiness do not prove hardware rendering/input.
 type Report struct {
+	NativeStarted    bool `json:"native_started"`
 	AgentConnected   bool `json:"agent_connected"`
 	GPUAssigned      bool `json:"gpu_assigned"`
 	DisplayReady     bool `json:"display_ready"`
@@ -150,7 +151,7 @@ func absent(ctx context.Context, api backend, name string) error {
 	return errors.New("native name already exists; refusing to replace it")
 }
 
-func trial(ctx context.Context, c Config, j *journal, api backend) (report Report, result error) {
+func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool) (report Report, result error) {
 	if err := c.Validate(); err != nil {
 		return report, err
 	}
@@ -224,6 +225,7 @@ func trial(ctx context.Context, c Config, j *journal, api backend) (report Repor
 	if p.RuntimeID == "" || p.State != "Running" {
 		return report, errors.New("spike VM did not report a running runtime identity")
 	}
+	report.NativeStarted = true
 	r.RuntimeID = p.RuntimeID
 	if err = j.write(recordName(c), r, false); err != nil {
 		return report, err
@@ -234,9 +236,13 @@ func trial(ctx context.Context, c Config, j *journal, api backend) (report Repor
 		}
 		report.GPUAssigned = true
 	}
+	if bootOnly {
+		return report, nil
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
 	observed, err := api.Probe(probeCtx, c, p.RuntimeID)
+	observed.NativeStarted = report.NativeStarted
 	observed.GPUAssigned = report.GPUAssigned
 	return observed, err
 }

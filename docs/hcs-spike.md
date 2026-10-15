@@ -3,7 +3,21 @@
 `cmd/hcs-spike` is a separate executable exploring removal of the App Sandbox
 host application and daemon. It is not a manager provider and has no GitHub,
 CI-mode, runner-registration, production configuration or broker API. Building
-it does not replace `bivouac`. Its native trial has not run.
+it does not replace `bivouac`.
+
+## Current elevated attempt
+
+The first approved native-only attempt stopped before VM creation because a
+post-grant protection check rejected the intended VM-account payload ACE.
+Disk/state-file preparation and automatic cleanup completed; the trial root
+contains only its kernel lock file. The protected lab retains the independent
+image, pinned tested executable, configuration and fixed progress/result files
+for inspection. Nothing was installed into startup and no production controller
+was changed. The corrected source now snapshots exact payload identity/ACLs
+after the native VM access grant, with administrator-only checks before granting
+and separate strict journal/marker checks. It needs a new reviewed executable
+and explicitly approved elevated retry. The staged executable remains the
+original tested version; it is not silently replaced from the worktree.
 
 ## What is implemented
 
@@ -42,7 +56,7 @@ The spike deliberately uses `ShouldTerminateOnLastHandleClosed=true`: its VM
 should terminate when its last HCS handle closes, including process loss. This
 is a trial lifetime, not the CI provider's controller-crash adoption contract.
 An independent cleanup command handles retained disk/journal state. Native
-termination, handle-close behaviour and cleanup still require live validation.
+termination, handle-close behaviour and VM cleanup still require live validation.
 
 ## Checks without UAC
 
@@ -67,7 +81,15 @@ and the bounded guest protocol. These do not prove native behaviour.
 `trial` and `cleanup` refuse an ordinary token before reading config or creating
 files. They never request elevation. No startup task/service is installed.
 
-## Next elevated trial (not yet authorized or performed)
+For the smaller first native test, `trial --config <file> --boot-only` stops
+after HCS reports a running runtime and accepts GPU assignment, then cleans up.
+It skips the guest agent and SSH entirely. An independent copy of a generalized
+Windows template is sufficient for this test, since it makes no claim that
+Windows completed OOBE or that a desktop is usable. `native_started` reports
+HCS running state only. The full trial still requires the specialized image
+described below. Boot-only mode never claims guest readiness or authentication.
+
+## Elevated trial prerequisites
 
 Prepare and review the following before requesting an elevated launch. Keep
 existing controllers, daemons, runners, labels, baselines and networking intact.

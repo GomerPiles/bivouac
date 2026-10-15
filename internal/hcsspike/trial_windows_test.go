@@ -114,7 +114,7 @@ func TestTrialCleansUpSuccessfulAndPartialMutations(t *testing.T) {
 			case "probe":
 				f.probeErr = failure
 			}
-			report, err := trial(context.Background(), c, j, f)
+			report, err := trial(context.Background(), c, j, f, false)
 			if (err != nil) != (fault != "none") {
 				t.Fatalf("fault=%s report=%+v err=%v", fault, report, err)
 			}
@@ -141,7 +141,7 @@ func TestTrialNeverReplacesExistingNativeGuest(t *testing.T) {
 	c, j := testJournal(t)
 	f := &fakeBackend{c: c}
 	f.vm = &fakeSystem{api: f, props: properties{ID: c.name(), Owner: "foreign"}}
-	if _, err := trial(context.Background(), c, j, f); err == nil {
+	if _, err := trial(context.Background(), c, j, f, false); err == nil {
 		t.Fatal("existing name accepted")
 	}
 	if f.creates != 0 || f.prepares != 0 || f.stops != 0 {
@@ -152,7 +152,7 @@ func TestTrialNeverReplacesExistingNativeGuest(t *testing.T) {
 func TestUnknownCreateRetainsIntentUntilNativeInstanceIsProved(t *testing.T) {
 	c, j := testJournal(t)
 	f := &fakeBackend{c: c, createFault: "unknown-absent"}
-	report, err := trial(context.Background(), c, j, f)
+	report, err := trial(context.Background(), c, j, f, false)
 	if err == nil || report.Cleaned || f.creates != 1 {
 		t.Fatal("unknown create was released or replayed")
 	}
@@ -183,7 +183,7 @@ func TestCleanupRetainsChangedNativeOwnership(t *testing.T) {
 					s.props.SystemType = "Container"
 				}
 			}}
-			report, err := trial(context.Background(), c, j, f)
+			report, err := trial(context.Background(), c, j, f, false)
 			if err == nil || report.Cleaned || f.stops != 0 {
 				t.Fatal("changed native identity stopped or cleanup claimed")
 			}
@@ -283,7 +283,7 @@ func TestCleanupAfterCancellationUsesIndependentContext(t *testing.T) {
 	c, j := testJournal(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeBackend{c: c, probeErr: context.Canceled, probeChange: func(*fakeSystem) { cancel() }}
-	report, err := trial(ctx, c, j, f)
+	report, err := trial(ctx, c, j, f, false)
 	if !errors.Is(err, context.Canceled) || !report.Cleaned || f.stops != 1 {
 		t.Fatalf("cleanup canceled: %+v %v", report, err)
 	}
@@ -302,5 +302,17 @@ func TestCLIRefusesLiveOperationsWithoutElevation(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "no elevation was requested") {
 			t.Fatalf("did not refuse before config access: %v", err)
 		}
+	}
+}
+
+func TestBootOnlyNeverInitializesGuest(t *testing.T) {
+	c, j := testJournal(t)
+	f := &fakeBackend{c: c}
+	report, err := trial(context.Background(), c, j, f, true)
+	if err != nil || !report.NativeStarted || !report.GPUAssigned || !report.Cleaned {
+		t.Fatalf("native trial: %+v %v", report, err)
+	}
+	if f.probes != 0 || report.AgentConnected || report.DisplayReady || report.SSHAuthenticated {
+		t.Fatal("native-only test admitted or claimed guest initialization")
 	}
 }

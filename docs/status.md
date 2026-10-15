@@ -93,8 +93,18 @@ Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflo
 has not run for this spike.
 The ordinary-token DLL-export check passes on the Windows host; configuration
 planning also passes without opening any image or contacting the HCS service.
-No live VM trial has run: boot, hardware rendering, desktop/input, native
-cleanup/recovery and isolation remain unverified. See [`hcs-spike.md`](hcs-spike.md).
+An operator-approved native-only attempt staged an independent immutable image
+copy and prepared the differencing disk/state files, but refused before VM
+creation: the post-grant permission check rejected the VM account's intended
+payload access. Automatic cleanup succeeded, leaving no instance record or
+child directory. An ordinary-token disposable ACL fixture confirmed that
+`HcsGrantVmAccess` adds VM-account FullControl. The correction checks payload
+protection before the grant, then pins the exact post-grant file identity and
+security descriptor; journal/marker checks remain administrator-only. File/ACL
+replacement regressions and race tests pass. The correction has not run in an
+elevated VM trial. Boot, GPU assignment, hardware rendering, desktop/input,
+native VM cleanup/recovery and isolation remain unverified. See
+[`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)
 

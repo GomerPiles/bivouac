@@ -5,6 +5,8 @@ package hcsspike
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -59,5 +61,53 @@ func TestBoundedNativeUTF16Result(t *testing.T) {
 	}
 	if _, err = boundedResult(&unterminated[0]); err == nil {
 		t.Fatal("unbounded native result accepted")
+	}
+}
+
+func TestPayloadProofDetectsFileReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(path, []byte("owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := capturePayload(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = proof.verify(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = proof.verify(); err == nil {
+		t.Fatal("replaced payload accepted")
+	}
+}
+
+func TestPayloadProofDetectsACLChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(path, []byte("owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := capturePayload(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;OW)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acl, _, err := sd.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = proof.verify(); err == nil {
+		t.Fatal("changed payload permissions accepted")
 	}
 }
