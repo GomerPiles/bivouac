@@ -103,6 +103,7 @@ type recorder struct {
 	session   string
 	diag      map[string][]byte // guest script mode -> stdout
 	launchOut string            // written by the VM helper instead of "started"
+	readyErrs []error           // returned in turn by `exec ... true`
 	started   []*fakeProc
 }
 
@@ -174,6 +175,11 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 		i := 1
 		if args[1] == "-i" {
 			i = 2
+		}
+		if len(args) == i+2 && args[i+1] == "true" && len(r.readyErrs) > 0 {
+			err := r.readyErrs[0]
+			r.readyErrs = r.readyErrs[1:]
+			return nil, err
 		}
 		if len(args) > i+2 && args[i+1] == guestPath {
 			switch args[i+2] {

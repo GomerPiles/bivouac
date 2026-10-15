@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -67,8 +68,17 @@ func handle(ctx context.Context, conn io.ReadWriteCloser) {
 	}
 	w := &lockedWriter{w: conn}
 	var req request
-	if err := json.Unmarshal(payload, &req); err != nil || req.validate() != nil {
+	if err := json.Unmarshal(payload, &req); err != nil {
 		_ = w.frame(frameFailed, []byte("invalid request"))
+		return
+	}
+	if err := req.validate(); err != nil {
+		var version *VersionError
+		if errors.As(err, &version) {
+			_ = w.frame(frameFailed, versionFailure())
+		} else {
+			_ = w.frame(frameFailed, []byte("invalid request"))
+		}
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -107,6 +117,9 @@ func handle(ctx context.Context, conn io.ReadWriteCloser) {
 	binary.BigEndian.PutUint32(code[:], uint32(exitCode(cmd.ProcessState))) //nolint:gosec // Two's complement on purpose.
 	_ = w.frame(frameExit, code[:])
 }
+
+// versionFailure is the agent's answer to a request of another version.
+func versionFailure() []byte { return []byte(versionPrefix + strconv.Itoa(Version)) }
 
 // readStdin forwards host stdin frames. A closed connection, or any frame
 // out of protocol, means the host is gone: the command is killed.

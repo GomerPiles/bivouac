@@ -16,12 +16,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 )
 
 // Port is the guest agent's vsock port.
 const Port uint32 = 7473
 
-// Version is the request format; the agent refuses any other.
+// Version is the request format; the agent refuses any other and names its
+// own in the failure frame, so a host fails fast on an outdated baseline.
 const Version = 1
 
 const (
@@ -48,7 +51,7 @@ type request struct {
 
 func (r request) validate() error {
 	if r.Version != Version {
-		return fmt.Errorf("unsupported guest agent request version %d", r.Version)
+		return &VersionError{Agent: Version, Host: r.Version}
 	}
 	if len(r.Argv) == 0 || len(r.Argv) > maxArgs || r.Argv[0] == "" {
 		return errors.New("invalid command")
@@ -57,6 +60,30 @@ func (r request) validate() error {
 }
 
 var errFrame = errors.New("invalid guest agent frame")
+
+// versionPrefix starts the failure payload of a refused request version.
+// It is the only failure payload the host parses; any other is opaque guest
+// text and never reaches host errors or logs.
+const versionPrefix = "version "
+
+// VersionError is an agent that speaks another request version than the
+// host: the baseline's guest agent must be replaced, and retrying cannot help.
+type VersionError struct{ Agent, Host int }
+
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("guest agent speaks protocol version %d, this bivouac needs %d: install the matching bivouac guest agent in the baseline", e.Agent, e.Host)
+}
+
+// parseFailure maps a failure payload to an error, trusting only a
+// well-formed version refusal.
+func parseFailure(p []byte) error {
+	if v, ok := strings.CutPrefix(string(p), versionPrefix); ok && len(v) <= 5 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n != Version {
+			return &VersionError{Agent: n, Host: Version}
+		}
+	}
+	return ErrFailed
+}
 
 func writeFrame(w io.Writer, kind byte, payload []byte) error {
 	if len(payload) > maxFrame {

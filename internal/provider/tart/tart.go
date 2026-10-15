@@ -21,6 +21,7 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/redact"
 	"github.com/GomerPiles/bivouac/internal/state"
@@ -263,8 +264,14 @@ func (p *Provider) waitVM(ctx context.Context, name string) error {
 			default:
 			}
 		}
-		if _, err := p.output(ctx, name, []string{"true"}, nil); err == nil {
+		_, err := p.output(ctx, name, []string{"true"}, nil)
+		if err == nil {
 			return nil
+		}
+		// Only an unreachable agent may still be booting. One that answered
+		// and refused (such as an outdated protocol version) stays refused.
+		if ctx.Err() == nil && !errors.Is(err, guestagent.ErrUnavailable) {
+			return fmt.Errorf("guest agent is not ready: %w", err)
 		}
 		select {
 		case <-ctx.Done():

@@ -158,9 +158,46 @@ func TestAgentRefusesOtherVersions(t *testing.T) {
 	if err := writeFrame(conn, frameRequest, []byte(`{"v":2,"argv":["true"]}`)); err != nil {
 		t.Fatal(err)
 	}
-	kind, _, err := readFrame(conn, nil)
-	if err != nil || kind != frameFailed {
-		t.Fatalf("kind %q, err %v", kind, err)
+	kind, p, err := readFrame(conn, nil)
+	if err != nil || kind != frameFailed || string(p) != versionPrefix+"1" {
+		t.Fatalf("kind %q, payload %q, err %v", kind, p, err)
+	}
+}
+
+// fakeAgent answers every request with one failure payload.
+func fakeAgent(t *testing.T, payload string) Dialer {
+	t.Helper()
+	return func(context.Context) (net.Conn, error) {
+		host, guest := net.Pipe()
+		go func() {
+			defer func() { _ = guest.Close() }()
+			if _, _, err := readFrame(guest, nil); err == nil {
+				_ = writeFrame(guest, frameFailed, []byte(payload))
+			}
+		}()
+		return host, nil
+	}
+}
+
+func TestClientReportsOutdatedAgentsAndHidesOtherFailures(t *testing.T) {
+	err := Run(context.Background(), fakeAgent(t, "version 7"), []string{"true"}, nil, io.Discard)
+	var version *VersionError
+	if !errors.As(err, &version) || version.Agent != 7 || version.Host != Version || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, payload := range []string{"invalid request", "version 1", "version x", "version 123456789", "secret\x1b[0m"} {
+		err := Run(context.Background(), fakeAgent(t, payload), []string{"true"}, nil, io.Discard)
+		if err != ErrFailed { //nolint:errorlint // Exactly the opaque failure.
+			t.Fatalf("payload %q: err = %v", payload, err)
+		}
+	}
+	conn, err := Duplex(context.Background(), fakeAgent(t, "version 7"), []string{"listen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := io.ReadAll(conn); !errors.As(err, &version) {
+		t.Fatalf("duplex err = %v", err)
 	}
 }
 

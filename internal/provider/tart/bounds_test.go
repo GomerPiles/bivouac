@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 )
 
@@ -123,6 +125,25 @@ func TestGuestOperationsRequireOwnership(t *testing.T) {
 				t.Fatalf("marker %q: guest exec on an unowned VM: %v", marker, c)
 			}
 		}
+	}
+}
+
+func TestWaitReadyRetriesOnlyAnUnreachableAgent(t *testing.T) {
+	p, r := ownedFixture(t)
+	outdated := &guestagent.VersionError{Agent: guestagent.Version + 1, Host: guestagent.Version}
+	r.readyErrs = []error{fmt.Errorf("%w: connection reset", guestagent.ErrUnavailable), outdated, nil}
+	err := p.WaitReady(context.Background(), fixtureName)
+	var version *guestagent.VersionError
+	if !errors.As(err, &version) || len(r.readyErrs) != 1 {
+		t.Fatalf("err = %v, %d probes left", err, len(r.readyErrs))
+	}
+
+	p, r = ownedFixture(t)
+	r.readyErrs = []error{guestagent.ErrUnavailable, guestagent.ErrUnavailable, guestagent.ErrUnavailable}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := p.WaitReady(ctx, fixtureName); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unreachable agent: %v", err)
 	}
 }
 

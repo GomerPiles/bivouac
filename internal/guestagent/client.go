@@ -28,7 +28,8 @@ func DialUnix(path string) Dialer {
 var ErrUnavailable = errors.New("guest agent unavailable")
 
 // ErrFailed reports that the agent refused the command, could not start it,
-// or could not deliver all of its output.
+// or could not deliver all of its output. A refused protocol version is a
+// *VersionError instead.
 var ErrFailed = errors.New("guest agent could not run the command")
 
 // ExitError is a command that ran and exited with a non-zero status.
@@ -78,7 +79,7 @@ func Run(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdou
 		case frameExit:
 			return exitResult(p)
 		case frameFailed:
-			return ErrFailed
+			return parseFailure(p)
 		default:
 			return errFrame
 		}
@@ -178,6 +179,10 @@ func (d *duplex) Read(p []byte) (int, error) {
 		case kind == frameStderr:
 		case kind == frameExit || kind == frameFailed:
 			d.ended = io.EOF
+			var version *VersionError
+			if kind == frameFailed && errors.As(parseFailure(payload), &version) {
+				d.ended = version
+			}
 		default:
 			d.ended = errFrame
 		}
