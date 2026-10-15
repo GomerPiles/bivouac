@@ -57,7 +57,7 @@ var ErrAlreadyRunning = errors.New("another bivouac daemon holds the lock")
 
 // lockWait bounds how long Acquire retries a contended lock. CLI liveness
 // probes hold a shared lock only between two system calls, while a running
-// daemon (or `tart cleanup`) holds it until it exits. Retrying for longer than
+// daemon (or `vz cleanup`) holds it until it exits. Retrying for longer than
 // any probe means a probe cannot make a starting daemon give up.
 const lockWait = 2 * time.Second
 

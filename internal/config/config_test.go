@@ -11,8 +11,8 @@ func TestExampleParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := c.Providers["macos"]
-	if p.Tart.RunnerDir == "" || p.Tart.HostVMLimit != 2 {
-		t.Fatalf("defaults not applied: %+v", p.Tart)
+	if p.VZ.RunnerDir == "" || p.VZ.HostVMLimit != 2 {
+		t.Fatalf("defaults not applied: %+v", p.VZ)
 	}
 	if c.Budget.JobTimeout.Hours() != 2 {
 		t.Fatalf("job_timeout = %s", c.Budget.JobTimeout)
@@ -21,32 +21,32 @@ func TestExampleParses(t *testing.T) {
 
 func TestIsolatedContainersConfiguration(t *testing.T) {
 	for _, engine := range []string{"docker", "podman"} {
-		c, err := Parse([]byte(Example + "\n[providers.macos.tart.containers]\nengine = \"" + engine + "\"\nbaseline = \"ci-linux-engine\"\ncpu = 2\nmemory_gb = 2\nhelper = \"/opt/bivouac/linux-arm64\"\n"))
+		c, err := Parse([]byte(Example + "\n[providers.macos.vz.containers]\nengine = \"" + engine + "\"\nbaseline = \"ci-linux-engine\"\ncpu = 2\nmemory_gb = 2\nhelper = \"/opt/bivouac/linux-arm64\"\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		p := c.Providers["macos"]
-		p.Tart.BootstrapShare = "/tmp"
+		p.VZ.BootstrapShare = "/tmp"
 		if c.Validate() == nil {
 			t.Fatal("accepted host share")
 		}
-		p.Tart.BootstrapShare = ""
+		p.VZ.BootstrapShare = ""
 		c.Cache = Cache{Enabled: true, GuestHost: "192.168.64.1", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 1}
 		if c.Validate() == nil {
 			t.Fatal("accepted gateway cache exception")
 		}
 		c.Cache = Cache{}
-		p.Tart.Containers.Engine = "host"
+		p.VZ.Containers.Engine = "host"
 		if c.Validate() == nil {
 			t.Fatal("accepted host engine")
 		}
-		p.Tart.Containers.Engine = engine
-		p.Tart.Containers.Baseline = "bivouac-linux"
+		p.VZ.Containers.Engine = engine
+		p.VZ.Containers.Baseline = "bivouac-linux"
 		if c.Validate() == nil {
 			t.Fatal("accepted owned prefix baseline")
 		}
-		p.Tart.Containers.Baseline = "ci-linux-engine"
-		p.Tart.CPU = 0
+		p.VZ.Containers.Baseline = "ci-linux-engine"
+		p.VZ.CPU = 0
 		if c.Validate() == nil {
 			t.Fatal("accepted unknown pair resource size")
 		}
@@ -63,8 +63,8 @@ func TestRejects(t *testing.T) {
 		"bad url":          strings.Replace(Example, `https://github.com/example-org`, `http://github.com/example-org`, 1),
 		"negative timeout": strings.Replace(Example, `job_timeout = "2h"`, `job_timeout = "-2h"`, 1),
 		"negative idle":    strings.Replace(Example, `idle_timeout = "10m"`, `idle_timeout = "-1s"`, 1),
-		"tart cpu":         strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
-		"tart memory":      strings.Replace(Example, `memory_gb = 8`+"\n"+`runner_dir`, `memory_gb = 4096`+"\n"+`runner_dir`, 1),
+		"vz cpu":           strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
+		"vz memory":        strings.Replace(Example, `memory_gb = 8`+"\n"+`runner_dir`, `memory_gb = 4096`+"\n"+`runner_dir`, 1),
 	}
 	for name, text := range cases {
 		if _, err := Parse([]byte(text)); err == nil {

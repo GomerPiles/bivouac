@@ -26,7 +26,7 @@ func TestGuestLossReleasesCapacityWhileBusyCleanupSurvivesRestart(t *testing.T) 
 				c.Budget.IdleTimeout.Duration = time.Hour
 				p := c.Providers["macos"]
 				p.MaxInstances = 1
-				p.Tart.CPU, p.Tart.MemoryGB, p.Tart.ForeignSlots = 6, 8, 1
+				p.VZ.CPU, p.VZ.MemoryGB, p.VZ.ForeignSlots = 6, 8, 1
 				c.Providers["macos"] = p
 			})
 			ctx, cancel := context.WithCancel(context.Background())

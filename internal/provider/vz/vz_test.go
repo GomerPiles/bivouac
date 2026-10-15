@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"bytes"
@@ -223,7 +223,7 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 			t.Fatal(err)
 		}
 	}
-	cfg := config.Tart{Baseline: "base", CPU: 4, MemoryGB: 8, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
+	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
 	p, err := New("macos", cfg, "ctl-1", argvRuntime{r})
 	if err != nil {
 		t.Fatal(err)

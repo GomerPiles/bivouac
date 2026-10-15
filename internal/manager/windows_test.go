@@ -16,7 +16,7 @@ func TestWindowsReservationSurvivesResourceConfigChanges(t *testing.T) {
 		c.Budget.ReserveCPU = 2
 		p := c.Providers["macos"]
 		p.Type = "appsandbox"
-		p.Tart = nil
+		p.VZ = nil
 		p.AppSandbox = &config.AppSandbox{Experimental: true, BrokerSecret: "fixture-broker", Baseline: "ci-template", CPU: 4, MemoryGB: 8, DiskGB: 80, RunnerDir: `C:\actions-runner`}
 		c.Providers["macos"] = p
 	})
@@ -53,7 +53,7 @@ func TestUnprovableRecordCountsOnce(t *testing.T) {
 		p := c.Providers["macos"]
 		p.Type = "appsandbox"
 		p.MaxInstances = 4
-		p.Tart = nil
+		p.VZ = nil
 		p.AppSandbox = &config.AppSandbox{Experimental: true, BrokerSecret: "fixture-broker", Baseline: "ci-template", CPU: 4, MemoryGB: 8, DiskGB: 80, RunnerDir: `C:\actions-runner`}
 		c.Providers["macos"] = p
 	})

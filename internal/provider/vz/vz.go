@@ -1,8 +1,8 @@
-// Package tart is the macOS provider: disposable guests cloned from a local
+// Package vz is the macOS provider: disposable guests cloned from a local
 // Tart-format baseline, run headless by bivouac's own Virtualization.framework
 // helper, and driven through bivouac's guest agent so the runner lives in the
-// guest's Aqua session. Tart itself is needed only to build baselines.
-package tart
+// guest's Aqua session. Tart may build baselines; bivouac runs them.
+package vz
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ const markerFile = "bivouac.json"
 // Provider implements provider.Provider on Tart-format VM directories.
 type Provider struct {
 	name           string
-	cfg            config.Tart
+	cfg            config.VZ
 	controllerID   string
 	home           string // Tart home holding vms/
 	rt             Runtime
@@ -71,7 +71,7 @@ func Home() (string, error) {
 }
 
 // New returns the provider. rt may be nil for the real VM runtime.
-func New(name string, cfg config.Tart, controllerID string, rt Runtime) (*Provider, error) {
+func New(name string, cfg config.VZ, controllerID string, rt Runtime) (*Provider, error) {
 	home, err := Home()
 	if err != nil {
 		return nil, err

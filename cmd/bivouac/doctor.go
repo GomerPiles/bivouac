@@ -12,7 +12,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vm"
@@ -101,11 +101,11 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			}
 			continue
 		}
-		if p.Type != "tart" {
+		if p.Type != "vz" {
 			add("WARN", "provider "+name, "type "+p.Type+" is not implemented on this host")
 			continue
 		}
-		e.doctorTart(ctx, name, p, host, cfg, add)
+		e.doctorVZ(ctx, name, p, host, cfg, add)
 	}
 
 	if cfg.Budget.ReserveCPU >= host.CPUs {
@@ -162,8 +162,8 @@ func (e env) doctor(ctx context.Context, args []string) error {
 	return report(checks)
 }
 
-func (e env) doctorTart(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
-	t := p.Tart
+func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
+	t := p.VZ
 	if exe, err := os.Executable(); err != nil {
 		add("FAIL", "vm "+name, err.Error())
 	} else if err := vm.CheckEntitlement(ctx, exe); err != nil {
@@ -171,7 +171,7 @@ func (e env) doctorTart(ctx context.Context, name string, p config.Provider, hos
 	} else {
 		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
 	}
-	home, err := tart.Home()
+	home, err := vz.Home()
 	if err != nil {
 		add("FAIL", "baseline "+name, err.Error())
 		return
@@ -187,7 +187,7 @@ func (e env) doctorTart(ctx context.Context, name string, p config.Provider, hos
 	if e := t.Containers; e != nil {
 		cpu += e.CPU
 		mem += e.MemoryGB
-		tp, err := tart.New(name, *t, "doctor", nil)
+		tp, err := vz.New(name, *t, "doctor", nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}

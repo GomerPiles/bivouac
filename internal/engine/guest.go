@@ -97,7 +97,7 @@ func GuestListen(ctx context.Context) error {
 	return Listen(ctx, stdio{}, l)
 }
 
-// GuestDial is invoked through Tart exec in the disposable Linux engine VM.
+// GuestDial is invoked through the guest agent in the disposable Linux engine VM.
 func GuestDial(ctx context.Context, engine string) error {
 	if runtime.GOOS != "linux" {
 		return errors.New("container dial requires a Linux guest")

@@ -1,7 +1,6 @@
 // Package provider defines the contract between bivouac's portable core and
-// a virtualization engine. It is written against two real APIs, the Tart CLI
-// and the App Sandbox headless HTTP API, so launch options are argument
-// arrays or structured fields and never shell strings.
+// a virtualization engine. Launch options are argument arrays or structured
+// fields, never shell strings.
 package provider
 
 import (

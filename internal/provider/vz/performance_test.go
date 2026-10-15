@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"archive/tar"
@@ -14,7 +14,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/perf"
 )
 
-func TestTartDiagnosticsValidateOptionalPerformanceAndKeepLogs(t *testing.T) {
+func TestDiagnosticsValidateOptionalPerformanceAndKeepLogs(t *testing.T) {
 	now := time.Now().UTC()
 	report := perf.Report{StartedAt: now, Latest: perf.Sample{At: now, TotalBytes: 1000, AvailableBytes: 500, LogicalCPUs: 1}, Samples: 1}
 	valid, err := json.Marshal(report)

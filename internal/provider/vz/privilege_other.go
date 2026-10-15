@@ -1,6 +1,6 @@
 //go:build !darwin
 
-package tart
+package vz
 
 import "os"
 

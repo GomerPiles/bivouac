@@ -18,7 +18,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/manager"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/redact"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
@@ -177,8 +177,8 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store)
 				return nil, err
 			}
 			out[name] = wp
-		case "tart":
-			tp, err := tart.New(name, *p.Tart, store.ControllerID(), nil)
+		case "vz":
+			tp, err := vz.New(name, *p.VZ, store.ControllerID(), nil)
 			if err != nil {
 				closeProviders(out)
 				return nil, err

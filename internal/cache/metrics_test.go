@@ -208,7 +208,7 @@ func TestGuestCacheSummaryNumericPrivateBoundedAndOptional(t *testing.T) {
 	}
 }
 
-// Tart uses a direct host IP, rather than the Windows SSH endpoint at
+// macOS guests use a direct host IP, rather than the Windows SSH endpoint at
 // 127.0.0.1. IPv6 loopback exercises that path without exposing a LAN listener.
 func TestGuestCacheSummaryAcceptsOtherLiteralEndpoint(t *testing.T) {
 	s, err := Start(t.TempDir(), "[::1]:0", "::1", 1<<20, 1<<19, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -216,7 +216,7 @@ func TestGuestCacheSummaryAcceptsOtherLiteralEndpoint(t *testing.T) {
 		t.Skip("IPv6 loopback unavailable")
 	}
 	defer s.Close()
-	data, err := s.Issue("tart-fixture")
+	data, err := s.Issue("vz-fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +234,6 @@ func TestGuestCacheSummaryAcceptsOtherLiteralEndpoint(t *testing.T) {
 	var out bytes.Buffer
 	PrintGuestSummary(context.Background(), &out, directory)
 	if !strings.Contains(out.String(), "archives: hits=1 (7 bytes) misses=1 (7 bytes)") || !strings.Contains(out.String(), "release proxy: hits=1 (13 bytes)") || strings.Contains(out.String(), b.Token) {
-		t.Fatal("Tart-style endpoint did not report both cache kinds", out.String())
+		t.Fatal("direct host endpoint did not report both cache kinds", out.String())
 	}
 }
