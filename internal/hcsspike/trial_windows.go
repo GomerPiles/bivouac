@@ -42,14 +42,23 @@ type backend interface {
 }
 
 // Report is deliberately limited to observations, never guest-controlled text.
-// Assignment and agent display readiness do not prove hardware rendering/input.
+// Assignment/agent readiness alone do not prove rendering. The optional fixed
+// interactive probe checks hardware D3D11, presentation and two-color GPU/desktop
+// pixel readback; it does not test keyboard/mouse input.
 type Report struct {
-	NativeStarted    bool `json:"native_started"`
-	AgentConnected   bool `json:"agent_connected"`
-	GPUAssigned      bool `json:"gpu_assigned"`
-	DisplayReady     bool `json:"display_ready"`
-	SSHAuthenticated bool `json:"ssh_authenticated"`
-	Cleaned          bool `json:"cleaned"`
+	GuestReady       bool   `json:"guest_ready"`
+	DesktopReady     bool   `json:"desktop_ready"`
+	HardwareD3D11    bool   `json:"hardware_d3d11"`
+	Presented        bool   `json:"presented"`
+	PixelReadback    bool   `json:"pixel_readback"`
+	RenderStage      uint32 `json:"render_stage,omitempty"`
+	RenderHRESULT    uint32 `json:"render_hresult,omitempty"`
+	NativeStarted    bool   `json:"native_started"`
+	AgentConnected   bool   `json:"agent_connected"`
+	GPUAssigned      bool   `json:"gpu_assigned"`
+	DisplayReady     bool   `json:"display_ready"`
+	SSHAuthenticated bool   `json:"ssh_authenticated"`
+	Cleaned          bool   `json:"cleaned"`
 }
 
 type record struct {
@@ -352,7 +361,7 @@ func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held sy
 	}
 	// Keep the marker until all payloads have been removed. If interrupted
 	// after marker removal, recovery can remove only an empty child.
-	for _, path := range []string{"drivers", "disk.vhdx", "vm.vmgs", "vm.vmrs"} {
+	for _, path := range []string{"drivers", "setup-assets", "setup-private", "disk.vhdx", "vm.vmgs", "vm.vmrs"} {
 		if err = j.root.RemoveAll(filepath.Join(c.InstanceID, path)); err != nil {
 			return err
 		}

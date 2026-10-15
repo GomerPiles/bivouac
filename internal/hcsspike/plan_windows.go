@@ -19,10 +19,9 @@ import (
 
 const ownerPrefix = "bivouac-hcs-spike:"
 
-// Config contains no credentials. Baseline must be a separate, specialized,
-// unenrolled Windows image with the App Sandbox guest agent and display driver.
-// Generalized templates need additional first-boot provisioning and are not
-// accepted as a substitute for this prerequisite.
+// Config contains no credentials. Baseline is an independent, unenrolled image.
+// A specialized image has the guest components already prepared; generalized
+// templates require the explicit pinned SetupAssets for disposable provisioning.
 type Config struct {
 	Root           string        `json:"root"`
 	InstanceID     string        `json:"instance_id"`
@@ -34,6 +33,18 @@ type Config struct {
 	GPU            bool          `json:"gpu"`
 	Drivers        []DriverShare `json:"drivers,omitempty"`
 	TimeoutSeconds int           `json:"timeout_seconds"`
+	SetupAssets    []SetupAsset  `json:"setup_assets,omitempty"`
+	RenderProbe    *PinnedFile   `json:"render_probe,omitempty"`
+}
+
+// PinnedFile is a bounded public executable/resource, never a credential.
+type PinnedFile struct {
+	Source string `json:"source"`
+	SHA256 string `json:"sha256"`
+}
+type SetupAsset struct {
+	Name string `json:"name"`
+	PinnedFile
 }
 
 // DriverShare is copied to the owned trial directory before being shared. Only
@@ -116,6 +127,9 @@ func (c Config) Validate() error {
 			return errors.New("driver sources must be external local directories; destinations must be under the guest HostDriverStore FileRepository")
 		}
 	}
+	if err := validateAssets(c); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -151,6 +165,9 @@ func Plan(c Config) (map[string]any, error) {
 		"VideoMonitor": map[string]int{"HorizontalResolution": 1024, "VerticalResolution": 768},
 		"HvSocket":     map[string]any{"HvSocketConfig": map[string]any{"ServiceTable": services}},
 		"Keyboard":     struct{}{}, "Mouse": struct{}{},
+	}
+	if len(c.SetupAssets) != 0 {
+		devices["Scsi"].(map[string]any)["Primary"].(map[string]any)["Attachments"].(map[string]any)["1"] = map[string]string{"Type": "Iso", "Path": filepath.Join(c.directory(), "setup-private", "setup.iso")}
 	}
 	if len(c.Drivers) != 0 {
 		shares := []map[string]any{}

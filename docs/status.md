@@ -86,7 +86,12 @@ A separate `hcs-spike` executable implements offline VM configuration, native
 HCS lifecycle, differencing disks, post-start GPU-PV assignment, bounded copies
 of selected GPU drivers, guest-agent initialization and ephemeral authenticated
 SSH over HvSocket. It is not wired into the CI manager. App Sandbox guest
-components remain required; generalized template provisioning is not implemented.
+components remain required. Optional pinned setup assets now generate per-trial
+setup media for generalized templates without modifying the baseline. An optional
+native guest probe checks setup/console readiness, hardware D3D11, presentation
+and GPU/desktop pixel readback through fixed authenticated SSH code. These new
+paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture;
+live guest validation is pending.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow

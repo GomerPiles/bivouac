@@ -600,8 +600,22 @@ registered CI provider. A direct HCS launcher can create an offline Windows
 amd64 VM with a differencing disk, post-start GPU-PV assignment and fixed
 HvSocket guest-agent/SSH initialization, without an App Sandbox host daemon.
 It retains the upstream guest service/display-driver dependency and requires
-a separate specialized, unenrolled image; generalized template provisioning
-and per-instance resources ISO generation are not implemented.
+an independent unenrolled image. Optional hash-pinned setup assets support an
+offline generalized template: Windows IMAPI builds a per-trial setup ISO using
+an in-memory answer file, a random local guest password and fixed guest code.
+The ISO is created in an administrator/SYSTEM-only child directory before HCS
+grants the owned VM access, and is removed with the disposable child. The guest
+password never enters configuration, journal, command arguments or diagnostics.
+No baseline is mounted or modified. A specialized image can omit setup assets.
+
+An optional hash-pinned standalone native C++ probe runs only inside the guest,
+through a fixed SSH bootstrap and an interactive guest scheduled task. Native
+C++ supplies the Windows Direct3D COM ABI without adding cgo to the Go host.
+Readiness requires setup completion, the intended console user's Explorer and
+Default input desktop. The probe requires hardware D3D11 (software adapters are
+rejected), successful windowed presentation, and matching red/green pixels in
+both a staging texture and the composited desktop. Only fixed booleans/numbers
+cross back to the host; SSH code is fixed and all instance data arrives on stdin.
 
 Only `check` (DLL export resolution/token report) and `plan` (pure configuration
 validation/JSON generation) are intended for ordinary-token execution. Native

@@ -80,6 +80,7 @@ func speakAgent(ctx context.Context, conn net.Conn, c Config, publicKey []byte) 
 		return report, errors.New("guest SSH initialization failed")
 	}
 	keySent, keyReady := false, false
+	gpuReady := len(c.Drivers) == 0
 	bytesRead := 0
 	for lines := 0; lines < 4096 && bytesRead < 1<<20; lines++ {
 		line, err := readLine()
@@ -122,7 +123,10 @@ func speakAgent(ctx context.Context, conn net.Conn, c Config, publicKey []byte) 
 		if strings.HasPrefix(line, "gpu_copy_error:") || strings.HasPrefix(line, "gpu_device_failed:") {
 			return report, errors.New("guest GPU preparation failed")
 		}
-		if keyReady && report.DisplayReady {
+		if strings.HasPrefix(line, "gpu_copy_done:") {
+			gpuReady = true
+		}
+		if keyReady && report.DisplayReady && gpuReady {
 			return report, nil
 		}
 	}
@@ -196,7 +200,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	if err = a.verify(ctx, c, runtimeID); err != nil {
 		return report, err
 	}
-	sshCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	sshCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
 	transport, err := winio.Dial(sshCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(7)})
 	if err != nil {
@@ -215,11 +219,26 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		// fixed HvSocket endpoint. There is no network address or key reuse.
 		HostKeyCallback: func(_ string, _ net.Addr, _ ssh.PublicKey) error { return a.verify(sshCtx, c, runtimeID) },
 	}
-	client, _, _, err := ssh.NewClientConn(transport, "hcs-spike", config)
+	clientConn, channels, requests, err := ssh.NewClientConn(transport, "hcs-spike", config)
 	if err != nil {
 		return report, errors.New("ephemeral SSH authentication failed")
 	}
+	client := ssh.NewClient(clientConn, channels, requests)
 	defer func() { _ = client.Close() }()
 	report.SSHAuthenticated = true
+	if c.RenderProbe != nil {
+		if err = a.verify(ctx, c, runtimeID); err != nil {
+			return report, err
+		}
+		observed, renderErr := validateDesktop(sshCtx, client, c)
+		report.GuestReady = observed.GuestReady
+		report.DesktopReady = observed.DesktopReady
+		report.HardwareD3D11 = observed.HardwareD3D11
+		report.Presented = observed.Presented
+		report.PixelReadback = observed.PixelReadback
+		report.RenderStage = observed.Stage
+		report.RenderHRESULT = observed.HRESULT
+		return report, renderErr
+	}
 	return report, nil
 }

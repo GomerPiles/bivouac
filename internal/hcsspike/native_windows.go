@@ -364,6 +364,12 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 		return errors.New("cannot create spike differencing VHDX")
 	}
 	paths := []string{c.disk()}
+	if len(c.SetupAssets) != 0 {
+		if err := makeSetupISO(ctx, c); err != nil {
+			return err
+		}
+		paths = append(paths, filepath.Join(c.directory(), "setup-private"), filepath.Join(c.directory(), "setup-private", "setup.iso"))
+	}
 	for _, item := range []struct{ method, file string }{{"HcsCreateEmptyGuestStateFile", "vm.vmgs"}, {"HcsCreateEmptyRuntimeStateFile", "vm.vmrs"}} {
 		path := filepath.Join(c.directory(), item.file)
 		p, err := windows.UTF16PtrFromString(path)

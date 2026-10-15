@@ -30,7 +30,13 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
 
 - HCS schema 2.1 generation for an offline Windows amd64 VM, UEFI Secure Boot,
   guest/runtime state files, virtual keyboard/mouse and a basic video device.
-  CPU, memory and duration are bounded. No NIC, nested virtualization, audio,
+  CPU, memory and duration are bounded. Optional `setup_assets` attach one
+  disposable resources ISO for generalized-template initialization. Windows
+  IMAPI builds it from pinned public guest assets plus an in-memory answer file.
+  A random local guest password exists only in memory and the protected disposable
+  ISO/guest disk, never config, journal, command arguments or logs. Its parent
+  directory is Administrators/SYSTEM-only before the owned VM access grant.
+  No NIC, nested virtualization, audio,
   clipboard, personal share, cache endpoint or display streaming is configured.
 - A differencing VHDX against a hash-pinned, read-only baseline. The baseline
   handle denies writes/deletion for the trial; it is not mounted, generalized,
@@ -43,7 +49,10 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
   using fixed agent and SSH HvSocket service IDs. It handles driver-copy queries,
   enables guest SSH, deploys an ephemeral public key and requires display-driver
   readiness. SSH authenticates directly over the owned runtime's HvSocket; no
-  host TCP listener or App Sandbox host key is used. No guest command is executed.
+  host TCP listener or App Sandbox host key is used. When `render_probe` is set,
+  fixed SSH code waits for setup and the intended console user, transfers the
+  pinned native probe and runs it in an interactive guest scheduled task. It
+  accepts only bounded fixed booleans/numbers, never arbitrary guest diagnostics.
 - A separate protected journal, child marker and exact HCS owner/runtime proof.
   An existing native name is never replaced. Creation is never replayed after
   response loss. Cleanup runs independently of caller cancellation, confirms
@@ -94,8 +103,8 @@ after HCS reports a running runtime and accepts GPU assignment, then cleans up.
 It skips the guest agent and SSH entirely. An independent copy of a generalized
 Windows template is sufficient for this test, since it makes no claim that
 Windows completed OOBE or that a desktop is usable. `native_started` reports
-HCS running state only. The full trial still requires the specialized image
-described below. Boot-only mode never claims guest readiness or authentication.
+HCS running state only. The full trial requires either the specialized image or the explicit pinned
+setup assets described below. Boot-only mode never claims guest readiness or authentication.
 
 ## Elevated trial prerequisites
 
@@ -106,11 +115,14 @@ the spike is outside the manager's admission budget. An offline VM still consume
 shared CPU, RAM and GPU resources, so concurrent validation needs explicit
 operator agreement on those resources.
 
-1. Prepare a **separate specialized, clean, unenrolled Windows image**, shut down
-   with the App Sandbox guest service, signed indirect display driver, local
-   autologin and OpenSSH available offline. A generalized App Sandbox template
-   is not directly interchangeable: this spike does not yet generate its
-   per-instance setup/resources ISO or automate OOBE. Never use a live runner's
+1. Use a **separate clean, unenrolled Windows image**. A specialized image must
+   have the App Sandbox guest service, signed indirect display driver, local
+   autologin and OpenSSH available offline. A generalized template instead needs
+   `setup_assets` as in `hcs-spike-guest.example.json`: the agent, display/input
+   helpers, VDD DLL/INF/CAT and devcon, plus an offline OpenSSH MSI when the image
+   lacks sshd. Every source must be administrator-protected and SHA-256 pinned.
+   Fixed first-boot code runs only in the disposable guest; it initializes the
+   local account/autologin, VDD, SSH and guest agent. Never use a live runner's
    disk, export an enrolled guest, or change the production baseline. The image
    must contain no host credentials, repository state or configured runner.
    Leave guest disk encryption/BitLocker disabled; each clone receives fresh
@@ -146,9 +158,15 @@ operator agreement on those resources.
 Success reports `agent_connected`, `gpu_assigned` (when requested),
 `display_ready`, `ssh_authenticated` and `cleaned`. These mean that HCS accepted
 GPU assignment, the guest agent reported the display driver ready, SSH actually
-authenticated, and cleanup completed. They do **not** establish hardware D3D
-rendering, presentation, focus/input, fresh-state reset, host/private-peer
-isolation, or production readiness. Those require subsequent disposable-guest
+authenticated, and cleanup completed. With `render_probe`, success also requires
+`guest_ready`, `desktop_ready`, `hardware_d3d11`, `presented` and `pixel_readback`.
+The native probe is compiled from `tools/windows/hcs-render-probe.cpp` with a
+Windows C++ compiler and linked against d3d11, dxgi, user32 and gdi32. It checks
+two colors in both the render target and the composited desktop, rejects WARP
+and other software adapters, and leaves only bounded boolean/numeric results.
+No keyboard/mouse input or cross-reboot/crash recovery is covered. Agent/SSH success alone does **not** establish hardware rendering or
+presentation. Neither trial establishes focus/input, fresh-state reset,
+host/private-peer isolation, or production readiness. Those require subsequent disposable-guest
 tests. No NIC is attached during this first trial, and no network-isolation
 claim is made. All App Sandbox guest drivers/services remain dependencies until
 separately replaced or packaged and maintained.
@@ -173,3 +191,6 @@ contracts; regression tests reject substituting an empty JSON document.
 Basic compute-system identity/state uses the default query, not a `"Basic"`
 selector: see Microsoft's [schema-2 property query](https://github.com/microsoft/hcsshim/blob/main/internal/hcs/schema2/property_query.go)
 and [property types](https://github.com/microsoft/hcsshim/blob/main/internal/hcs/schema2/property_type.go).
+
+Windows answer-file behavior follows Microsoft's [unattended setup](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/automate-windows-setup)
+and [offline account-screen setting](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-oobe-hideonlineaccountscreens).
