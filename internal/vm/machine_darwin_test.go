@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,6 +123,32 @@ func TestConfigurationsValidate(t *testing.T) {
 				} else if !valid {
 					t.Errorf("%s %+v: %s", guest, opts, reason)
 				}
+			}
+			if guest != "linux" {
+				return
+			}
+			// Nesting validates where the host supports it and is refused,
+			// before the framework sees it, everywhere else.
+			var buildErr error
+			var valid bool
+			var reason string
+			f.onQueue(queue, func() {
+				var config objc.ID
+				config, buildErr = buildConfiguration(f, dir, c, machineOptions{networkFD: -1, nested: true})
+				if buildErr != nil {
+					return
+				}
+				var nsErr objc.ID
+				valid = objc.Send[bool](config, f.sel("validateWithError:"), errOut(&nsErr))
+				reason = f.errorText(nsErr)
+			})
+			switch supported := f.nestedSupported(); {
+			case supported && (buildErr != nil || !valid):
+				t.Errorf("nested Linux guest on a supporting host: %v %s", buildErr, reason)
+			case !supported && !errors.Is(buildErr, ErrNestedUnsupported):
+				t.Errorf("nested Linux guest on a host without support: %v", buildErr)
+			default:
+				t.Logf("nested virtualization supported on this host: %v", supported)
 			}
 		})
 	}

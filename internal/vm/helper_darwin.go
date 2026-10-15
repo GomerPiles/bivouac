@@ -58,13 +58,16 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := opts.Machine.CheckGuest(c); err != nil {
+		return err
+	}
 
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	defer signal.Stop(signals)
 
-	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync}
+	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested}
 	var sn *softnet
 	if opts.Softnet != nil {
 		sn, err = startSoftnet(*opts.Softnet, c.MAC, log)

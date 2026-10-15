@@ -446,12 +446,17 @@ path fits `sun_path` whatever the name.
   once: a macOS guest ignores a shutdown request, and the clone is deleted
   anyway. SIGKILL after the timeout ends a hung helper, and the framework
   ends a VM whose owning process exits. Clones refuse a running baseline.
-- Machine options: `[providers.*.vz.machine]` holds typed, validated
-  options for runner guests, mapped to framework settings: `display` (width,
-  height, optional ppi) and `disk_sync` (`full`, `fsync`, or `none`, which
-  ignores guest flushes and suits only disposable clones). There is no raw
-  passthrough. Nested virtualization is omitted: the framework offers it only
-  to Linux guests, which here are container engines.
+- Machine options: `[providers.*.vz.machine]` (runner guests) and
+  `[providers.*.vz.containers.machine]` (the engine VM) hold typed, validated
+  options mapped to framework settings: `display` (width, height, optional
+  ppi; macOS guests), `disk_sync` (`full`, `fsync`, or `none`, which ignores
+  guest flushes and suits only disposable clones), and
+  `nested_virtualization`. There is no raw passthrough. Options are checked
+  against the baseline's OS when a guest is created: the framework offers
+  nesting only to Linux guests (today the engine VM, giving its containers
+  `/dev/kvm` inside the VM boundary), never to macOS guests. The daemon and
+  `doctor` refuse nesting on a host without it (it needs an M3 or newer chip
+  and macOS 15).
 - Diagnostics: `_diag` and the runner log stream out as tar through the
   agent, are redacted before reaching disk, and are capped at 1024 entries
   and 128 MiB extracted.

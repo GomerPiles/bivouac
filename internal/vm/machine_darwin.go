@@ -51,6 +51,8 @@ type machineOptions struct {
 	display Display
 	// diskSync is a VZDiskImageSynchronizationMode.
 	diskSync int
+	// nested enables nested virtualization (Linux guests only).
+	nested bool
 }
 
 // machine is one VZVirtualMachine on its own serial queue.
@@ -99,7 +101,7 @@ func buildConfiguration(f *framework, dir string, c Manifest, opts machineOption
 			return 0, err
 		}
 	} else {
-		if err := linuxPlatform(f, config, dir); err != nil {
+		if err := linuxPlatform(f, config, dir, opts.nested); err != nil {
 			return 0, err
 		}
 		caching = 2 // VZDiskImageCachingModeCached avoids Linux file system corruption
@@ -252,7 +254,7 @@ func macPlatform(f *framework, config objc.ID, dir string, c Manifest, d Display
 	return nil
 }
 
-func linuxPlatform(f *framework, config objc.ID, dir string) error {
+func linuxPlatform(f *framework, config objc.ID, dir string, nested bool) error {
 	store, err := f.make("VZEFIVariableStore", "initWithURL:", f.url(filepath.Join(dir, NVRAMFile)))
 	if err != nil {
 		return err
@@ -267,8 +269,34 @@ func linuxPlatform(f *framework, config objc.ID, dir string) error {
 	if err != nil {
 		return err
 	}
+	if nested {
+		if !f.nestedSupported() {
+			return ErrNestedUnsupported
+		}
+		f.send(platform, "setNestedVirtualizationEnabled:", true)
+	}
 	f.send(config, "setPlatform:", platform)
 	return nil
+}
+
+// nestedSupported reports whether this host's framework can nest: macOS 15
+// or later on an M3 or newer chip, unless disabled by policy.
+func (f *framework) nestedSupported() bool {
+	class := f.class("VZGenericPlatformConfiguration")
+	if class == 0 || !objc.Send[bool](class, f.sel("respondsToSelector:"), f.sel("isNestedVirtualizationSupported")) {
+		return false
+	}
+	return objc.Send[bool](class, f.sel("isNestedVirtualizationSupported"))
+}
+
+// NestedVirtualizationSupported reports whether this Mac can give Linux
+// guests nested virtualization.
+func NestedVirtualizationSupported() (bool, error) {
+	f, err := openFramework()
+	if err != nil {
+		return false, err
+	}
+	return f.nestedSupported(), nil
 }
 
 // completion waits for an NSError-only completion handler.

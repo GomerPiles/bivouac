@@ -30,6 +30,25 @@ type MachineOptions struct {
 	// DiskSync is "full" (default: guest flushes reach the disk), "fsync",
 	// or "none" (flushes are ignored; disposable guests only).
 	DiskSync string
+	// Nested enables nested virtualization, which the framework offers to
+	// Linux guests on capable hosts (an M3 or newer chip, macOS 15 or later).
+	Nested bool
+}
+
+// ErrNestedUnsupported reports a host whose framework cannot nest.
+var ErrNestedUnsupported = errors.New("this Mac does not support nested virtualization: it needs an M3 or newer chip and macOS 15 or later")
+
+// CheckGuest refuses options the guest m cannot take: nested
+// virtualization for a guest other than Linux, or a display for a guest
+// other than macOS.
+func (o MachineOptions) CheckGuest(m Manifest) error {
+	if o.Nested && m.OS != "linux" {
+		return fmt.Errorf("nested virtualization is available only to Linux guests, not %s: Apple's Virtualization framework offers it to no macOS guest", m.OS)
+	}
+	if o.Display.Width != 0 && m.OS != "darwin" {
+		return fmt.Errorf("a display applies only to macOS guests, not %s", m.OS)
+	}
+	return nil
 }
 
 // VZDiskImageSynchronizationMode values.
@@ -138,6 +157,9 @@ func (o RunOptions) Args() []string {
 	if o.Machine.DiskSync != "" {
 		args = append(args, "--disk-sync", o.Machine.DiskSync)
 	}
+	if o.Machine.Nested {
+		args = append(args, "--nested")
+	}
 	return args
 }
 
@@ -160,6 +182,7 @@ func ParseArgs(args []string) (RunOptions, error) {
 	var display string
 	fs.StringVar(&display, "display", "", "")
 	fs.StringVar(&o.Machine.DiskSync, "disk-sync", "", "")
+	fs.BoolVar(&o.Machine.Nested, "nested", false, "")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}

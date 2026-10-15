@@ -143,3 +143,14 @@ func TestCacheConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestNestedVirtualizationParses(t *testing.T) {
+	text := Example + "\n[providers.macos.vz.machine]\nnested_virtualization = true\n"
+	c, err := Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Providers["macos"].VZ.Machine.NestedVirtualization {
+		t.Fatal("nested_virtualization not parsed")
+	}
+}

@@ -54,6 +54,9 @@ func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink
 	if launch.Machine.DiskSync != "" {
 		call = append(call, "disk-sync="+launch.Machine.DiskSync)
 	}
+	if launch.Machine.Nested {
+		call = append(call, "nested")
+	}
 	return c.calls.Start(ctx, append(call, name), sink)
 }
 
@@ -434,5 +437,37 @@ func TestReleaseProxyNeedsRecordedSudo(t *testing.T) {
 	}
 	if err := p.checkReleaseProxy(fixtureName); err == nil {
 		t.Fatal("release proxy allowed without sudo")
+	}
+}
+
+func TestNestedVirtualizationOnlyForLinuxGuests(t *testing.T) {
+	r := newRecorder()
+	p := newProvider(t, r)
+	p.cfg.Machine.NestedVirtualization = true
+	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
+	if err := p.Create(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "only to Linux guests") {
+		t.Fatalf("nested macOS runner: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("touched the runtime: %v", r.calls)
+	}
+}
+
+func TestCheckNestedFollowsTheHost(t *testing.T) {
+	if err := CheckNested(config.VZ{}); err != nil {
+		t.Fatalf("no nesting requested: %v", err)
+	}
+	cfg := config.VZ{Containers: &config.Containers{Machine: config.Machine{NestedVirtualization: true}}}
+	supported, hostErr := vm.NestedVirtualizationSupported()
+	err := CheckNested(cfg)
+	switch {
+	case hostErr != nil:
+		if !errors.Is(err, hostErr) {
+			t.Fatalf("CheckNested = %v, want %v", err, hostErr)
+		}
+	case supported && err != nil:
+		t.Fatalf("supporting host refused: %v", err)
+	case !supported && !errors.Is(err, vm.ErrNestedUnsupported):
+		t.Fatalf("CheckNested = %v, want ErrNestedUnsupported", err)
 	}
 }

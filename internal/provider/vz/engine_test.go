@@ -45,7 +45,7 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 	if err := os.WriteFile(helper, h, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper}
+	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper, Machine: config.Machine{NestedVirtualization: true}}
 	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
 		policy, err := NetworkPolicy()
 		return vm.SoftnetOptions{Binary: "/opt/softnet", Block: policy}, err
@@ -62,14 +62,23 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 	if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	engineNested := false
 	for _, c := range r.calls {
 		if c[0] != "Start" {
 			continue
 		}
 		a := strings.Join(c, " ")
+		if strings.HasSuffix(a, "-engine") && strings.Contains(a, " nested ") {
+			engineNested = true
+		} else if strings.Contains(a, "nested") {
+			t.Fatalf("nesting reached the macOS runner: %v", c)
+		}
 		if !strings.Contains(a, "softnet-block=") || !strings.Contains(a, "@host") || strings.Contains(a, "share=") || strings.Contains(a, "input") {
 			t.Fatalf("unsafe launch %v", c)
 		}
+	}
+	if !engineNested {
+		t.Fatal("the engine VM did not get nested virtualization")
 	}
 	owned, foreign, err := p.List(ctx)
 	if err != nil || len(owned) != 1 || len(foreign) != 0 {

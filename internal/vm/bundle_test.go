@@ -147,6 +147,7 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 		{Dir: dir, Share: abs("share"), Input: true, AgentPort: 9, AgentSocket: sock, Softnet: &SoftnetOptions{Binary: abs("softnet"), Sudo: true, Block: "@host,10.0.0.0/8"}},
 		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 1920, Height: 1080}, DiskSync: "none"}},
 		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 2560, Height: 1600, PPI: 144}, DiskSync: "fsync"}},
+		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Nested: true}},
 	} {
 		got, err := ParseArgs(o.Args())
 		if err != nil {
@@ -173,5 +174,25 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 		if _, err := ParseArgs(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestMachineOptionsFitTheGuest(t *testing.T) {
+	mac := testManifest()
+	linux := testManifest()
+	linux.OS, linux.MacOS = "linux", nil
+	nested := MachineOptions{Nested: true}
+	display := MachineOptions{Display: Display{Width: 1920, Height: 1080}}
+	if err := nested.CheckGuest(linux); err != nil {
+		t.Fatal(err)
+	}
+	if err := display.CheckGuest(mac); err != nil {
+		t.Fatal(err)
+	}
+	if err := nested.CheckGuest(mac); err == nil || !strings.Contains(err.Error(), "only to Linux guests") {
+		t.Fatalf("nested macOS guest: %v", err)
+	}
+	if err := display.CheckGuest(linux); err == nil {
+		t.Fatal("display accepted for a Linux guest")
 	}
 }

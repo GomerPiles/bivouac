@@ -164,16 +164,22 @@ type VZ struct {
 	BootstrapShare string `toml:"bootstrap_share"`
 }
 
-// Machine is how a runner guest runs. Zero values keep the baseline
-// manifest's or the framework's defaults. There is deliberately no raw
-// option passthrough: each option is typed and validated.
+// Machine is how a guest runs. Zero values keep the baseline manifest's or
+// the framework's defaults. There is deliberately no raw option
+// passthrough: each option is typed and validated, here and against the
+// baseline's OS and the host when a guest is created.
 type Machine struct {
-	// Display overrides the baseline's display size (and pixel density).
+	// Display overrides the baseline's display size (and pixel density);
+	// macOS guests only.
 	Display Display `toml:"display"`
 	// DiskSync is "full" (the default: guest flushes reach the host disk),
 	// "fsync", or "none" (flushes are ignored, which is faster and safe only
 	// because guests are deleted after one job).
 	DiskSync string `toml:"disk_sync"`
+	// NestedVirtualization lets the guest run VMs of its own (such as
+	// /dev/kvm for containers). Apple's framework offers it to Linux guests
+	// on an M3 or newer chip with macOS 15 or later.
+	NestedVirtualization bool `toml:"nested_virtualization"`
 }
 
 // Display is a guest display size in pixels, with an optional density.
@@ -205,6 +211,8 @@ type Containers struct {
 	MemoryGB int    `toml:"memory_gb"`
 	// Helper is a Linux/arm64 bivouac binary built alongside the host binary.
 	Helper string `toml:"helper"`
+	// Machine holds typed options for the engine VM; it has no display.
+	Machine Machine `toml:"machine"`
 }
 
 // Duration is a TOML string such as "30m".
@@ -480,6 +488,12 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("provider %q: vz %w", name, err))
 			}
 			if e := p.VZ.Containers; e != nil {
+				if err := e.Machine.validate(); err != nil {
+					errs = append(errs, fmt.Errorf("provider %q: containers %w", name, err))
+				}
+				if e.Machine.Display != (Display{}) {
+					errs = append(errs, fmt.Errorf("provider %q: the container engine VM has no display", name))
+				}
 				if e.Engine != "docker" && e.Engine != "podman" {
 					errs = append(errs, fmt.Errorf("provider %q: containers.engine must be docker or podman", name))
 				}
@@ -603,6 +617,7 @@ foreign_slots = 1            # leave one macOS guest slot for Tartelet during va
 # [providers.macos.vz.machine]
 # display = { width = 1920, height = 1080, ppi = 144 }
 # disk_sync = "none"         # skip host flushes; guests are deleted after one job
+# nested_virtualization = true  # Linux guests on M3 or newer; also [providers.macos.vz.containers.machine]
 `
 
 func (c Cache) loopback() bool {

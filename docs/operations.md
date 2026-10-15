@@ -369,7 +369,9 @@ it only when its protocol version changes.
 rename `[providers.*.tart]` to `[providers.*.vz]` without `binary`,
 `extra_args`, or `runner_dir` (now in the manifest); config validation
 rejects the old names. Typed options in `[providers.*.vz.machine]` replace
-`extra_args`.
+`extra_args`. `nested_virtualization = true` needs an M3 or newer Mac with
+macOS 15 and a Linux guest, such as the engine VM in
+`[providers.*.vz.containers.machine]`; the daemon refuses to start otherwise.
 
 Validation config (while Tartelet keeps production):
 

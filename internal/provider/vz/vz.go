@@ -78,10 +78,47 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 // launches VM helpers lacks the virtualization entitlement. The daemon calls
 // it at startup, so an unsigned build never accepts a job.
 func (p *Provider) CheckRuntime(ctx context.Context) error {
-	if l, ok := p.rt.(*local); ok {
-		return l.check(ctx)
+	l, ok := p.rt.(*local)
+	if !ok {
+		return nil
+	}
+	if err := l.check(ctx); err != nil {
+		return err
+	}
+	return CheckNested(p.cfg)
+}
+
+// CheckNested fails when the config asks for nested virtualization on a
+// host whose framework cannot provide it.
+func CheckNested(cfg config.VZ) error {
+	if !cfg.Machine.NestedVirtualization && (cfg.Containers == nil || !cfg.Containers.Machine.NestedVirtualization) {
+		return nil
+	}
+	ok, err := vm.NestedVirtualizationSupported()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return vm.ErrNestedUnsupported
 	}
 	return nil
+}
+
+// MachineOptions maps typed config to the helper's options.
+func MachineOptions(m config.Machine) vm.MachineOptions {
+	return vm.MachineOptions{
+		Display:  vm.Display{Width: m.Display.Width, Height: m.Display.Height, PPI: m.Display.PPI},
+		DiskSync: m.DiskSync,
+		Nested:   m.NestedVirtualization,
+	}
+}
+
+// engineMachine is the container engine VM's machine options.
+func (p *Provider) engineMachine() vm.MachineOptions {
+	if p.cfg.Containers == nil {
+		return vm.MachineOptions{}
+	}
+	return MachineOptions(p.cfg.Containers.Machine)
 }
 
 // Name implements provider.Provider.
@@ -157,15 +194,19 @@ func (p *Provider) guest(ctx context.Context, name string, argv []string, stdin 
 }
 
 // Create implements provider.Provider.
-func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS string) error {
+func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS string, machine vm.MachineOptions) error {
 	if err := p.checkName(spec.Name); err != nil {
 		return err
 	}
 	if spec.Baseline == "" || strings.HasPrefix(spec.Baseline, config.NamePrefix) {
 		return fmt.Errorf("refusing baseline %q", spec.Baseline)
 	}
-	if _, err := CheckBaseline(string(p.store), spec.Baseline, wantOS); err != nil {
+	m, err := CheckBaseline(string(p.store), spec.Baseline, wantOS)
+	if err != nil {
 		return err
+	}
+	if err := machine.CheckGuest(m); err != nil {
+		return fmt.Errorf("baseline %q: %w", spec.Baseline, err)
 	}
 	if err := p.rt.Clone(ctx, spec.Baseline, spec.Name, vm.CloneOptions{CPU: spec.CPU, MemoryMiB: spec.MemoryMB}); err != nil {
 		return err
@@ -237,11 +278,7 @@ func (p *Provider) runnerDir(name string) (string, error) {
 // runnerLaunch attaches input devices, the optional bootstrap share, and
 // the configured machine options; the guest console is never attached.
 func (p *Provider) runnerLaunch() Launch {
-	m := p.cfg.Machine
-	return Launch{Share: p.cfg.BootstrapShare, Input: true, Machine: vm.MachineOptions{
-		Display:  vm.Display{Width: m.Display.Width, Height: m.Display.Height, PPI: m.Display.PPI},
-		DiskSync: m.DiskSync,
-	}}
+	return Launch{Share: p.cfg.BootstrapShare, Input: true, Machine: MachineOptions(p.cfg.Machine)}
 }
 
 // LaunchArgs is the exact argument array the VM helper receives for a

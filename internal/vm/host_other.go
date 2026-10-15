@@ -29,6 +29,9 @@ func RunHelper(context.Context, RunOptions, io.Writer) error { return ErrUnsuppo
 // CheckEntitlement is unavailable off macOS.
 func CheckEntitlement(context.Context, string) error { return ErrUnsupported }
 
+// NestedVirtualizationSupported is false off macOS.
+func NestedVirtualizationSupported() (bool, error) { return false, ErrUnsupported }
+
 // ErrForeignHolder reports a VM lock held by something other than its helper.
 var ErrForeignHolder = errors.New("VM is held by a process that is not its bivouac helper")
 
