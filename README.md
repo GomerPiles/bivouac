@@ -15,7 +15,7 @@ CLI: `bivouac` (alias `biv`).
 
 - `on` / `off` / `drain` / `stop` / `status`
 - `run` (foreground daemon), `install` / `uninstall`
-- `doctor`, `config validate`, `secret set`, `vz list` / `cleanup`
+- `doctor`, `config validate`, `secret set`, `vz import` / `list` / `cleanup`
 
 ## Build
 

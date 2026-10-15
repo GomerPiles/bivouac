@@ -11,7 +11,7 @@ security model, and durable decisions. Keep it aligned with the code.
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
 internal/provider    provider contract; vz/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
-internal/vm          the VM store (Tart-format directories) and the Virtualization.framework helper (`vm run`)
+internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
 internal/github      scale set client wrapper (actions/scaleset) and test fake
@@ -383,23 +383,36 @@ file, never argv), `RunnerStatus`, `Status`, `Stop` (graceful then forced),
 
 ### macOS (`vz` provider)
 
-Baselines are Tart-format VM directories (`config.json`, `disk.img`,
-`nvram.bin`) in bivouac's VM store (`~/Library/Application Support/bivouac/vms`,
-or `vms` under `BIVOUAC_HOME`); clones live beside them so APFS can share
-blocks. Agent sockets live in the store's hidden `.run` directory, named by a
-hash of the VM name, so their path fits `sun_path` whatever the name.
+Each VM is a directory in bivouac's VM store
+(`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`):
+`disk.img`, `nvram.bin`, and `vm.json`, bivouac's versioned manifest. The
+manifest is the core model: the machine (OS, CPU and memory with their
+minimums, MAC, default display, macOS hardware model and machine identifier)
+and the guest contract (guest agent protocol version, runner directory,
+passwordless sudo). `bivouac vz import` turns a Tart-format VM into one,
+cloning its disk and NVRAM and converting `config.json`; the operator vouches
+for the guest contract. Other sources only need to write a manifest. Clones
+live beside their baseline so APFS can share blocks. Agent sockets live in
+the store's hidden `.run` directory, named by a hash of the VM name, so their
+path fits `sun_path` whatever the name.
 
-- Clone: `clonefile` of disk and NVRAM under a hidden staging name, a fresh
-  locally administered MAC, then a rename into place (milliseconds). Then
-  `bivouac.json` with controller and instance IDs, then CPU and memory.
+- Baseline check: Create, the container preflight and `doctor` refuse a
+  baseline without a manifest, of the wrong OS, without a runner directory
+  (runner guests), or whose agent protocol differs from this binary's.
+- Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
+  manifest with a fresh locally administered MAC and the configured CPU and
+  memory (at least the manifest's minimums), then a rename into place
+  (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet …]`, from the executable signed with
+  [--input] [--share <dir>] [--softnet …] [--display WxH[@PPI]]
+  [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
   Softnet network, entropy, balloon, vsock; keyboard and pointer for runner
-  guests; no console, audio, or clipboard). It holds an fcntl lock on
-  `config.json` for the VM's life (the lock Tart also takes), and the
-  provider reads running state and the helper's PID from that lock. The
+  guests; no console, audio, or clipboard). It holds an fcntl lock on the
+  manifest for the VM's life and reads the manifest only through it; the
+  provider reads running state and the helper's PID from that lock. A
+  manifest is never rewritten once its VM is in place. The
   helper is not bound to the daemon's lifetime and has its own process
   group; its output is the launch log file. The exact command line is in
   the launch log and diagnostics.
@@ -432,9 +445,13 @@ hash of the VM name, so their path fits `sun_path` whatever the name.
   signalled; any other holder is refused. SIGTERM powers the VM off at
   once: a macOS guest ignores a shutdown request, and the clone is deleted
   anyway. SIGKILL after the timeout ends a hung helper, and the framework
-  ends a VM whose owning process exits. Resizing holds the lock while it
-  rewrites `config.json`; the helper reads its configuration only through its
-  own lock, and clones refuse a running baseline.
+  ends a VM whose owning process exits. Clones refuse a running baseline.
+- Machine options: `[providers.*.vz.machine]` holds typed, validated
+  options for runner guests, mapped to framework settings: `display` (width,
+  height, optional ppi) and `disk_sync` (`full`, `fsync`, or `none`, which
+  ignores guest flushes and suits only disposable clones). There is no raw
+  passthrough. Nested virtualization is omitted: the framework offers it only
+  to Linux guests, which here are container engines.
 - Diagnostics: `_diag` and the runner log stream out as tar through the
   agent, are redacted before reaching disk, and are capped at 1024 entries
   and 128 MiB extracted.
@@ -938,14 +955,17 @@ localhost management API and UI remain deferred.
 
 ## Decisions
 
-- Bivouac runs macOS guests itself (purego bindings to Virtualization.framework,
-  no cgo) instead of through the Tart CLI, so users install no VM tool for
-  the little of Tart bivouac used. The provider is named `vz` after the
-  engine; "Tart-format" names only the image format, and bivouac keeps its
-  own VM store. Tart's guest agent exits on hosts that are not Tart, so
-  baselines carry `bivouac guest-agent` as an Aqua LaunchAgent. Runner
-  bootstrap through an Aqua guest agent was verified with real windowed Metal
-  rendering and app lifecycle, focus, and input tests in a headless guest.
+- Bivouac runs macOS guests itself (purego bindings to
+  Virtualization.framework, no cgo) instead of through the Tart CLI, so
+  users install no VM tool for the little of Tart bivouac used. The provider
+  is named `vz` after the engine; "Tart-format" names only an import format,
+  and bivouac keeps its own VM store. Bivouac's manifest, not Tart's
+  `config.json`, describes each VM, so images from other tools need only a
+  manifest, and machine options are typed fields rather than launch flags.
+  Tart's guest agent exits on hosts that are not Tart, so baselines carry
+  `bivouac guest-agent` as an Aqua LaunchAgent. Runner bootstrap through an
+  Aqua guest agent was verified with real windowed Metal rendering and app
+  lifecycle, focus, and input tests in a headless guest.
 - Control through files and a signal rather than a socket, until the
   localhost API milestone.
 - `security` CLI for Keychain instead of cgo bindings: one static binary.

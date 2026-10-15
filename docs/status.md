@@ -36,11 +36,12 @@ cleanup across restart, the Actions archive cache with fallback when its
 endpoint stops mid-job, and windowed Metal, focus, and input tests.
 
 Tests only: the `vz` provider name and bivouac's own VM store with hashed
-agent socket paths; a guest agent of another protocol version fails
-readiness at once; the daemon refuses to start from an executable without
-the virtualization entitlement; macOS CI signs a test binary and has the
-framework validate every helper device combination (skipped where the host
-cannot virtualize).
+agent socket paths; VM manifests, `vz import`, baseline rejection, and the
+machine options (validated by the framework in the signed CI test); a guest
+agent of another protocol version fails readiness at once; the daemon
+refuses to start from an executable without the virtualization entitlement;
+macOS CI signs a test binary and has the framework validate every helper
+device combination (skipped where the host cannot virtualize).
 
 Open:
 
