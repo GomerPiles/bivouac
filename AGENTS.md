@@ -1,6 +1,8 @@
 # Agent conventions
 
-Read `docs/design.md` and `docs/status.md` before changing anything.
+Read `docs/design.md` and `docs/status.md` before changing anything;
+`docs/operations.md` has the procedures.
+Identify the host OS first and work on its provider only.
 
 ## Code
 
@@ -21,10 +23,13 @@ Read `docs/design.md` and `docs/status.md` before changing anything.
   Producers, consumers, fixtures, and docs change together.
 - `docs/design.md` owns architecture, the provider contract, the lifecycle
   state machine, the security model, and durable decisions. Keep it aligned
-  with the code. `docs/status.md` records what works and what is unverified.
+  with the code. `docs/status.md` records what works and what is unverified: current
+  state only, not a session log (git history keeps the details).
 - Small, coherent commits on the branch you are given. Never merge to
   `main` without approval.
 - The repository is public: no personal paths, hostnames, usernames,
   tokens, or keys in tracked files, commits, or logs.
+  Never name or describe the repositories that use bivouac (names, run
+  links, job or test names, toolchains); say "a downstream project".
 - Never interrupt a production CI job. Never touch production runner
   labels (including `tartelet`) or Tartelet's configuration.

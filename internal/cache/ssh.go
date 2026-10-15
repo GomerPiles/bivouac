@@ -1,0 +1,220 @@
+package cache
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+// SSHBinding comes only from a currently verified owned VM transport. The host
+// key must already be pinned by the provider's ordinary bootstrap connection.
+type SSHBinding struct{ Address, User, KeyFile, KnownHosts string }
+
+type sshTransport struct {
+	client *ssh.Client
+	server *http.Server
+}
+
+// SSH channels do not implement net.Conn deadlines. HTTP CONNECT hijacking
+// must interrupt its background read before returning 200; a deadline-capable
+// local pipe preserves backpressure without exposing a host TCP listener.
+type deadlineListener struct{ net.Listener }
+
+func (l deadlineListener) Accept() (net.Conn, error) {
+	channel, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	server, stream := net.Pipe()
+	go relay(stream, channel)
+	return server, nil
+}
+
+// Bound guest-created channels before TLS/header parsing and HTTP dispatch.
+// Queueing remains in the SSH library's bounded forwarding queue.
+type limitedListener struct {
+	net.Listener
+	slots    chan struct{}
+	done     chan struct{}
+	once     sync.Once
+	closeErr error
+}
+type limitedConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *limitedConn) Close() error { err := c.Conn.Close(); c.once.Do(c.release); return err }
+func (l *limitedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case <-l.done:
+			_ = conn.Close()
+			return nil, net.ErrClosed
+		case l.slots <- struct{}{}:
+			return &limitedConn{Conn: conn, release: func() { <-l.slots }}, nil
+		default:
+			_ = conn.Close() // Reject excess channels rather than stall SSH dispatch.
+		}
+	}
+}
+func (l *limitedListener) Close() error {
+	l.once.Do(func() {
+		close(l.done)
+		// x/crypto's forward dispatcher can hold its registry mutex while
+		// enqueueing a channel. Drain pending channels during listener removal,
+		// including failed accepts after the SSH socket closes, to let removal
+		// acquire that mutex. The transport closes its SSH client first.
+		stop, drained := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(drained)
+			for {
+				conn, _ := l.Listener.Accept()
+				if conn != nil {
+					_ = conn.Close()
+				}
+				select {
+				case <-stop:
+					return
+				default:
+				}
+			}
+		}()
+		l.closeErr = l.Listener.Close()
+		close(stop)
+		<-drained
+	})
+	return l.closeErr
+}
+
+func (t *sshTransport) Close() error {
+	return errors.Join(t.client.Close(), t.server.Close())
+}
+
+func pinnedAlgorithms(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > 256<<10 {
+		return nil, errors.New("bounded SSH host pins unavailable")
+	}
+	var algorithms []string
+	for len(data) > 0 {
+		_, _, key, _, rest, err := ssh.ParseKnownHosts(data)
+		if err != nil {
+			return nil, errors.New("SSH host pin invalid")
+		}
+		data = rest
+		candidates := []string{key.Type()}
+		if key.Type() == ssh.KeyAlgoRSA {
+			candidates = []string{ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSASHA512}
+		}
+		for _, algo := range candidates {
+			if slices.Contains(ssh.SupportedAlgorithms().HostKeys, algo) && !slices.Contains(algorithms, algo) {
+				algorithms = append(algorithms, algo)
+			}
+		}
+	}
+	if len(algorithms) == 0 {
+		return nil, errors.New("supported SSH host pin required")
+	}
+	return algorithms, nil
+}
+
+// AttachSSH serves only the cache HTTP handler through a guest-loopback SSH
+// listener. It never forwards guest traffic to host sockets, opens a shell,
+// shares a directory, or relaxes NIC isolation. Process loss closes the SSH
+// connection; the guest adapter then uses its normal public upstream path.
+func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]byte, error) {
+	host, _, err := net.SplitHostPort(b.Address)
+	u, parseErr := url.Parse(s.url)
+	if err != nil || host != "127.0.0.1" || parseErr != nil || u.Hostname() != "127.0.0.1" || b.User == "" {
+		return nil, errors.New("cache SSH transport requires owned loopback binding and loopback TLS identity")
+	}
+	key, err := os.ReadFile(b.KeyFile)
+	if err != nil {
+		return nil, errors.New("cache SSH key unavailable")
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	clear(key)
+	if err != nil {
+		return nil, errors.New("cache SSH key invalid")
+	}
+	check, err := knownhosts.New(b.KnownHosts)
+	if err != nil {
+		return nil, errors.New("cache SSH host pin unavailable")
+	}
+	// OpenSSH and Go can prefer different keys on a multi-key server. Negotiate
+	// only algorithms actually recorded by normal bootstrap, then verify the
+	// exact hostname/key with knownhosts; never accept a second key implicitly.
+	algorithms, err := pinnedAlgorithms(b.KnownHosts)
+	if err != nil {
+		return nil, err
+	}
+	socket, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", b.Address)
+	if err != nil {
+		return nil, errors.New("cache SSH transport unavailable")
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = socket.Close() })
+	defer stopCancel()
+	_ = socket.SetDeadline(time.Now().Add(15 * time.Second))
+	conn, channels, requests, err := ssh.NewClientConn(socket, b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms})
+	if err != nil {
+		_ = socket.Close()
+		return nil, errors.New("cache SSH identity or authentication failed")
+	}
+	client := ssh.NewClient(conn, channels, requests)
+	listener, err := client.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = client.Close()
+		return nil, errors.New("guest loopback cache listener unavailable")
+	}
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !addr.IP.Equal(net.ParseIP("127.0.0.1")) || addr.Port < 1 {
+		_ = client.Close()
+		return nil, errors.New("guest cache listener not loopback")
+	}
+	_ = socket.SetDeadline(time.Time{})
+	bootstrap, err := s.issueAt(name, "https://"+listener.Addr().String())
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: serveTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
+	transport := &sshTransport{client: client, server: server}
+	var issued Bootstrap
+	if json.Unmarshal(bootstrap, &issued) != nil {
+		_ = transport.Close()
+		return nil, errors.New("cache bootstrap unavailable")
+	}
+	s.mu.Lock()
+	grant, valid := s.grants[issued.Token]
+	if s.closed || !valid || grant.name != name {
+		s.mu.Unlock()
+		_ = transport.Close()
+		return nil, errors.New("cache closed during SSH attachment")
+	}
+	s.transports[name] = transport
+	s.mu.Unlock()
+	go func() {
+		bounded := &limitedListener{Listener: listener, slots: make(chan struct{}, 64), done: make(chan struct{})}
+		_ = server.Serve(tls.NewListener(deadlineListener{bounded}, &tls.Config{Certificates: []tls.Certificate{s.certificate}, MinVersion: tls.VersionTLS12}))
+	}()
+	return bootstrap, nil
+}
