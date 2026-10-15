@@ -125,7 +125,9 @@ func (h Home) Resize(name string, cpu, memoryMB int) error {
 // running and Tart refuses to start or delete it.
 //
 // POSIX releases fcntl locks when the process closes any descriptor of the
-// file, so the holder must never open config.json again while it runs.
+// file, so the holder must never open config.json again while it runs. In
+// a process that holds a Lock (Resize), Holder or List on the same VM
+// releases it too; the helper holds its lock alone in its own process.
 type Lock struct{ f *os.File }
 
 // Acquire takes dir's lock or fails if another process holds it.
@@ -184,7 +186,9 @@ func Holder(dir string) (int, error) {
 }
 
 // List returns every VM directory under h with its running state. Staging
-// directories (hidden names) are skipped.
+// directories (hidden names) are skipped. A VM whose lock cannot be read is
+// reported running, so it still counts against the host limit and is never
+// treated as stopped; one unreadable directory does not hide the others.
 func (h Home) List() ([]Entry, error) {
 	entries, err := os.ReadDir(filepath.Join(string(h), "vms"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -199,10 +203,7 @@ func (h Home) List() ([]Entry, error) {
 			continue
 		}
 		pid, err := Holder(h.Dir(e.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("VM %q: %w", e.Name(), err)
-		}
-		out = append(out, Entry{Name: e.Name(), Running: pid != 0})
+		out = append(out, Entry{Name: e.Name(), Running: err != nil || pid != 0})
 	}
 	return out, nil
 }

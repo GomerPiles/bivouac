@@ -12,8 +12,8 @@ import (
 // Ctrl+C (SIGINT to the foreground group) stops the daemon but not the guest.
 func detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
 
-// terminate signals a VM helper: SIGTERM asks for a guest shutdown, SIGKILL
-// powers the VM off. A process that already exited is not an error.
+// terminate signals a VM helper: SIGTERM has it power the VM off, SIGKILL
+// ends a helper that hangs. A process that already exited is not an error.
 func terminate(pid int, force bool) error {
 	sig := syscall.SIGTERM
 	if force {

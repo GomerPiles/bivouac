@@ -62,6 +62,16 @@ func TestCloneResizeListDelete(t *testing.T) {
 	if err != nil || len(entries) != 2 || entries[0].Running || entries[1].Running {
 		t.Fatalf("list = %+v, %v", entries, err)
 	}
+	// A VM whose lock cannot be read counts as running and hides no other.
+	unreadable := filepath.Join(home.Dir("base"), ConfigFile)
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = home.List()
+	_ = os.Chmod(unreadable, 0o600)
+	if err != nil || len(entries) != 2 || !entries[0].Running || entries[0].Name != "base" || entries[1].Running {
+		t.Fatalf("list with an unreadable VM = %+v, %v", entries, err)
+	}
 	if err := home.Delete("bivouac-a"); err != nil {
 		t.Fatal(err)
 	}
