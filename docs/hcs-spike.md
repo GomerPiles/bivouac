@@ -26,6 +26,12 @@ trial. Removing the host application/daemon is feasible at the native VM layer;
 replacing the complete CI provider still requires image provisioning, guest
 readiness, graphics/input, networking/isolation and lifecycle validation.
 
+The first full guest attempt reached native running/GPU assignment but the
+agent did not become reachable within its ten-minute budget. Native absence and
+storage cleanup completed. Setup media now uses the documented removable-media
+filename `Autounattend.xml`; the ordinary-token ISO fixture verifies its Joliet
+directory entry. Guest readiness, SSH and rendering remain unverified live.
+
 ## What is implemented
 
 - HCS schema 2.1 generation for an offline Windows amd64 VM, UEFI Secure Boot,
@@ -164,12 +170,22 @@ The native probe is compiled from `tools/windows/hcs-render-probe.cpp` with a
 Windows C++ compiler and linked against d3d11, dxgi, user32 and gdi32. It checks
 two colors in both the render target and the composited desktop, rejects WARP
 and other software adapters, and leaves only bounded boolean/numeric results.
-No keyboard/mouse input or cross-reboot/crash recovery is covered. Agent/SSH success alone does **not** establish hardware rendering or
-presentation. Neither trial establishes focus/input, fresh-state reset,
-host/private-peer isolation, or production readiness. Those require subsequent disposable-guest
-tests. No NIC is attached during this first trial, and no network-isolation
+No keyboard/mouse input or cross-reboot/crash recovery is covered. Agent/SSH
+success alone does **not** establish hardware rendering or presentation. Neither trial establishes focus/input, fresh-state reset,
+host/private-peer isolation, or production readiness. Those require subsequent
+disposable-guest tests. No NIC is attached during this first trial, and no network-isolation
 claim is made. All App Sandbox guest drivers/services remain dependencies until
 separately replaced or packaged and maintained.
+
+For a diagnostic retry, `trial --retain-failed-storage` keeps failed storage
+only after stopping the VM and confirming native absence. `native_absent=true`
+and `storage_retained=true` mean it is safe to arrange explicit read-only
+inspection of that recorded stopped clone. A create that may still complete
+never qualifies. Do not mount a live/ambiguous clone or a production disk.
+After detaching the inspected clone, use the matching `cleanup` command; it
+revalidates ownership and native absence before removing the child. Routine
+trials still clean up automatically, including on failure. Offline diagnostics
+must emit only bounded flags/codes, never raw setup logs or answer-file contents.
 
 ## References
 
@@ -194,3 +210,5 @@ and [property types](https://github.com/microsoft/hcsshim/blob/main/internal/hcs
 
 Windows answer-file behavior follows Microsoft's [unattended setup](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/automate-windows-setup)
 and [offline account-screen setting](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-oobe-hideonlineaccountscreens).
+
+Removable-media answer-file naming follows Microsoft's [implicit search order](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-automation-overview#implicit-answer-file-search-order).

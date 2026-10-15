@@ -91,7 +91,10 @@ setup media for generalized templates without modifying the baseline. An optiona
 native guest probe checks setup/console readiness, hardware D3D11, presentation
 and GPU/desktop pixel readback through fixed authenticated SSH code. These new
 paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture;
-live guest validation is pending.
+The first guest attempt reached native running/GPU assignment but timed out
+without reaching the guest agent; verified cleanup removed its child/journal.
+The corrected setup media uses `Autounattend.xml`, as required for removable
+media discovery. Guest readiness/SSH/rendering still need a live pass.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow

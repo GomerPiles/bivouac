@@ -15,7 +15,7 @@ public static class SpikeISO {
  $image.VolumeName='HCSSETUP'
  $image.Root.AddTree($data.assets,$false)
  $stream=[SpikeISO]::Text($data.unattend)
- $image.Root.AddFile('unattend.xml',$stream)
+ $image.Root.AddFile('Autounattend.xml',$stream)
  $result=$image.CreateResultImage()
  [SpikeISO]::Save($result.ImageStream,$data.destination)
  exit 0

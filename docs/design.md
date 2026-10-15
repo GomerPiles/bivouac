@@ -606,7 +606,9 @@ an in-memory answer file, a random local guest password and fixed guest code.
 The ISO is created in an administrator/SYSTEM-only child directory before HCS
 grants the owned VM access, and is removed with the disposable child. The guest
 password never enters configuration, journal, command arguments or diagnostics.
-No baseline is mounted or modified. A specialized image can omit setup assets.
+No baseline is mounted or modified by provisioning. A specialized image can
+omit setup assets. Removable-media discovery uses `Autounattend.xml`; the
+ordinary-token media test inspects its name in the ISO's Joliet directory.
 
 An optional hash-pinned standalone native C++ probe runs only inside the guest,
 through a fixed SSH bootstrap and an interactive guest scheduled task. Native
@@ -631,7 +633,12 @@ not relax the separate administrator-only journal/marker rules. Ephemeral
 SSH keys stay in memory. The trial owns its HCS handles and terminates on last
 handle close; it does not promise the manager's adoption behaviour. Cleanup
 requires confirmed native absence before removing disks and retains uncertain
-records. Offline HCS running state, GPU assignment and explicit native/storage
+records. An explicit `--retain-failed-storage` trial flag still terminates and
+confirms native absence before retaining a failed child's journal/storage for
+operator-approved read-only inspection. It reports `native_absent` and
+`storage_retained`; an ambiguous create never confirms absence or permits such
+inspection. Normal `cleanup` rechecks proofs/absence and removes retained files.
+Offline HCS running state, GPU assignment and explicit native/storage
 cleanup are validated; guest readiness, rendering, SSH, process-loss recovery
 and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only

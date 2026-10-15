@@ -46,6 +46,8 @@ type backend interface {
 // interactive probe checks hardware D3D11, presentation and two-color GPU/desktop
 // pixel readback; it does not test keyboard/mouse input.
 type Report struct {
+	NativeAbsent     bool   `json:"native_absent"`
+	StorageRetained  bool   `json:"storage_retained"`
 	GuestReady       bool   `json:"guest_ready"`
 	DesktopReady     bool   `json:"desktop_ready"`
 	HardwareD3D11    bool   `json:"hardware_d3d11"`
@@ -160,7 +162,7 @@ func absent(ctx context.Context, api backend, name string) error {
 	return errors.New("native name already exists; refusing to replace it")
 }
 
-func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool) (report Report, result error) {
+func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, retainFailed bool) (report Report, result error) {
 	if err := c.Validate(); err != nil {
 		return report, err
 	}
@@ -185,8 +187,12 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		defer cancel()
-		err := cleanupHeld(cleanupCtx, c, j, api, created)
-		report.Cleaned = err == nil
+		err := cleanupHeld(cleanupCtx, c, j, api, created, retainFailed && result != nil)
+		_, childErr := j.root.Stat(c.InstanceID)
+		_, recordErr := j.root.Stat(recordName(c))
+		report.StorageRetained = childErr == nil || recordErr == nil
+		report.NativeAbsent = err == nil
+		report.Cleaned = err == nil && !report.StorageRetained
 		result = errors.Join(result, err)
 	}()
 	if err = j.root.Mkdir(c.InstanceID, 0o700); err != nil {
@@ -262,13 +268,13 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly bool
 }
 
 func cleanup(ctx context.Context, c Config, j *journal, api backend) error {
-	return cleanupHeld(ctx, c, j, api, nil)
+	return cleanupHeld(ctx, c, j, api, nil, false)
 }
 
 // Keep the trial's last live handle until ownership is verified and termination
 // completes. Closing it first starts an asynchronous automatic teardown, during
 // which property queries can fail with HCS_E_INVALID_STATE.
-func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held system) error {
+func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held system, retain bool) error {
 	if held != nil {
 		defer held.Close()
 	}
@@ -354,6 +360,11 @@ func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held sy
 	// open root. Recheck both durable proofs before removing only this child.
 	if err = j.prove(c); err != nil {
 		return err
+	}
+	// Diagnostic retention still terminates and confirms absence; it never
+	// keeps a live guest or permits inspection of an ambiguous create.
+	if retain {
+		return nil
 	}
 	r.Deleting = true
 	if err = j.write(recordName(c), r, false); err != nil {

@@ -5,6 +5,7 @@ package hcsspike
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -13,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func setupFixture(c Config) []SetupAsset {
@@ -104,6 +107,9 @@ func TestISOBuilderUsesMemoryAnswerFile(t *testing.T) {
 	if len(data) < 32775 || string(data[32769:32774]) != "CD001" {
 		t.Fatal("ISO descriptor missing")
 	}
+	if !slices.Contains(jolietRootNames(t, data), "Autounattend.xml") {
+		t.Fatalf("Windows removable-media answer filename missing: %q", jolietRootNames(t, data))
+	}
 	entries, err := os.ReadDir(assets)
 	if err != nil || len(entries) != 1 {
 		t.Fatal("answer file was written into host staging")
@@ -132,4 +138,50 @@ func TestRenderReportRejectsPartialAndSoftwareResults(t *testing.T) {
 	if _, err := out.Write(make([]byte, 4097)); err == nil {
 		t.Fatal("unbounded output accepted")
 	}
+}
+
+// Inspect the real ISO directory, rather than merely searching script source.
+func jolietRootNames(t *testing.T, data []byte) []string {
+	t.Helper()
+	for offset := 16 * 2048; offset+2048 <= len(data); offset += 2048 {
+		sector := data[offset : offset+2048]
+		if sector[0] == 255 {
+			break
+		}
+		if sector[0] != 2 || string(sector[1:6]) != "CD001" {
+			continue
+		}
+		start := int(binary.LittleEndian.Uint32(sector[158:162])) * 2048
+		size := int(binary.LittleEndian.Uint32(sector[166:170]))
+		if start < 0 || size <= 0 || start > len(data) || size > len(data)-start {
+			t.Fatal("invalid Joliet directory extent")
+		}
+		var names []string
+		for pos := start; pos < start+size; {
+			length := int(data[pos])
+			if length == 0 {
+				pos = (pos/2048 + 1) * 2048
+				continue
+			}
+			if length < 34 || length > start+size-pos {
+				t.Fatal("invalid Joliet record")
+			}
+			record := data[pos : pos+length]
+			n := int(record[32])
+			if n > len(record)-33 {
+				t.Fatal("invalid Joliet filename")
+			}
+			if n%2 == 0 {
+				words := make([]uint16, n/2)
+				for i := range words {
+					words[i] = binary.BigEndian.Uint16(record[33+i*2:])
+				}
+				names = append(names, strings.TrimSuffix(string(utf16.Decode(words)), ";1"))
+			}
+			pos += length
+		}
+		return names
+	}
+	t.Fatal("Joliet descriptor missing")
+	return nil
 }

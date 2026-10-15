@@ -119,7 +119,7 @@ func TestTrialCleansUpSuccessfulAndPartialMutations(t *testing.T) {
 			case "probe":
 				f.probeErr = failure
 			}
-			report, err := trial(context.Background(), c, j, f, false)
+			report, err := trial(context.Background(), c, j, f, false, false)
 			if (err != nil) != (fault != "none") {
 				t.Fatalf("fault=%s report=%+v err=%v", fault, report, err)
 			}
@@ -146,7 +146,7 @@ func TestTrialNeverReplacesExistingNativeGuest(t *testing.T) {
 	c, j := testJournal(t)
 	f := &fakeBackend{c: c}
 	f.vm = &fakeSystem{api: f, props: properties{ID: c.name(), Owner: "foreign"}}
-	if _, err := trial(context.Background(), c, j, f, false); err == nil {
+	if _, err := trial(context.Background(), c, j, f, false, false); err == nil {
 		t.Fatal("existing name accepted")
 	}
 	if f.creates != 0 || f.prepares != 0 || f.stops != 0 {
@@ -157,7 +157,7 @@ func TestTrialNeverReplacesExistingNativeGuest(t *testing.T) {
 func TestUnknownCreateRetainsIntentUntilNativeInstanceIsProved(t *testing.T) {
 	c, j := testJournal(t)
 	f := &fakeBackend{c: c, createFault: "unknown-absent"}
-	report, err := trial(context.Background(), c, j, f, false)
+	report, err := trial(context.Background(), c, j, f, false, false)
 	if err == nil || report.Cleaned || f.creates != 1 {
 		t.Fatal("unknown create was released or replayed")
 	}
@@ -188,7 +188,7 @@ func TestCleanupRetainsChangedNativeOwnership(t *testing.T) {
 					s.props.SystemType = "Container"
 				}
 			}}
-			report, err := trial(context.Background(), c, j, f, false)
+			report, err := trial(context.Background(), c, j, f, false, false)
 			if err == nil || report.Cleaned || f.stops != 0 {
 				t.Fatal("changed native identity stopped or cleanup claimed")
 			}
@@ -288,7 +288,7 @@ func TestCleanupAfterCancellationUsesIndependentContext(t *testing.T) {
 	c, j := testJournal(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeBackend{c: c, probeErr: context.Canceled, probeChange: func(*fakeSystem) { cancel() }}
-	report, err := trial(ctx, c, j, f, false)
+	report, err := trial(ctx, c, j, f, false, false)
 	if !errors.Is(err, context.Canceled) || !report.Cleaned || f.stops != 1 {
 		t.Fatalf("cleanup canceled: %+v %v", report, err)
 	}
@@ -313,7 +313,7 @@ func TestCLIRefusesLiveOperationsWithoutElevation(t *testing.T) {
 func TestBootOnlyNeverInitializesGuest(t *testing.T) {
 	c, j := testJournal(t)
 	f := &fakeBackend{c: c}
-	report, err := trial(context.Background(), c, j, f, true)
+	report, err := trial(context.Background(), c, j, f, true, false)
 	if err != nil || !report.NativeStarted || !report.GPUAssigned || !report.Cleaned {
 		t.Fatalf("native trial: %+v %v", report, err)
 	}
@@ -326,12 +326,39 @@ func TestTrialKeepsCreatedHandleUntilOwnedTermination(t *testing.T) {
 	for _, bootOnly := range []bool{false, true} {
 		c, j := testJournal(t)
 		f := &fakeBackend{c: c}
-		report, err := trial(context.Background(), c, j, f, bootOnly)
+		report, err := trial(context.Background(), c, j, f, bootOnly, false)
 		if err != nil || !report.Cleaned {
 			t.Fatalf("trial failed: %v", err)
 		}
 		if f.closeBeforeStop {
 			t.Fatal("last trial handle closed before owned termination")
 		}
+	}
+}
+
+func TestFailedTrialRetainsOnlyAfterVerifiedNativeAbsence(t *testing.T) {
+	c, j := testJournal(t)
+	f := &fakeBackend{c: c, probeErr: errors.New("injected probe failure")}
+	report, err := trial(context.Background(), c, j, f, false, true)
+	if err == nil || !report.NativeAbsent || !report.StorageRetained || report.Cleaned || f.vm != nil || f.stops != 1 {
+		t.Fatal("failed trial did not stop before retaining storage")
+	}
+	if err = j.prove(c); err != nil {
+		t.Fatal("retention lost durable ownership proof")
+	}
+	if err = cleanup(context.Background(), c, j, f); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = j.root.Stat(c.InstanceID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("explicit cleanup did not remove retained child")
+	}
+}
+
+func TestRetentionDoesNotConfirmAbsenceAfterUnknownCreate(t *testing.T) {
+	c, j := testJournal(t)
+	f := &fakeBackend{c: c, createFault: "unknown-absent"}
+	report, err := trial(context.Background(), c, j, f, false, true)
+	if err == nil || report.NativeAbsent || !report.StorageRetained || report.Cleaned {
+		t.Fatal("ambiguous create incorrectly allowed offline inspection")
 	}
 }

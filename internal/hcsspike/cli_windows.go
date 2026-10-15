@@ -32,9 +32,10 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("hcs-spike", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "spike configuration JSON")
+	retainFailed := fs.Bool("retain-failed-storage", false, "retain stopped failed-trial storage for explicit offline inspection")
 	bootOnly := fs.Bool("boot-only", false, "test native lifecycle without guest initialization")
-	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || (*bootOnly && args[0] != "trial") {
-		return errors.New("provide --config <file>; --boot-only is valid only for trial")
+	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || ((*bootOnly || *retainFailed) && args[0] != "trial") {
+		return errors.New("provide --config <file>; --boot-only and --retain-failed-storage are valid only for trial")
 	}
 	// Refuse before reading configuration or creating any file. Never prompt,
 	// invoke runas, install a service/task, or use the existing elevated broker.
@@ -91,7 +92,7 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		if err = cleanup(cleanupCtx, c, j, api); err != nil {
 			return err
 		}
-		return json.NewEncoder(out).Encode(Report{Cleaned: true})
+		return json.NewEncoder(out).Encode(Report{Cleaned: true, NativeAbsent: true})
 	}
 	baseline, err := pinBaseline(c)
 	if err != nil {
@@ -100,7 +101,7 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	defer func() { _ = baseline.Close() }()
 	trialCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds+120)*time.Second)
 	defer cancel()
-	report, trialErr := trial(trialCtx, c, j, api, *bootOnly)
+	report, trialErr := trial(trialCtx, c, j, api, *bootOnly, *retainFailed)
 	if err = json.NewEncoder(out).Encode(report); err != nil {
 		return errors.Join(trialErr, fmt.Errorf("write spike report: %w", err))
 	}
