@@ -43,7 +43,7 @@ func ownedFixture(t *testing.T) (*Provider, *recorder) {
 
 func TestRunnerStatusTransportFailureIsRetryable(t *testing.T) {
 	p, r := ownedFixture(t)
-	r.statusErr = &Error{Args: []string{"exec"}, Err: errors.New("exit status 1"), Stderr: "guest-private-stderr"}
+	r.statusErr = &Error{Args: []string{"status"}, Err: errors.New("exit status 1"), Stderr: "guest-private-stderr"}
 	_, err := p.RunnerStatus(context.Background(), fixtureName)
 	var transport provider.TransportFailure
 	if !errors.As(err, &transport) || !transport.Retryable() || transport != provider.GuestAgentUnavailable {
@@ -121,7 +121,7 @@ func TestGuestOperationsRequireOwnership(t *testing.T) {
 			}
 		}
 		for _, c := range r.calls {
-			if c[0] == "exec" {
+			if c[0] == "Exec" {
 				t.Fatalf("marker %q: guest exec on an unowned VM: %v", marker, c)
 			}
 		}
@@ -168,7 +168,7 @@ func TestWaitReadyRequiresAquaSession(t *testing.T) {
 func TestStartRunnerDoesNotEchoGuestOutput(t *testing.T) {
 	p, r := ownedFixture(t)
 	failing := &startOutput{recorder: r, out: "unexpected ghs_" + strings.Repeat("a", 30)}
-	p.rt = argvRuntime{failing}
+	p.rt = callRuntime{failing}
 	err := p.StartRunner(context.Background(), fixtureName, []byte("secret-jit"))
 	if err == nil || strings.Contains(err.Error(), "ghs_") || strings.Contains(err.Error(), "unexpected") {
 		t.Fatalf("StartRunner error: %v", err)
@@ -181,7 +181,7 @@ type startOutput struct {
 }
 
 func (s *startOutput) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
-	if len(args) > 4 && args[3] == guestPath && args[4] == "start" {
+	if len(args) > 3 && args[0] == "Exec" && args[2] == guestPath && args[3] == "start" {
 		_, err := stdout.Write([]byte(s.out))
 		return err
 	}

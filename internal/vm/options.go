@@ -3,6 +3,7 @@ package vm
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strconv"
@@ -14,7 +15,9 @@ type RunOptions struct {
 	Share     string // host directory shared read-only as "bivouac"; empty: none
 	Input     bool   // attach keyboard and pointing devices
 	AgentPort uint32 // guest agent vsock port
-	Softnet   *SoftnetOptions
+	// AgentSocket is the Unix socket the helper serves AgentPort on.
+	AgentSocket string
+	Softnet     *SoftnetOptions
 }
 
 // SoftnetOptions isolate the guest behind Softnet instead of shared NAT.
@@ -34,6 +37,9 @@ func (o RunOptions) validate() error {
 	if o.AgentPort == 0 {
 		return errors.New("guest agent port is required")
 	}
+	if !filepath.IsAbs(o.AgentSocket) || len(o.AgentSocket) > maxSocketPath {
+		return fmt.Errorf("guest agent socket must be an absolute path of at most %d bytes", maxSocketPath)
+	}
 	if s := o.Softnet; s != nil && (!filepath.IsAbs(s.Binary) || s.Block == "") {
 		return errors.New("softnet needs an absolute binary and a block list")
 	}
@@ -43,7 +49,7 @@ func (o RunOptions) validate() error {
 // Args is the helper's argument array after `vm run`. It is recorded in
 // the launch log and diagnostics, so it never carries a secret.
 func (o RunOptions) Args() []string {
-	args := []string{"--dir", o.Dir, "--agent-port", strconv.FormatUint(uint64(o.AgentPort), 10)}
+	args := []string{"--dir", o.Dir, "--agent-port", strconv.FormatUint(uint64(o.AgentPort), 10), "--agent-socket", o.AgentSocket}
 	if o.Share != "" {
 		args = append(args, "--share", o.Share)
 	}
@@ -69,6 +75,7 @@ func ParseArgs(args []string) (RunOptions, error) {
 	var sudo bool
 	fs.StringVar(&o.Dir, "dir", "", "")
 	fs.Uint64Var(&port, "agent-port", 0, "")
+	fs.StringVar(&o.AgentSocket, "agent-socket", "", "")
 	fs.StringVar(&o.Share, "share", "", "")
 	fs.BoolVar(&o.Input, "input", false, "")
 	fs.StringVar(&softnet, "softnet", "", "")

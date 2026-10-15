@@ -171,23 +171,18 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	} else {
 		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
 	}
-	home, err := vz.Home()
-	if err != nil {
-		add("FAIL", "baseline "+name, err.Error())
-		return
-	}
-	if c, err := vm.ReadConfig(vm.Home(home).Dir(t.Baseline)); err != nil {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q: %v", t.Baseline, err))
+	if c, err := vm.ReadConfig(vm.Store(e.layout.VMs).Dir(t.Baseline)); err != nil {
+		add("FAIL", "baseline "+name, fmt.Sprintf("%q in %s: %v", t.Baseline, e.layout.VMs, err))
 	} else if c.OS != "darwin" {
 		add("FAIL", "baseline "+name, fmt.Sprintf("%q is a %s VM, not macOS", t.Baseline, c.OS))
 	} else {
 		add("PASS", "baseline "+name, t.Baseline+"; its guest agent is checked when a guest boots")
 	}
 	cpu, mem := t.CPU, t.MemoryGB
-	if e := t.Containers; e != nil {
-		cpu += e.CPU
-		mem += e.MemoryGB
-		tp, err := vz.New(name, *t, "doctor", nil)
+	if c := t.Containers; c != nil {
+		cpu += c.CPU
+		mem += c.MemoryGB
+		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}

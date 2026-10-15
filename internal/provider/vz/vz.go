@@ -43,7 +43,7 @@ type Provider struct {
 	name           string
 	cfg            config.VZ
 	controllerID   string
-	home           string // Tart home holding vms/
+	store          vm.Store // baselines and clones
 	rt             Runtime
 	cache          *cache.Service
 	records        *state.Store
@@ -57,33 +57,20 @@ type Provider struct {
 // SetCache attaches an optional portable cache service before this provider runs.
 func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
 
-// Home is the Tart home holding baselines and clones: TART_HOME, or ~/.tart.
-// Clones stay beside their baseline so clonefile shares its blocks.
-func Home() (string, error) {
-	if home := os.Getenv("TART_HOME"); home != "" {
-		return home, nil
-	}
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(h, ".tart"), nil
-}
-
-// New returns the provider. rt may be nil for the real VM runtime.
-func New(name string, cfg config.VZ, controllerID string, rt Runtime) (*Provider, error) {
-	home, err := Home()
-	if err != nil {
-		return nil, err
+// New returns the provider for VMs in store (paths.Layout.VMs). rt may be
+// nil for the real VM runtime.
+func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime) (*Provider, error) {
+	if !filepath.IsAbs(store) {
+		return nil, fmt.Errorf("VM store %q is not absolute", store)
 	}
 	if rt == nil {
-		l, err := newLocal(home)
+		l, err := newLocal(store)
 		if err != nil {
 			return nil, err
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, home: home, rt: rt, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the executable that
@@ -105,7 +92,7 @@ func (p *Provider) Capabilities() provider.Capabilities {
 	return provider.Capabilities{GPU: provider.GPUParavirtualized, DesktopSession: true, DisplayTransport: "none", HostLimit: p.cfg.HostVMLimit}
 }
 
-func (p *Provider) vmDir(name string) string { return filepath.Join(p.home, "vms", name) }
+func (p *Provider) vmDir(name string) string { return p.store.Dir(name) }
 
 func (p *Provider) checkName(name string) error {
 	if !strings.HasPrefix(name, config.NamePrefix) {
@@ -200,10 +187,10 @@ func (p *Provider) runnerLaunch() Launch {
 
 // LaunchArgs is the exact argument array the VM helper receives for a
 // runner guest named name, or nil for a substituted runtime.
-func (p *Provider) LaunchArgs(name string) []string {
+func (p *Provider) LaunchArgs(name string) ([]string, error) {
 	l, ok := p.rt.(*local)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	launch := p.runnerLaunch()
 	if p.cfg.Containers != nil {
@@ -214,7 +201,9 @@ func (p *Provider) LaunchArgs(name string) []string {
 
 func (p *Provider) describe(name string, launch Launch) string {
 	if l, ok := p.rt.(*local); ok {
-		return strings.Join(l.helperArgs(name, launch), " ")
+		if args, err := l.helperArgs(name, launch); err == nil {
+			return strings.Join(args, " ")
+		}
 	}
 	return "vm run " + name
 }

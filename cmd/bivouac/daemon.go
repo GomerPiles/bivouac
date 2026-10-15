@@ -82,7 +82,7 @@ func (e env) run(ctx context.Context, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	providers, err := buildProviders(ctx, cfg, store)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
 	if err != nil {
 		return fail(err)
 	}
@@ -159,7 +159,7 @@ func (e env) githubClients(ctx context.Context, cfg *config.Config) (github.Scal
 	return c, nil, err
 }
 
-func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store) (map[string]provider.Provider, error) {
+func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store, vms string) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for name, p := range cfg.Providers {
 		switch p.Type {
@@ -178,7 +178,7 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store)
 			}
 			out[name] = wp
 		case "vz":
-			tp, err := vz.New(name, *p.VZ, store.ControllerID(), nil)
+			tp, err := vz.New(name, *p.VZ, store.ControllerID(), vms, nil)
 			if err != nil {
 				closeProviders(out)
 				return nil, err

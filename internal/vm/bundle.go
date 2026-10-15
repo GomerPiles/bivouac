@@ -1,11 +1,13 @@
-// Package vm runs guests from local Tart-format VM directories (config.json,
-// disk.img, nvram.bin) with Apple's Virtualization framework. Baselines are
-// still built with Tart; running, cloning and stopping them needs only this
-// package and a signed bivouac binary.
+// Package vm runs guests from Tart-format VM directories (config.json,
+// disk.img, nvram.bin) in bivouac's own store with Apple's Virtualization
+// framework. Running, cloning and stopping them needs only this package and
+// a signed bivouac binary.
 package vm
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,14 +17,17 @@ import (
 	"strings"
 )
 
-// Files of a VM directory. Tart ignores extra files and deletes them with
-// the VM; AgentSocket exists only while a helper runs the VM.
+// Files of a VM directory. Extra files, such as the provider's marker, are
+// deleted with the VM.
 const (
-	ConfigFile  = "config.json"
-	DiskFile    = "disk.img"
-	NVRAMFile   = "nvram.bin"
-	AgentSocket = "agent.sock"
+	ConfigFile = "config.json"
+	DiskFile   = "disk.img"
+	NVRAMFile  = "nvram.bin"
 )
+
+// runDir holds guest agent sockets, which exist only while a helper runs
+// the VM. It is hidden, so no VM can be named after it.
+const runDir = ".run"
 
 // Entitlement is required of the executable that runs VMs.
 const Entitlement = "com.apple.security.virtualization"
@@ -135,22 +140,26 @@ func randomMAC() (string, error) {
 	return net.HardwareAddr(b).String(), nil
 }
 
-// Home is a Tart home directory: VMs live in Home/vms/<name>.
-type Home string
+// Store is bivouac's VM store: each VM is the directory Store/<name>, and
+// clones share blocks with their baseline because both live on its volume.
+type Store string
 
 // Dir is the VM directory for name.
-func (h Home) Dir(name string) string { return filepath.Join(string(h), "vms", name) }
+func (s Store) Dir(name string) string { return filepath.Join(string(s), name) }
 
-// SocketPath is where the helper serves name's guest agent connections.
-func (h Home) SocketPath(name string) (string, error) {
-	p := filepath.Join(h.Dir(name), AgentSocket)
+// SocketPath is where the helper serves name's guest agent connections. It
+// is named by a hash of name, not by name, so its length does not depend on
+// the VM or provider name; sun_path holds 103 bytes.
+func (s Store) SocketPath(name string) (string, error) {
+	sum := sha256.Sum256([]byte(name))
+	p := filepath.Join(string(s), runDir, hex.EncodeToString(sum[:8])+".sock")
 	if len(p) > maxSocketPath {
-		return "", fmt.Errorf("guest agent socket path exceeds %d bytes; use a shorter Tart home", maxSocketPath)
+		return "", fmt.Errorf("guest agent socket path exceeds %d bytes; use a shorter VM store path", maxSocketPath)
 	}
 	return p, nil
 }
 
-// validName refuses names that could leave Home/vms.
+// validName refuses names that could leave the store or are hidden.
 func validName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "/\\\x00\n") {
 		return fmt.Errorf("invalid VM name %q", name)

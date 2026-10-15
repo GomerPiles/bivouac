@@ -246,7 +246,7 @@ func (e env) vzCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	providers, err := buildProviders(ctx, cfg, store)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
 	if err != nil {
 		return err
 	}
@@ -310,7 +310,11 @@ func (e env) vzCmd(ctx context.Context, args []string) error {
 	case "run-args":
 		for _, name := range cfg.ProviderNames() {
 			if tp, ok := providers[name].(*vz.Provider); ok {
-				fmt.Printf("%s: bivouac %s\n", name, strings.Join(tp.LaunchArgs("<name>"), " "))
+				args, err := tp.LaunchArgs("<name>")
+				if err != nil {
+					return err
+				}
+				fmt.Printf("%s: bivouac %s\n", name, strings.Join(args, " "))
 			}
 		}
 		return nil

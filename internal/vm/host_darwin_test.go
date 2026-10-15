@@ -11,14 +11,20 @@ import (
 	"time"
 )
 
-func baselineHome(t *testing.T) Home {
+func baselineStore(t *testing.T) Store {
 	t.Helper()
-	home := Home(t.TempDir())
+	// Test names make t.TempDir too long for socket paths.
+	root, err := os.MkdirTemp("", "vm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	home := Store(root)
 	dir := home.Dir("base")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{ConfigFile: tartConfig, DiskFile: "disk", NVRAMFile: "nvram"} {
+	for name, body := range map[string]string{ConfigFile: testConfig, DiskFile: "disk", NVRAMFile: "nvram"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -27,7 +33,7 @@ func baselineHome(t *testing.T) Home {
 }
 
 func TestCloneResizeListDelete(t *testing.T) {
-	home := baselineHome(t)
+	home := baselineStore(t)
 	if err := home.Clone("base", "bivouac-a"); err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +60,12 @@ func TestCloneResizeListDelete(t *testing.T) {
 	if c, _ := ReadConfig(home.Dir("bivouac-a")); c.CPUCount != 8 || c.MemorySize != 16<<30 {
 		t.Fatalf("resized to %d CPUs, %d bytes", c.CPUCount, c.MemorySize)
 	}
-	// A crashed clone leaves only a hidden staging directory, never listed.
-	if err := os.Mkdir(filepath.Join(string(home), "vms", ".bivouac-b.clone"), 0o700); err != nil {
+	// A crashed clone leaves only a hidden staging directory, and the socket
+	// directory is hidden too; neither is listed.
+	if err := os.Mkdir(filepath.Join(string(home), ".bivouac-b.clone"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(string(home), runDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := home.List()
@@ -72,27 +82,38 @@ func TestCloneResizeListDelete(t *testing.T) {
 	if err != nil || len(entries) != 2 || !entries[0].Running || entries[0].Name != "base" || entries[1].Running {
 		t.Fatalf("list with an unreadable VM = %+v, %v", entries, err)
 	}
+	// A killed helper's socket goes with its VM.
+	stale, err := home.SocketPath("bivouac-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := home.Delete("bivouac-a"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Lstat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stale socket kept: %v", err)
 	}
 	if err := home.Delete("bivouac-a"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("second delete = %v", err)
 	}
 }
 
-func TestLockMatchesTartRunningState(t *testing.T) {
+func TestLockMarksTheVMRunning(t *testing.T) {
 	if os.Getenv("BIVOUAC_TEST_HOLD_LOCK") != "" {
 		holdLock(t)
 		return
 	}
-	home := baselineHome(t)
+	home := baselineStore(t)
 	dir := home.Dir("base")
 	// fcntl locks are per process, so the holder is a child.
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(exe, "-test.run=^TestLockMatchesTartRunningState$")
+	cmd := exec.Command(exe, "-test.run=^TestLockMarksTheVMRunning$")
 	cmd.Env = append(os.Environ(), "BIVOUAC_TEST_HOLD_LOCK="+dir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -159,9 +180,9 @@ func TestProcessArgsIdentifyHelpers(t *testing.T) {
 	if !slices.Equal(args, os.Args) {
 		t.Fatalf("processArgs = %q, want %q", args, os.Args)
 	}
-	opts := RunOptions{Dir: "/vms/x", AgentPort: 1}
+	opts := RunOptions{Dir: "/vms/x", AgentPort: 1, AgentSocket: "/vms/.run/x.sock"}
 	helper := append([]string{"/opt/bivouac", "vm", "run"}, opts.Args()...)
-	if !isHelper(helper, "/vms/x") || isHelper(helper, "/vms/y") || isHelper([]string{"tart", "run", "x"}, "/vms/x") {
+	if !isHelper(helper, "/vms/x") || isHelper(helper, "/vms/y") || isHelper([]string{"othervm", "run", "x"}, "/vms/x") {
 		t.Fatal("helper argument match is wrong")
 	}
 }

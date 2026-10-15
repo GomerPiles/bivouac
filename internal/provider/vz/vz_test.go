@@ -20,90 +20,76 @@ import (
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
-// argvRunner records tart-shaped argument arrays; argvRuntime adapts it to
-// Runtime so assertions and fault injection read as command lines.
-type argvRunner interface {
-	Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error
-	Start(ctx context.Context, args []string, sink io.Writer) (Process, error)
+// callRecorder records each Runtime call as a verb and its arguments;
+// callRuntime adapts it to Runtime so assertions and fault injection read as
+// one line per call.
+type callRecorder interface {
+	Run(ctx context.Context, call []string, stdin io.Reader, stdout io.Writer) error
+	Start(ctx context.Context, call []string, sink io.Writer) (Process, error)
 }
 
-type argvRuntime struct{ argv argvRunner }
+type callRuntime struct{ calls callRecorder }
 
-func (a argvRuntime) Clone(ctx context.Context, baseline, name string) error {
-	return a.argv.Run(ctx, []string{"clone", baseline, name}, nil, io.Discard)
+func (c callRuntime) Clone(ctx context.Context, baseline, name string) error {
+	return c.calls.Run(ctx, []string{"Clone", baseline, name}, nil, io.Discard)
 }
 
-func (a argvRuntime) Resize(ctx context.Context, name string, cpu, memoryMB int) error {
-	args := []string{"set", name}
-	if cpu > 0 {
-		args = append(args, "--cpu", strconv.Itoa(cpu))
-	}
-	if memoryMB > 0 {
-		args = append(args, "--memory", strconv.Itoa(memoryMB))
-	}
-	return a.argv.Run(ctx, args, nil, io.Discard)
+func (c callRuntime) Resize(ctx context.Context, name string, cpu, memoryMB int) error {
+	return c.calls.Run(ctx, []string{"Resize", name, "cpu=" + strconv.Itoa(cpu), "memory=" + strconv.Itoa(memoryMB)}, nil, io.Discard)
 }
 
-func (a argvRuntime) Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error) {
-	args := []string{"run"}
+// Start records the VM name last.
+func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error) {
+	call := []string{"Start"}
 	if launch.Input {
-		args = append(args, "--input")
+		call = append(call, "input")
 	}
 	if launch.Share != "" {
-		args = append(args, "--dir=bivouac:"+launch.Share+":ro")
+		call = append(call, "share="+launch.Share)
 	}
 	if launch.Softnet != nil {
-		args = append(args, "--net-softnet-block="+launch.Softnet.Block)
+		call = append(call, "softnet-block="+launch.Softnet.Block)
 	}
-	return a.argv.Start(ctx, append(args, name), sink)
+	return c.calls.Start(ctx, append(call, name), sink)
 }
 
-func (a argvRuntime) execArgs(name string, argv []string, stdin bool) []string {
-	args := []string{"exec"}
-	if stdin {
-		args = append(args, "-i")
-	}
-	return append(append(args, name), argv...)
+func (c callRuntime) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout io.Writer) error {
+	return c.calls.Run(ctx, append([]string{"Exec", name}, argv...), stdin, stdout)
 }
 
-func (a argvRuntime) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout io.Writer) error {
-	return a.argv.Run(ctx, a.execArgs(name, argv, stdin != nil), stdin, stdout)
+func (c callRuntime) Duplex(ctx context.Context, name string, argv []string) (net.Conn, error) {
+	return nil, c.calls.Run(ctx, append([]string{"Duplex", name}, argv...), nil, io.Discard)
 }
 
-func (a argvRuntime) Duplex(ctx context.Context, name string, argv []string) (net.Conn, error) {
-	return nil, a.argv.Run(ctx, a.execArgs(name, argv, true), nil, io.Discard)
+func (c callRuntime) Stop(ctx context.Context, name string, timeout time.Duration) error {
+	return c.calls.Run(ctx, []string{"Stop", name, "timeout=" + timeout.String()}, nil, io.Discard)
 }
 
-func (a argvRuntime) Stop(ctx context.Context, name string, timeout time.Duration) error {
-	return a.argv.Run(ctx, []string{"stop", name, "--timeout", strconv.Itoa(int(timeout.Seconds()))}, nil, io.Discard)
+func (c callRuntime) Delete(ctx context.Context, name string) error {
+	return c.calls.Run(ctx, []string{"Delete", name}, nil, io.Discard)
 }
 
-func (a argvRuntime) Delete(ctx context.Context, name string) error {
-	return a.argv.Run(ctx, []string{"delete", name}, nil, io.Discard)
-}
-
-func (a argvRuntime) List(ctx context.Context) ([]vm.Entry, error) {
+func (c callRuntime) List(ctx context.Context) ([]vm.Entry, error) {
 	var out bytes.Buffer
-	if err := a.argv.Run(ctx, []string{"list"}, nil, &out); err != nil {
+	if err := c.calls.Run(ctx, []string{"List"}, nil, &out); err != nil {
 		return nil, err
 	}
 	var entries []vm.Entry
 	return entries, json.Unmarshal(out.Bytes(), &entries)
 }
 
-// recorder is a fake VM runtime: it records argument arrays and answers
-// from a table.
+// recorder is a fake VM runtime: it records calls and answers from a table.
 type recorder struct {
 	calls     [][]string
 	stdin     map[string]string // joined args -> stdin received
 	vms       map[string]bool   // name -> running
 	exited    map[string]bool
 	status    string
-	statusErr error // returned by `exec ... status` when set
+	statusErr error // returned by the guest script's status mode when set
 	session   string
 	diag      map[string][]byte // guest script mode -> stdout
 	launchOut string            // written by the VM helper instead of "started"
-	readyErrs []error           // returned in turn by `exec ... true`
+	readyErrs []error           // returned in turn by the readiness command
 	started   []*fakeProc
 }
 
@@ -145,25 +131,25 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 		r.stdin[strings.Join(args, " ")] = string(b)
 	}
 	switch args[0] {
-	case "clone":
+	case "Clone":
 		if _, ok := r.vms[args[1]]; !ok {
 			return nil, errors.New("baseline does not exist")
 		}
 		r.vms[args[2]] = false
 		return nil, nil
-	case "list":
+	case "List":
 		var out []vm.Entry
 		for n, running := range r.vms {
 			out = append(out, vm.Entry{Name: n, Running: running})
 		}
 		return json.Marshal(out)
-	case "delete":
+	case "Delete":
 		if _, ok := r.vms[args[1]]; !ok {
 			return nil, fs.ErrNotExist
 		}
 		delete(r.vms, args[1])
 		return nil, nil
-	case "stop":
+	case "Stop":
 		r.vms[args[1]] = false
 		for _, p := range r.started {
 			if p.args[len(p.args)-1] == args[1] {
@@ -171,11 +157,8 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 			}
 		}
 		return nil, nil
-	case "exec":
+	case "Exec":
 		i := 1
-		if args[1] == "-i" {
-			i = 2
-		}
 		if len(args) == i+2 && args[i+1] == "true" && len(r.readyErrs) > 0 {
 			err := r.readyErrs[0]
 			r.readyErrs = r.readyErrs[1:]
@@ -216,15 +199,14 @@ func (r *recorder) Start(_ context.Context, args []string, sink io.Writer) (Proc
 
 func newProvider(t *testing.T, r *recorder) *Provider {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("TART_HOME", home)
+	store := t.TempDir()
 	for name := range r.vms {
-		if err := os.MkdirAll(filepath.Join(home, "vms", name), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Join(store, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
-	p, err := New("macos", cfg, "ctl-1", argvRuntime{r})
+	p, err := New("macos", cfg, "ctl-1", store, callRuntime{r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,17 +216,16 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 func TestLifecycleArguments(t *testing.T) {
 	r := newRecorder()
 	p := newProvider(t, r)
-	home := os.Getenv("TART_HOME")
 	ctx := context.Background()
 	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
 	// Simulate the clone creating the directory before the marker is written.
-	if err := os.MkdirAll(filepath.Join(home, "vms", spec.Name), 0o700); err != nil {
+	if err := os.MkdirAll(p.vmDir(spec.Name), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Create(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"clone", "base", "bivouac-macos-abc"}, {"set", "bivouac-macos-abc", "--cpu", "4", "--memory", "8192"}}
+	want := [][]string{{"Clone", "base", "bivouac-macos-abc"}, {"Resize", "bivouac-macos-abc", "cpu=4", "memory=8192"}}
 	for i, w := range want {
 		if strings.Join(r.calls[i], " ") != strings.Join(w, " ") {
 			t.Fatalf("call %d = %v, want %v", i, r.calls[i], w)
@@ -255,19 +236,19 @@ func TestLifecycleArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := r.calls[len(r.calls)-1]
-	if got := strings.Join(run, " "); got != "run --input bivouac-macos-abc" {
-		t.Fatalf("run args = %q", got)
+	if got := strings.Join(run, " "); got != "Start input bivouac-macos-abc" {
+		t.Fatalf("start = %q", got)
 	}
 	if err := p.WaitReady(ctx, spec.Name); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.stdin["exec -i bivouac-macos-abc tee /tmp/bivouac-guest"]; !strings.Contains(got, "ACTIONS_RUNNER_INPUT_JITCONFIG") {
+	if got := r.stdin["Exec bivouac-macos-abc tee /tmp/bivouac-guest"]; !strings.Contains(got, "ACTIONS_RUNNER_INPUT_JITCONFIG") {
 		t.Fatalf("guest script not delivered: %q", got)
 	}
 	if err := p.StartRunner(ctx, spec.Name, []byte("secret-jit")); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.stdin["exec -i bivouac-macos-abc /tmp/bivouac-guest start /Users/admin/actions-runner"]; got != "secret-jit" {
+	if got := r.stdin["Exec bivouac-macos-abc /tmp/bivouac-guest start /Users/admin/actions-runner"]; got != "secret-jit" {
 		t.Fatalf("JIT not delivered on stdin: %q", got)
 	}
 	for _, c := range r.calls {
@@ -303,9 +284,8 @@ func TestDeleteRefusesBaselineAndForeign(t *testing.T) {
 	r.vms["tartelet-clone-1"] = true
 	p := newProvider(t, r)
 	ctx := context.Background()
-	home := os.Getenv("TART_HOME")
 	// A prefixed VM with another controller's marker.
-	_ = os.WriteFile(filepath.Join(home, "vms", "bivouac-macos-other", markerFile), []byte(`{"controller_id":"someone-else"}`), 0o600)
+	_ = os.WriteFile(filepath.Join(p.vmDir("bivouac-macos-other"), markerFile), []byte(`{"controller_id":"someone-else"}`), 0o600)
 
 	for _, name := range []string{"base", "tartelet-clone-1", "bivouac-macos-other", "bivouac-macos-missing"} {
 		err := p.Delete(ctx, name)
@@ -317,7 +297,7 @@ func TestDeleteRefusesBaselineAndForeign(t *testing.T) {
 		}
 	}
 	for _, c := range r.calls {
-		if c[0] == "delete" {
+		if c[0] == "Delete" {
 			t.Fatalf("delete was invoked: %v", c)
 		}
 	}
