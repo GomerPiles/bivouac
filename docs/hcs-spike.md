@@ -26,11 +26,17 @@ trial. Removing the host application/daemon is feasible at the native VM layer;
 replacing the complete CI provider still requires image provisioning, guest
 readiness, graphics/input, networking/isolation and lifecycle validation.
 
-The first full guest attempt reached native running/GPU assignment but the
-agent did not become reachable within its ten-minute budget. Native absence and
-storage cleanup completed. Setup media now uses the documented removable-media
-filename `Autounattend.xml`; the ordinary-token ISO fixture verifies its Joliet
-directory entry. Guest readiness, SSH and rendering remain unverified live.
+The full guest trial, including corrected removable-media naming, reached native
+running/GPU assignment but the agent did not become reachable within its
+ten-minute budget. Read-only inspection after confirmed native absence found
+the agent binary but no fixed setup-complete marker or MSI SSH-server binary.
+The image was detached and the retained child/journal were then removed.
+This has not identified the provisioning failure; selected template setup and
+service state can be inspected offline without loading hives into the live host
+registry. Guest readiness, SSH and rendering remain unverified live.
+
+Setup media uses the documented removable-media filename `Autounattend.xml`;
+the ordinary-token ISO fixture verifies its Joliet directory entry.
 
 ## What is implemented
 
