@@ -332,13 +332,25 @@ Never use a process-name search to stop or wait for the daemon.
 
 The daemon runs every VM through `bivouac vm run` from its own executable, so
 that copy must carry the `com.apple.security.virtualization` entitlement;
-the daemon refuses to start without it, and `doctor` checks it. Tart is
-needed only to build and edit baselines.
+the daemon refuses to start without it, and `doctor` checks it.
+
+**VM store.** Baselines and clones live in bivouac's VM store:
+`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
+`bivouac doctor` names it. Copy a Tart-format baseline in with an APFS clone
+(instant on the same volume), never a move of a VM another tool still uses:
+
+```bash
+cp -c -R ~/.tart/vms/<baseline> "$HOME/Library/Application Support/bivouac/vms/<baseline>"
+```
+
+Bivouac does not see VMs in other tools' directories, so `foreign_slots`
+must reserve Apple's guest slots for any other manager.
 
 **macOS baseline.** Bivouac reaches the guest through its own agent, not
-Tart's (which exits on hosts that are not Tart). Boot the baseline with Tart,
-then install the darwin/arm64 `bivouac` binary as `/usr/local/bin/bivouac`
-(root:wheel, 0755) and
+Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
+baselines itself, prepare one with Tart before copying it into the store:
+boot it, then install the darwin/arm64 `bivouac` binary as
+`/usr/local/bin/bivouac` (root:wheel, 0755) and
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
 in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
 automatically; the agent runs only in that Aqua session. Shut the baseline
@@ -347,8 +359,9 @@ the old one; overwriting the running binary in place corrupts it. Reinstall
 it only when its protocol version changes.
 
 **Moving from the Tart CLI runtime.** Drain to idle first: guests started by
-`tart run` have no agent socket and are not adopted. Remove `binary` and
-`extra_args` from `[providers.*.tart]`; config validation rejects them.
+`tart run` are not adopted. Copy the baseline into the VM store, set
+`type = "vz"`, and rename `[providers.*.tart]` to `[providers.*.vz]` without
+`binary` or `extra_args`; config validation rejects the old names.
 
 Validation config (while Tartelet keeps production):
 
@@ -358,7 +371,7 @@ max_instances = 1
 max_pending_cleanup = 2
 [providers.macos]
 scaleset = "bivouac-macos-experimental"
-[providers.macos.tart]
+[providers.macos.vz]
 baseline = "ci-macos27"
 foreign_slots = 1     # Tartelet's VM keeps one of Apple's two macOS guest slots
 ```
@@ -537,8 +550,8 @@ Do not restore the `tartelet` workflow labels or revoke the shared App.
 | `biv stop` | cancel now; guests destroyed; idle |
 | `biv off` | drain, then the daemon exits and stays off across reboots |
 | `biv status` | mode, phase, guests, pending runner cleanup, capacity, recent errors |
-| `biv tart list` | guests bivouac owns, orphans, and foreign guests |
-| `biv tart cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
+| `biv vz list` | guests bivouac owns, orphans, and foreign guests |
+| `biv vz cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
 | `biv doctor` | host, config, credential, engine, login item checks |
 
 Logs: `~/Library/Logs/bivouac/bivouac.log`, per-guest `<name>.launch.log`,
@@ -595,7 +608,7 @@ retires under `sweep_idle_timeout`.
 If a validation run needs operator cancellation, target its exact run ID:
 `gh run cancel <run-id> --repo <owner/repo>`. If normal cancellation hangs,
 `gh api repos/<owner>/<repo>/actions/runs/<run-id>/force-cancel --method POST`.
-Wait for `guest gone`, no owned VM in `bivouac tart list`, and no instance
+Wait for `guest gone`, no owned VM in `bivouac vz list`, and no instance
 record before proceeding. Never cancel an unrelated or production run.
 
 After SIGKILL, launchd restarts the controller and it adopts the live
@@ -642,7 +655,7 @@ Keep the Linux binary at a stable host location and reference its absolute path.
 Add to the isolated provider configuration:
 
 ```toml
-[providers.macos.tart.containers]
+[providers.macos.vz.containers]
 engine = "docker"            # or "podman"
 baseline = "ci-linux-engine"
 cpu = 2

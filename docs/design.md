@@ -10,8 +10,8 @@ security model, and durable decisions. Keep it aligned with the code.
 ```
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
-internal/provider    provider contract; tart/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
-internal/vm          Tart-format VM directories and the Virtualization.framework helper (`vm run`)
+internal/provider    provider contract; vz/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
+internal/vm          the VM store (Tart-format directories) and the Virtualization.framework helper (`vm run`)
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
 internal/github      scale set client wrapper (actions/scaleset) and test fake
@@ -71,7 +71,7 @@ login the daemon starts, reconciles, and exits at once if the mode is off.
 VM children so much that guests never answered the agent in time.
 One daemon holds an exclusive lock in the state directory; a second copy
 exits after retrying for 2 s, longer than any liveness probe holds its
-shared lock. `tart cleanup` holds the same lock while it runs.
+shared lock. `vz cleanup` holds the same lock while it runs.
 `AbandonProcessGroup=true` prevents launchd from killing VM helpers
 when the controller crashes, so reconciliation can adopt the live guest.
 The LaunchAgent has one label and runs the default layout, so with
@@ -331,9 +331,10 @@ read failure or CPU topology changes reset the applicable CPU baseline/averages.
 
 Capacity per provider is the minimum of: host `max_instances` minus active;
 provider `max_instances`; the engine's host limit (Apple: two macOS guests)
-minus running guests bivouac does not own, or `foreign_slots`, whichever
-is larger, and minus every guest of ours on any Tart provider (Tart
-providers must agree on both settings); CPU and memory left after `reserve_*` and the guests already
+minus running unowned guests in bivouac's VM store, or `foreign_slots`,
+whichever is larger, and minus every guest of ours on any vz provider (vz
+providers must agree on both settings). Other tools' guests are invisible to
+bivouac, so `foreign_slots` reserves their slots; CPU and memory left after `reserve_*` and the guests already
 running. A foreign guest named like an active record (an unprovable App
 Sandbox or Crosvm record) counts once, through its record, and is not
 reported as unmanaged. New provisioning pauses at `budget.max_pending_cleanup` deleted
@@ -365,7 +366,7 @@ running; the next start adopts or cleans them.
 
 ## Provider contract
 
-`provider.Provider` is designed against Tart-format VMs and the App Sandbox
+`provider.Provider` is designed against the macOS VM runtime and the App Sandbox
 headless API. Launch options are argument arrays or structured fields,
 never shell strings. Capabilities are explicit: GPU mode, desktop session,
 display transport, engine host limit.
@@ -380,27 +381,29 @@ file, never argv), `RunnerStatus`, `Status`, `Stop` (graceful then forced),
 `Delete` (refuses without our metadata), `List` (owned and foreign),
 `CollectDiagnostics`.
 
-### macOS (`tart` provider)
+### macOS (`vz` provider)
 
 Baselines are Tart-format VM directories (`config.json`, `disk.img`,
-`nvram.bin`) in the Tart home (`TART_HOME` or `~/.tart`); clones live beside
-them so APFS can share blocks. Tart builds baselines; bivouac runs them.
+`nvram.bin`) in bivouac's VM store (`~/Library/Application Support/bivouac/vms`,
+or `vms` under `BIVOUAC_HOME`); clones live beside them so APFS can share
+blocks. Agent sockets live in the store's hidden `.run` directory, named by a
+hash of the VM name, so their path fits `sun_path` whatever the name.
 
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a fresh
   locally administered MAC, then a rename into place (milliseconds). Then
   `bivouac.json` with controller and instance IDs, then CPU and memory.
-- Run: `bivouac vm run --dir <vm> --agent-port <port> [--input] [--share <dir>]
-  [--softnet …]`, from the executable signed with
+- Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
+  [--input] [--share <dir>] [--softnet …]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
   Softnet network, entropy, balloon, vsock; keyboard and pointer for runner
-  guests; no console, audio, or clipboard). It holds Tart's fcntl lock on
-  `config.json` for the VM's life, so `tart list` shows it running and the
+  guests; no console, audio, or clipboard). It holds an fcntl lock on
+  `config.json` for the VM's life (the lock Tart also takes), and the
   provider reads running state and the helper's PID from that lock. The
   helper is not bound to the daemon's lifetime and has its own process
   group; its output is the launch log file. The exact command line is in
   the launch log and diagnostics.
-- Guest agent: the helper serves `agent.sock` (0600) in the VM directory and
+- Guest agent: the helper serves its agent socket (0600) and
   proxies each connection to the guest's vsock port, where
   `bivouac guest-agent` runs one command per connection: request, stdin
   frames, stdout frames, exit status. Guest stderr is dropped. A closed
@@ -426,12 +429,12 @@ them so APFS can share blocks. Tart builds baselines; bivouac runs them.
   is a retryable transport failure while the VM runs; only `absent` or a
   stopped or missing VM confirms exit.
 - Stop: only a lock holder whose arguments are `vm run --dir <this VM>` is
-  signalled (anything else, such as `tart run`, is refused). SIGTERM powers
-  the VM off at once, as `tart stop` did: a macOS guest ignores a shutdown
-  request, and the clone is deleted anyway. SIGKILL after the timeout ends a
-  hung helper, and the framework ends a VM whose owning process exits. Resizing holds the lock
-  while it rewrites `config.json`; the helper reads its configuration only
-  through its own lock, and clones refuse a running baseline.
+  signalled; any other holder is refused. SIGTERM powers the VM off at
+  once: a macOS guest ignores a shutdown request, and the clone is deleted
+  anyway. SIGKILL after the timeout ends a hung helper, and the framework
+  ends a VM whose owning process exits. Resizing holds the lock while it
+  rewrites `config.json`; the helper reads its configuration only through its
+  own lock, and clones refuse a running baseline.
 - Diagnostics: `_diag` and the runner log stream out as tar through the
   agent, are redacted before reaching disk, and are capped at 1024 entries
   and 128 MiB extracted.
@@ -626,7 +629,7 @@ production isolation guarantee is inferred from the prototype.
 
 ## Optional containers on macOS
 
-`providers.<name>.tart.containers` opts a macOS runner into a disposable
+`providers.<name>.vz.containers` opts a macOS runner into a disposable
 Linux/arm64 engine VM, from a Tart-format baseline, for the same job. The
 host selects a local Linux baseline, Docker or Podman, explicit CPU/memory,
 and a built Linux/arm64 bivouac helper. The macOS runtime already provides
@@ -668,7 +671,8 @@ cache and bootstrap-share options are incompatible with this mode.
 Source investigation: the installed-version [Softnet VM filter](https://github.com/openai/softnet/blob/0.19.0/lib/proxy/vm.rs)
 applies explicit blocks before its default global-address, gateway, and DNS
 exceptions. Its Ethernet dispatch accepts ARP/IPv4 only. The VM helper runs
-Softnet as Tart does: a datagram socket pair, Softnet's end as its stdin,
+Softnet through its `--vm-fd` interface: a datagram socket pair, Softnet's
+end as its stdin,
 `--vm-fd 0 --vm-mac-address <mac> --block <policy>`, directly when SUID root
 or through `sudo -n` otherwise. Linux agent availability in a particular
 baseline still requires a live check.
@@ -935,9 +939,11 @@ localhost management API and UI remain deferred.
 ## Decisions
 
 - Bivouac runs macOS guests itself (purego bindings to Virtualization.framework,
-  no cgo) instead of through the Tart CLI. Tart remains the tool that builds
-  Tart-format baselines; its guest agent exits on hosts that are not Tart,
-  so baselines carry `bivouac guest-agent` as an Aqua LaunchAgent. Runner
+  no cgo) instead of through the Tart CLI, so users install no VM tool for
+  the little of Tart bivouac used. The provider is named `vz` after the
+  engine; "Tart-format" names only the image format, and bivouac keeps its
+  own VM store. Tart's guest agent exits on hosts that are not Tart, so
+  baselines carry `bivouac guest-agent` as an Aqua LaunchAgent. Runner
   bootstrap through an Aqua guest agent was verified with real windowed Metal
   rendering and app lifecycle, focus, and input tests in a headless guest.
 - Control through files and a signal rather than a socket, until the

@@ -15,7 +15,7 @@ in the hosted Linux/macOS/Windows workflow.
 ## macOS
 
 Bivouac runs macOS guests itself (Virtualization.framework through
-purego, its own guest agent); Tart only builds baselines. Validated on this
+purego, its own guest agent). Validated on this
 runtime with real scale-set jobs from a baseline with the guest agent:
 
 - Jobs run in the Aqua session of a fresh guest (sentinel check), back to
@@ -25,19 +25,20 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Drain, stop, and off mid-job; controller SIGKILL with adoption of the live
   guest; guest loss (helper killed), whose runner cleanup retried until
   GitHub released the busy runner.
-- The real-guest integration test (helper arguments, Tart lock, cleanup
+- The real-guest integration test (helper arguments, VM lock, cleanup
   refusing the baseline).
 - Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
-  5–10 s, teardown 1.3–1.8 s (power-off, as `tart stop` did).
+  5–10 s, teardown 1.3–1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
 cleanup across restart, the Actions archive cache with fallback when its
 endpoint stops mid-job, and windowed Metal, focus, and input tests.
 
-Tests only: a guest agent of another protocol version fails readiness at
-once; the daemon refuses to start from an executable without the
-virtualization entitlement; macOS CI signs a test binary and has the
+Tests only: the `vz` provider name and bivouac's own VM store with hashed
+agent socket paths; a guest agent of another protocol version fails
+readiness at once; the daemon refuses to start from an executable without
+the virtualization entitlement; macOS CI signs a test binary and has the
 framework validate every helper device combination (skipped where the host
 cannot virtualize).
 

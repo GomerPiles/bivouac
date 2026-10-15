@@ -34,8 +34,8 @@ var guestScript []byte
 // guestPath is where the bootstrap script lives inside each clone.
 const guestPath = "/tmp/bivouac-guest"
 
-// markerFile is written beside the VM's config.json after a clone. Tart
-// ignores extra files in a VM directory and deletes them with the VM.
+// markerFile is written beside the VM's config.json after a clone and is
+// deleted with the VM directory.
 const markerFile = "bivouac.json"
 
 // Provider implements provider.Provider on Tart-format VM directories.

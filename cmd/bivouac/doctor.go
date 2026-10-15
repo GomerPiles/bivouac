@@ -176,7 +176,7 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	} else if c.OS != "darwin" {
 		add("FAIL", "baseline "+name, fmt.Sprintf("%q is a %s VM, not macOS", t.Baseline, c.OS))
 	} else {
-		add("PASS", "baseline "+name, t.Baseline+"; its guest agent is checked when a guest boots")
+		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s; its guest agent is checked when a guest boots", t.Baseline, e.layout.VMs))
 	}
 	cpu, mem := t.CPU, t.MemoryGB
 	if c := t.Containers; c != nil {
