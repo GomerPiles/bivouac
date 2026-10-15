@@ -153,7 +153,7 @@ func boundedResult(p *uint16) ([]byte, error) {
 	return nil, errors.New("HCS result exceeds 64 KiB")
 }
 
-func (a *native) wait(ctx context.Context, op uintptr, wantResult bool) ([]byte, error) {
+func (a *native) wait(ctx context.Context, op uintptr, method string, wantResult bool) ([]byte, error) {
 	bound, err := operationTimeout(ctx)
 	if err != nil {
 		return nil, err
@@ -163,7 +163,7 @@ func (a *native) wait(ctx context.Context, op uintptr, wantResult bool) ([]byte,
 	if result != nil {
 		defer func() { _, _ = windows.LocalFree(windows.Handle(uintptr(unsafe.Pointer(result)))) }()
 	} // #nosec G103 -- Paired HCS allocation release.
-	if err = hresult("HcsWaitForOperationResult", r); err != nil {
+	if err = hresult(method, r); err != nil {
 		return nil, err
 	}
 	if !wantResult {
@@ -208,7 +208,7 @@ func (a *native) operation(ctx context.Context, method string, handle uintptr, d
 	if err = hresult(method, r); err != nil {
 		return nil, err
 	}
-	result, err := a.wait(ctx, op, wantResult)
+	result, err := a.wait(ctx, op, method, wantResult)
 	runtime.KeepAlive(p)
 	return result, err
 }
@@ -276,7 +276,7 @@ func (a *native) Create(ctx context.Context, c Config) (system, bool, error) {
 	if err = hresult("HcsCreateComputeSystem", r); err != nil {
 		return s, !unknownOperation(err), err
 	}
-	_, err = a.wait(ctx, op, false)
+	_, err = a.wait(ctx, op, "HcsCreateComputeSystem", false)
 	runtime.KeepAlive(name)
 	runtime.KeepAlive(doc)
 	return s, !unknownOperation(err), err
@@ -288,9 +288,13 @@ func unknownOperation(err error) bool {
 		(errors.As(err, &nativeErr) && (nativeErr.code == uint32(windows.HCS_E_OPERATION_TIMEOUT) || nativeErr.code == uint32(windows.HCS_E_OPERATION_PENDING)))
 }
 
+// Schema 2 returns basic identity/state by default. "Basic" is a service
+// property selector, not a compute-system PropertyType.
+func basicPropertyQuery() string { return "{}" }
+
 func (s *nativeSystem) Properties(ctx context.Context) (properties, error) {
 	var p properties
-	b, err := s.api.operation(ctx, "HcsGetComputeSystemProperties", s.handle, `{"PropertyTypes":["Basic"]}`, true)
+	b, err := s.api.operation(ctx, "HcsGetComputeSystemProperties", s.handle, basicPropertyQuery(), true)
 	if err != nil {
 		return p, err
 	}

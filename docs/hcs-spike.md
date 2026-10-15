@@ -7,17 +7,16 @@ it does not replace `bivouac`.
 
 ## Current elevated attempt
 
-The first approved native-only attempt stopped before VM creation because a
-post-grant protection check rejected the intended VM-account payload ACE.
-Disk/state-file preparation and automatic cleanup completed; the trial root
-contains only its kernel lock file. The protected lab retains the independent
-image, pinned tested executable, configuration and fixed progress/result files
-for inspection. Nothing was installed into startup and no production controller
-was changed. The corrected source now snapshots exact payload identity/ACLs
-after the native VM access grant, with administrator-only checks before granting
-and separate strict journal/marker checks. It needs a new reviewed executable
-and explicitly approved elevated retry. The staged executable remains the
-original tested version; it is not silently replaced from the worktree.
+The protected lab uses an independent immutable template copy. Disk/state-file
+preparation and the corrected VM-account payload ACL checks pass. The native
+attempt reached HCS but returned `HCS_E_INVALID_JSON`; its first properties query
+and cleanup used the unsupported compute-system selector `"Basic"`. The journal
+and child remain retained until exact native ownership/absence is verified.
+The corrected query requests default basic properties with `{}`, as specified
+by the schema. Native errors now identify the originating operation and HRESULT,
+without exposing result documents. Race tests, vet and lint pass; the corrected
+query still needs an explicitly approved elevated retry. No startup component
+or production configuration was changed.
 
 ## What is implemented
 
@@ -161,3 +160,7 @@ reserved options parameter, as required by Microsoft's
 [start](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsstartcomputesystem)
 and [terminate](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsterminatecomputesystem)
 contracts; regression tests reject substituting an empty JSON document.
+
+Basic compute-system identity/state uses the default query, not a `"Basic"`
+selector: see Microsoft's [schema-2 property query](https://github.com/microsoft/hcsshim/blob/main/internal/hcs/schema2/property_query.go)
+and [property types](https://github.com/microsoft/hcsshim/blob/main/internal/hcs/schema2/property_type.go).

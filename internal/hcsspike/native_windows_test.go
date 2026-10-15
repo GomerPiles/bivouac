@@ -4,6 +4,7 @@ package hcsspike
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -127,5 +128,19 @@ func TestLifecycleOperationsUseNullOptions(t *testing.T) {
 		if err != nil || p == nil {
 			t.Fatal("required HCS document missing")
 		}
+	}
+}
+
+func TestBasicPropertyQueryUsesSchemaDefault(t *testing.T) {
+	p, err := operationInput("HcsGetComputeSystemProperties", basicPropertyQuery())
+	if err != nil || p == nil {
+		t.Fatal("default query missing")
+	}
+	var query map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(windows.UTF16PtrToString(p)), &query); err != nil {
+		t.Fatal(err)
+	}
+	if len(query) != 0 {
+		t.Fatal("basic identity must use default properties, without an invalid selector")
 	}
 }
