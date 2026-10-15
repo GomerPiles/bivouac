@@ -46,6 +46,7 @@ Setup:
   config validate  check the config file   (also: config example, config path)
   secret set       store a credential-store item from a file or stdin
   secret check     report whether an item exists   (also: secret delete)
+  vz import        copy a Tart-format VM into the VM store as a baseline
   vz list          show guests bivouac owns and guests it does not
   vz cleanup       delete orphaned guests that carry bivouac's own metadata
   appsandbox inspect  read-only daemon/version/VM inventory (no startup)

@@ -14,12 +14,14 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/control"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/install"
 	"github.com/GomerPiles/bivouac/internal/manager"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 type flagSet = flag.FlagSet
@@ -217,11 +219,14 @@ func (e env) secretCmd(ctx context.Context, args []string) error {
 	return errUsage
 }
 
-// vzCmd inspects and cleans up macOS guests through the provider, with
-// the same ownership checks the daemon uses.
+// vzCmd imports baselines, and inspects and cleans up macOS guests through
+// the provider with the same ownership checks the daemon uses.
 func (e env) vzCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errUsage
+	}
+	if args[0] == "import" {
+		return e.vzImport(args[1:])
 	}
 	cfg, err := e.loadConfig("")
 	if err != nil {
@@ -320,4 +325,32 @@ func (e env) vzCmd(ctx context.Context, args []string) error {
 		return nil
 	}
 	return errUsage
+}
+
+// vzImport copies a Tart-format VM into the VM store as a baseline. The
+// operator vouches for the guest: the matching bivouac guest agent is
+// installed, the runner is in --runner-dir, and --sudo when the agent's user
+// has passwordless sudo.
+func (e env) vzImport(args []string) error {
+	fs := flag.NewFlagSet("vz import", flag.ContinueOnError)
+	runnerDir := fs.String("runner-dir", "", "preinstalled runner in a macOS guest, such as /Users/admin/actions-runner")
+	sudo := fs.Bool("sudo", false, "the guest agent's user has passwordless sudo (the release proxy needs it)")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 2 {
+		return errors.New("usage: bivouac vz import [--runner-dir DIR] [--sudo] <tart-vm-dir> <name>")
+	}
+	src, name := fs.Arg(0), fs.Arg(1)
+	if strings.HasPrefix(name, config.NamePrefix) {
+		return fmt.Errorf("baseline names may not start with %q", config.NamePrefix)
+	}
+	guest := vm.Guest{AgentVersion: guestagent.Version, RunnerDir: *runnerDir, Sudo: *sudo}
+	if err := vm.Store(e.layout.VMs).Import(src, name, guest); err != nil {
+		return err
+	}
+	fmt.Printf("imported %s as %q in %s\n", src, name, e.layout.VMs)
+	if m, err := vm.ReadManifest(vm.Store(e.layout.VMs).Dir(name)); err == nil {
+		if _, err := vz.CheckBaseline(e.layout.VMs, name, m.OS); err != nil {
+			fmt.Printf("warning: %v\n", err)
+		}
+	}
+	return nil
 }
