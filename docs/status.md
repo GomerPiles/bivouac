@@ -77,6 +77,12 @@ Validated live:
 - Recovery after a host reboot with idle guests and CI still on.
 - The optional limited login task registers and runs on demand.
 
+Native process tests reproduce a hidden portable-launch child being killed
+when its enclosing Windows job closes. The portable launcher now refuses a new
+manager from such a job before mutating mode or control records; its context
+guard is exercised in an isolated job using stock Windows PowerShell. This
+launcher change is not deployed to the installed controller.
+
 Open:
 
 - Private-peer and source-MAC filtering are inconclusive in the tested

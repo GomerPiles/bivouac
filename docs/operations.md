@@ -47,6 +47,16 @@ Run it with PowerShell 7 and `-Action On`, `Off`, `Drain`, `Stop` or `Status`.
 `On` checks prerequisites, writes mode and starts a hidden ordinary-user manager
 when absent. It verifies the previous launch PID, creation time and executable
 before reusing it. `Off` drains active work and exits; `Stop` cancels immediately.
+Start an absent portable manager from its ordinary desktop shortcut. An IDE or
+agent terminal can place its children in a Windows process job; hiding the
+manager window does not let it survive that job being closed. The launcher
+refuses this context before changing mode or control records. If it reports a
+process-job refusal, use the desktop shortcut, or explicitly install and use
+the limited login task. An existing manager can still receive control commands
+from that terminal. Restarting a development app must not be used to stop CI:
+use Off and wait for owned-guest cleanup. After an unexpected controller loss,
+status snapshots are historical; check native inventory before assuming guests
+have stopped, and restore missing broker prerequisites before manager recovery.
 Without an `engine_startup` entry, an unavailable broker remains an explicit
 operator prerequisite. An optional `engine_startup` manifest entry can name
 [`Start-VMEnginePrompt.ps1`](../tools/windows/Start-VMEnginePrompt.ps1) within the
