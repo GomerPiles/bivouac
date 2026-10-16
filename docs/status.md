@@ -130,10 +130,13 @@ Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
 
-Upload storage (`store_uploads`) is covered by tests only, including the real
-preload against a simulated Azure endpoint and its direct fallback. Unverified
-live: that GitHub's download URL names the uploaded blob with the same ETag, the
-real storage SDK through the relay, and relay throughput over SSH loopback.
+Upload storage (`store_uploads`) passed isolated live jobs on a macOS guest:
+the host stored a single-request and a block upload, a fresh guest's first
+restores of both were local hits, and restores overlapping new uploads passed.
+Windows and Linux guests, oversize saves and the direct fallback are covered by
+tests only, the fallback including the real preload against a simulated Azure
+endpoint.
+
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,
 invalidation and upstream change.
