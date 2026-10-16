@@ -31,9 +31,15 @@ running/GPU assignment but the agent did not become reachable within its
 ten-minute budget. Read-only inspection after confirmed native absence found
 the agent binary but no fixed setup-complete marker or MSI SSH-server binary.
 The image was detached and the retained child/journal were then removed.
-This has not identified the provisioning failure; selected template setup and
-service state can be inspected offline without loading hives into the live host
-registry. Guest readiness, SSH and rendering remain unverified live.
+Read-only inspection of the independent template found setup/OOBE in progress,
+a generalized-to-OOBE image state, no registered agent/SSH services and a cached
+answer that reseals into Audit mode and runs sysprep. Its hash remained unchanged.
+This is a likely provisioning gate; it does not establish the timeout's cause.
+Child-only staging now writes the trial answer into the higher-priority embedded
+answer directory. The first attempt refused a pre-existing empty directory
+before native create; read-only inspection and cleanup succeeded. Accepting that
+empty directory while refusing existing contents needs a live retry. Guest
+readiness, SSH and rendering remain unverified live.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -48,6 +54,11 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   A random local guest password exists only in memory and the protected disposable
   ISO/guest disk, never config, journal, command arguments or logs. Its parent
   directory is Administrators/SYSTEM-only before the owned VM access grant.
+  Before HCS creation, fixed Storage code mounts only the new child, guards
+  against an explicit offline answer pointer, and writes the answer into
+  `Windows\Panther\Unattend\unattend.xml`. An existing empty directory is
+  accepted; existing contents, links or unexpected ownership records are refused.
+  The child is detached before native dispatch; the immutable parent stays pinned.
   No NIC, nested virtualization, audio,
   clipboard, personal share, cache endpoint or display streaming is configured.
 - A differencing VHDX against a hash-pinned, read-only baseline. The baseline
@@ -133,6 +144,11 @@ operator agreement on those resources.
    `setup_assets` as in `hcs-spike-guest.example.json`: the agent, display/input
    helpers, VDD DLL/INF/CAT and devcon, plus an offline OpenSSH MSI when the image
    lacks sshd. Every source must be administrator-protected and SHA-256 pinned.
+   Generalized-template provisioning also requires Windows Storage PowerShell
+   cmdlets and the system offline-registry library. Only the newly recorded
+   child is mounted read-write for answer staging. The explicit offline setup
+   answer pointer must be absent/empty and the embedded answer directory must
+   be absent/empty; images requiring replacement of existing contents are refused.
    Fixed first-boot code runs only in the disposable guest; it initializes the
    local account/autologin, VDD, SSH and guest agent. Never use a live runner's
    disk, export an enrolled guest, or change the production baseline. The image
@@ -218,3 +234,8 @@ Windows answer-file behavior follows Microsoft's [unattended setup](https://lear
 and [offline account-screen setting](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-oobe-hideonlineaccountscreens).
 
 Removable-media answer-file naming follows Microsoft's [implicit search order](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-automation-overview#implicit-answer-file-search-order).
+
+Embedded child-answer precedence uses the same documented search order. The
+[offline registry library](https://learn.microsoft.com/en-us/windows/win32/devnotes/offline-registry-library-portal)
+checks the explicit pointer without mounting hives in the host registry or saving
+modified hives.

@@ -606,8 +606,14 @@ an in-memory answer file, a random local guest password and fixed guest code.
 The ISO is created in an administrator/SYSTEM-only child directory before HCS
 grants the owned VM access, and is removed with the disposable child. The guest
 password never enters configuration, journal, command arguments or diagnostics.
-No baseline is mounted or modified by provisioning. A specialized image can
-omit setup assets. Removable-media discovery uses `Autounattend.xml`; the
+Before native create dispatch, fixed elevated Storage code mounts only the new
+child and writes the same answer into an absent or empty
+`Windows\Panther\Unattend` directory with administrator/SYSTEM permissions.
+This outranks a cached template answer; nonempty directories, reparse paths and
+an explicit offline `SYSTEM\Setup\UnattendFile` pointer are refused. The
+pointer check uses the system offline-registry library read-only, without loading
+hives into the live registry. The child is detached before HCS starts. No baseline
+is mounted or modified by provisioning. A specialized image can omit setup assets. Removable-media discovery uses `Autounattend.xml`; the
 ordinary-token media test inspects its name in the ISO's Joliet directory.
 
 An optional hash-pinned standalone native C++ probe runs only inside the guest,

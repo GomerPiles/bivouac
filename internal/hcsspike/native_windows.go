@@ -358,8 +358,8 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 	if err := appsandbox.CheckProtectedFile(c.directory()); err != nil {
 		return errors.New("spike child must inherit administrator protection")
 	}
-	// CreateDiffVhd creates only the new child; no host attach, mount, BCD or
-	// baseline ACL mutation occurs. Keep the default durable disk semantics.
+	// CreateDiffVhd creates only the new child. Optional setup then mounts only
+	// that child; the baseline remains pinned read-only with unchanged ACLs.
 	if err := vhd.CreateDiffVhd(c.disk(), c.Baseline, 0); err != nil {
 		return errors.New("cannot create spike differencing VHDX")
 	}

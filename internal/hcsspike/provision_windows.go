@@ -33,6 +33,9 @@ var makeISO string
 //go:embed guest_setup.ps1
 var guestSetup string
 
+//go:embed stage_setup.ps1
+var stageSetup string
+
 func validatePinned(c Config, f PinnedFile) error {
 	h, err := hex.DecodeString(f.SHA256)
 	if !localPath(f.Source) || within(c.Root, f.Source) || err != nil || len(h) != 32 {
@@ -164,24 +167,43 @@ func makeSetupISO(ctx context.Context, c Config) error {
 	}
 	password := "Bv!" + hex.EncodeToString(random[:])
 	clear(random[:])
-	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password)})
+	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
 	if err != nil {
 		return errors.New("cannot encode private setup input")
 	}
 	defer clear(data)
-	sys, err := windows.GetSystemDirectory()
-	if err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(makeISO))
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
-	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err = cmd.Run(); err != nil {
+	if err = runPrivateSetup(ctx, makeISO, data); err != nil {
 		return errors.New("disposable setup ISO creation failed")
+	}
+	if err = appsandbox.CheckProtectedFile(c.disk()); err != nil {
+		return errors.New("new child disk lost protection before offline setup")
+	}
+	if err = runPrivateSetup(ctx, stageSetup, data); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 10, 20, 30, 40, 50, 60, 61, 62, 63, 70:
+				return fmt.Errorf("offline child answer-file staging failed at step %d", exitErr.ExitCode())
+			}
+		}
+		return errors.New("offline child answer-file staging failed")
 	}
 	// No host staging file ever contains the local guest password. Only the
 	// protected child ISO/guest disk does; both are removed with this trial.
 	return nil
+}
+
+// Scripts are fixed code; private input is bounded JSON on stdin, never arguments
+// or output. The baseline handle remains pinned read-only in the caller.
+func runPrivateSetup(ctx context.Context, script string, data []byte) error {
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(script))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
+	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
 }

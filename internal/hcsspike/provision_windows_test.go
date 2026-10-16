@@ -198,3 +198,77 @@ func TestEmptySetupAssetsHaveStableJournalRoundTrip(t *testing.T) {
 		t.Fatal("empty asset slice differs after journal round trip")
 	}
 }
+
+func TestOfflineStagingGuardCompilesAndRejectsMissingHive(t *testing.T) {
+	if err := windows.NewLazySystemDLL("offreg.dll").NewProc("OROpenHive").Find(); err != nil {
+		t.Skip("Windows offline registry library unavailable")
+	}
+	_, source, found := strings.Cut(stageSetup, "Add-Type -TypeDefinition @\"\n")
+	if !found {
+		t.Fatal("offline API source missing")
+	}
+	source, _, found = strings.Cut(source, "\n\"@")
+	if !found {
+		t.Fatal("offline API source terminator missing")
+	}
+	script := "Add-Type -TypeDefinition @\"\n" + source + "\n\"@\n$data=[Console]::In.ReadToEnd() | ConvertFrom-Json;if([SpikeOfflineAnswer]::NoExplicitAnswer($data.path)){exit 1};exit 0"
+	path := filepath.Join(t.TempDir(), "absent.hive")
+	data, _ := json.Marshal(map[string]string{"path": path})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := runPrivateSetup(ctx, script, data); err != nil {
+		t.Fatal("offline guard failed to compile or accepted a missing hive")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("offline reader created a hive")
+	}
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		err := runPrivateSetup(ctx, stageSetup, []byte("invalid-json"))
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 10 {
+			t.Fatal("ordinary token reached offline staging")
+		}
+	}
+}
+
+func TestOfflineAnswerDirectoryGuardDoesNotReplaceContents(t *testing.T) {
+	_, function, found := strings.Cut(stageSetup, "function Assert-EmptyAnswerDirectory")
+	if !found {
+		t.Fatal("answer directory guard missing")
+	}
+	function, _, found = strings.Cut(function, "\ntry {")
+	if !found {
+		t.Fatal("answer directory guard terminator missing")
+	}
+	guard := "$ErrorActionPreference='Stop';function Assert-EmptyAnswerDirectory" + function
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.Mkdir(empty, 0700); err != nil {
+		t.Fatal(err)
+	}
+	occupied := filepath.Join(dir, "occupied")
+	if err := os.Mkdir(occupied, 0700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(occupied, "unattend.xml")
+	if err := os.WriteFile(sentinel, []byte("synthetic preserved answer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		path     string
+		accepted bool
+	}{{filepath.Join(dir, "absent"), true}, {empty, true}, {occupied, false}, {sentinel, false}} {
+		input, _ := json.Marshal(map[string]string{"path": item.path})
+		script := guard + "\n$data=[Console]::In.ReadToEnd() | ConvertFrom-Json;try{Assert-EmptyAnswerDirectory $data.path;exit 0}catch{exit 1}"
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := runPrivateSetup(ctx, script, input)
+		cancel()
+		if (err == nil) != item.accepted {
+			t.Fatal("answer directory guard accepted unsafe contents or refused empty directory")
+		}
+	}
+	content, err := os.ReadFile(sentinel)
+	if err != nil || string(content) != "synthetic preserved answer" {
+		t.Fatal("existing answer changed")
+	}
+}

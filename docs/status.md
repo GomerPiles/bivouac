@@ -90,14 +90,19 @@ components remain required. Optional pinned setup assets now generate per-trial
 setup media for generalized templates without modifying the baseline. An optional
 native guest probe checks setup/console readiness, hardware D3D11, presentation
 and GPU/desktop pixel readback through fixed authenticated SSH code. These new
-paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture;
-The guest attempt, including corrected `Autounattend.xml` media, reached native
-running/GPU assignment but timed out without reaching the agent. Read-only
-inspection of the stopped failed clone found the agent binary but no fixed
-setup-complete marker or MSI SSH-server binary. It did not establish the cause;
-selected offline template setup/service-state inspection is prepared. The clone
-was detached and verified cleanup removed its child/journal. Guest readiness,
-SSH and rendering still need a live pass.
+paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
+The guest trial reached native running/GPU assignment but timed out without
+reaching the agent. Read-only inspection of the independent template found
+setup/OOBE still in progress, a generalized-to-OOBE image state, no agent/SSH
+service registration and a cached answer that reseals into Audit mode and runs
+sysprep. Its hash was unchanged after inspection. The cached answer is a likely
+provisioning gate, not yet a proven cause of the timeout. Child-only answer
+staging now targets the higher-priority embedded directory and refuses explicit
+offline answer pointers or existing contents. Its first live attempt refused
+the template's pre-existing empty directory before native create; read-only
+inspection confirmed that condition, then cleanup removed the child/journal.
+The corrected empty-directory path needs a live trial. Guest readiness, SSH and
+rendering still need a live pass.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow
