@@ -15,6 +15,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
@@ -51,7 +52,10 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 		t.Fatal(err)
 	}
 	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper}
-	p.checkIsolation = func(context.Context) (string, error) { return NetworkPolicy() }
+	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
+		policy, err := NetworkPolicy()
+		return vm.SoftnetOptions{Binary: "/opt/softnet", Block: policy}, err
+	}
 	return p, r, provider.Spec{Name: name, Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "pair"}}
 }
 
@@ -78,7 +82,7 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 		t.Fatalf("logical pair list: %v %v %v", owned, foreign, err)
 	}
 	// A new provider process has only records/metadata, not saved process handles.
-	restarted, err := New(p.name, p.cfg, p.controllerID, r)
+	restarted, err := New(p.name, p.cfg, p.controllerID, argvRuntime{r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +144,9 @@ func TestPairRejectsMissingRecordAndForeignMetadata(t *testing.T) {
 
 func TestIsolationFailureBeforeClone(t *testing.T) {
 	p, r, spec := pairProvider(t)
-	p.checkIsolation = func(context.Context) (string, error) { return "", errors.New("privilege unavailable") }
+	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
+		return vm.SoftnetOptions{}, errors.New("privilege unavailable")
+	}
 	if err := p.Create(context.Background(), spec); err == nil {
 		t.Fatal("isolation failure accepted")
 	}
@@ -167,7 +173,7 @@ func TestPartialPairDeleteRetainsReservation(t *testing.T) {
 	if err := p.Create(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
-	p.exec = deleteFailure{r, spec.Name + "-engine"}
+	p.rt = argvRuntime{deleteFailure{r, spec.Name + "-engine"}}
 	if err := p.Delete(ctx, spec.Name); err == nil {
 		t.Fatal("delete failure hidden")
 	}
@@ -175,7 +181,7 @@ func TestPartialPairDeleteRetainsReservation(t *testing.T) {
 	if err != nil || !st.Exists {
 		t.Fatalf("companion deletion not reserved: %+v %v", st, err)
 	}
-	p.exec = r
+	p.rt = argvRuntime{r}
 	if err = p.Delete(ctx, spec.Name); err != nil {
 		t.Fatal(err)
 	}

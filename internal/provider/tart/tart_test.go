@@ -1,21 +1,97 @@
 package tart
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
-// recorder is a fake tart binary: it records argument arrays and answers
+// argvRunner records tart-shaped argument arrays; argvRuntime adapts it to
+// Runtime so assertions and fault injection read as command lines.
+type argvRunner interface {
+	Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error
+	Start(ctx context.Context, args []string, sink io.Writer) (Process, error)
+}
+
+type argvRuntime struct{ argv argvRunner }
+
+func (a argvRuntime) Clone(ctx context.Context, baseline, name string) error {
+	return a.argv.Run(ctx, []string{"clone", baseline, name}, nil, io.Discard)
+}
+
+func (a argvRuntime) Resize(ctx context.Context, name string, cpu, memoryMB int) error {
+	args := []string{"set", name}
+	if cpu > 0 {
+		args = append(args, "--cpu", strconv.Itoa(cpu))
+	}
+	if memoryMB > 0 {
+		args = append(args, "--memory", strconv.Itoa(memoryMB))
+	}
+	return a.argv.Run(ctx, args, nil, io.Discard)
+}
+
+func (a argvRuntime) Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error) {
+	args := []string{"run"}
+	if launch.Input {
+		args = append(args, "--input")
+	}
+	if launch.Share != "" {
+		args = append(args, "--dir=bivouac:"+launch.Share+":ro")
+	}
+	if launch.Softnet != nil {
+		args = append(args, "--net-softnet-block="+launch.Softnet.Block)
+	}
+	return a.argv.Start(ctx, append(args, name), sink)
+}
+
+func (a argvRuntime) execArgs(name string, argv []string, stdin bool) []string {
+	args := []string{"exec"}
+	if stdin {
+		args = append(args, "-i")
+	}
+	return append(append(args, name), argv...)
+}
+
+func (a argvRuntime) Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout io.Writer) error {
+	return a.argv.Run(ctx, a.execArgs(name, argv, stdin != nil), stdin, stdout)
+}
+
+func (a argvRuntime) Duplex(ctx context.Context, name string, argv []string) (net.Conn, error) {
+	return nil, a.argv.Run(ctx, a.execArgs(name, argv, true), nil, io.Discard)
+}
+
+func (a argvRuntime) Stop(ctx context.Context, name string, timeout time.Duration) error {
+	return a.argv.Run(ctx, []string{"stop", name, "--timeout", strconv.Itoa(int(timeout.Seconds()))}, nil, io.Discard)
+}
+
+func (a argvRuntime) Delete(ctx context.Context, name string) error {
+	return a.argv.Run(ctx, []string{"delete", name}, nil, io.Discard)
+}
+
+func (a argvRuntime) List(ctx context.Context) ([]vm.Entry, error) {
+	var out bytes.Buffer
+	if err := a.argv.Run(ctx, []string{"list"}, nil, &out); err != nil {
+		return nil, err
+	}
+	var entries []vm.Entry
+	return entries, json.Unmarshal(out.Bytes(), &entries)
+}
+
+// recorder is a fake VM runtime: it records argument arrays and answers
 // from a table.
 type recorder struct {
 	calls     [][]string
@@ -26,7 +102,8 @@ type recorder struct {
 	statusErr error // returned by `exec ... status` when set
 	session   string
 	diag      map[string][]byte // guest script mode -> stdout
-	launchOut string            // written by `tart run` instead of "started"
+	launchOut string            // written by the VM helper instead of "started"
+	readyErrs []error           // returned in turn by `exec ... true`
 	started   []*fakeProc
 }
 
@@ -70,19 +147,19 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 	switch args[0] {
 	case "clone":
 		if _, ok := r.vms[args[1]]; !ok {
-			return nil, &Error{Args: args, Stderr: "VM does not exist"}
+			return nil, errors.New("baseline does not exist")
 		}
 		r.vms[args[2]] = false
 		return nil, nil
 	case "list":
-		var out []listEntry
+		var out []vm.Entry
 		for n, running := range r.vms {
-			out = append(out, listEntry{Name: n, Source: "local", Running: running})
+			out = append(out, vm.Entry{Name: n, Running: running})
 		}
 		return json.Marshal(out)
 	case "delete":
 		if _, ok := r.vms[args[1]]; !ok {
-			return nil, &Error{Args: args, Stderr: "not found"}
+			return nil, fs.ErrNotExist
 		}
 		delete(r.vms, args[1])
 		return nil, nil
@@ -98,6 +175,11 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 		i := 1
 		if args[1] == "-i" {
 			i = 2
+		}
+		if len(args) == i+2 && args[i+1] == "true" && len(r.readyErrs) > 0 {
+			err := r.readyErrs[0]
+			r.readyErrs = r.readyErrs[1:]
+			return nil, err
 		}
 		if len(args) > i+2 && args[i+1] == guestPath {
 			switch args[i+2] {
@@ -141,8 +223,8 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 			t.Fatal(err)
 		}
 	}
-	cfg := config.Tart{Baseline: "base", CPU: 4, MemoryGB: 8, ExtraArgs: []string{"--no-audio"}, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
-	p, err := New("macos", cfg, "ctl-1", r)
+	cfg := config.Tart{Baseline: "base", CPU: 4, MemoryGB: 8, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
+	p, err := New("macos", cfg, "ctl-1", argvRuntime{r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +236,8 @@ func TestLifecycleArguments(t *testing.T) {
 	p := newProvider(t, r)
 	home := os.Getenv("TART_HOME")
 	ctx := context.Background()
-	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", CPU: 4, MemoryMB: 8192, Launch: provider.Launch{Args: []string{"--no-audio"}}, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
-	// Simulate tart clone creating the directory before the marker is written.
+	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
+	// Simulate the clone creating the directory before the marker is written.
 	if err := os.MkdirAll(filepath.Join(home, "vms", spec.Name), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +255,7 @@ func TestLifecycleArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := r.calls[len(r.calls)-1]
-	if got := strings.Join(run, " "); got != "run --no-graphics --no-audio bivouac-macos-abc" {
+	if got := strings.Join(run, " "); got != "run --input bivouac-macos-abc" {
 		t.Fatalf("run args = %q", got)
 	}
 	if err := p.WaitReady(ctx, spec.Name); err != nil {
@@ -236,7 +318,7 @@ func TestDeleteRefusesBaselineAndForeign(t *testing.T) {
 	}
 	for _, c := range r.calls {
 		if c[0] == "delete" {
-			t.Fatalf("tart delete was invoked: %v", c)
+			t.Fatalf("delete was invoked: %v", c)
 		}
 	}
 	owned, foreign, err := p.List(ctx)

@@ -2,6 +2,7 @@ package install
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -44,5 +45,22 @@ func TestPlistEscapesValues(t *testing.T) {
 	}
 	if _, err := renderPlist("/bin/biv\nouac", "/tmp"); err == nil {
 		t.Fatal("control character accepted in plist value")
+	}
+}
+
+func TestOtherHomeNeverTouchesTheLoginItem(t *testing.T) {
+	t.Setenv("BIVOUAC_HOME", t.TempDir())
+	ctx := context.Background()
+	if _, err := Install(ctx, Paths{Binary: "/usr/local/bin/bivouac", LogDir: t.TempDir()}); !errors.Is(err, errOtherHome) {
+		t.Fatalf("Install = %v", err)
+	}
+	if err := Uninstall(ctx); !errors.Is(err, errOtherHome) {
+		t.Fatalf("Uninstall = %v", err)
+	}
+	if err := Kickstart(ctx); !errors.Is(err, errOtherHome) {
+		t.Fatalf("Kickstart = %v", err)
+	}
+	if plist, loaded, err := Installed(ctx); plist != "" || loaded || err != nil {
+		t.Fatalf("Installed = %q, %v, %v", plist, loaded, err)
 	}
 }

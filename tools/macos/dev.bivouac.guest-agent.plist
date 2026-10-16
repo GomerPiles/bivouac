@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- bivouac guest agent for macOS baselines. Install the darwin/arm64 bivouac
+     binary at /usr/local/bin/bivouac and this file in /Library/LaunchAgents
+     (root:wheel, 0644). It runs in the auto-login user's Aqua session only. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.bivouac.guest-agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/bivouac</string>
+		<string>guest-agent</string>
+	</array>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/bin:/usr/bin:/usr/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<!-- The runner is backgrounded from an agent command; an agent restart
+	     must not take it down with the job's process group. -->
+	<key>AbandonProcessGroup</key>
+	<true/>
+</dict>
+</plist>

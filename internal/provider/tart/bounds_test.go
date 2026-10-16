@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 )
 
@@ -126,6 +128,25 @@ func TestGuestOperationsRequireOwnership(t *testing.T) {
 	}
 }
 
+func TestWaitReadyRetriesOnlyAnUnreachableAgent(t *testing.T) {
+	p, r := ownedFixture(t)
+	outdated := &guestagent.VersionError{Agent: guestagent.Version + 1, Host: guestagent.Version}
+	r.readyErrs = []error{fmt.Errorf("%w: connection reset", guestagent.ErrUnavailable), outdated, nil}
+	err := p.WaitReady(context.Background(), fixtureName)
+	var version *guestagent.VersionError
+	if !errors.As(err, &version) || len(r.readyErrs) != 1 {
+		t.Fatalf("err = %v, %d probes left", err, len(r.readyErrs))
+	}
+
+	p, r = ownedFixture(t)
+	r.readyErrs = []error{guestagent.ErrUnavailable, guestagent.ErrUnavailable, guestagent.ErrUnavailable}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := p.WaitReady(ctx, fixtureName); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unreachable agent: %v", err)
+	}
+}
+
 func TestWaitReadyRequiresAquaSession(t *testing.T) {
 	for _, session := range []string{"Background", "LoginWindow", strings.Repeat("A", 100), "evil\x1b[0m"} {
 		p, r := ownedFixture(t)
@@ -147,7 +168,7 @@ func TestWaitReadyRequiresAquaSession(t *testing.T) {
 func TestStartRunnerDoesNotEchoGuestOutput(t *testing.T) {
 	p, r := ownedFixture(t)
 	failing := &startOutput{recorder: r, out: "unexpected ghs_" + strings.Repeat("a", 30)}
-	p.exec = failing
+	p.rt = argvRuntime{failing}
 	err := p.StartRunner(context.Background(), fixtureName, []byte("secret-jit"))
 	if err == nil || strings.Contains(err.Error(), "ghs_") || strings.Contains(err.Error(), "unexpected") {
 		t.Fatalf("StartRunner error: %v", err)
@@ -180,12 +201,6 @@ func TestLaunchLogIsRedactedAndBounded(t *testing.T) {
 	}
 	if sink.Len() > launchLogLimit+4096 {
 		t.Fatalf("launch log %d bytes", sink.Len())
-	}
-	p, r = ownedFixture(t)
-	r.vms[fixtureName] = false
-	p.cfg.ExtraArgs = []string{"--serial"}
-	if err := p.Start(context.Background(), fixtureName, &sink); err == nil || len(r.started) != 0 {
-		t.Fatal("guest serial console attached to the launch log")
 	}
 }
 
@@ -281,7 +296,7 @@ func TestDiagnosticsTarBombs(t *testing.T) {
 			parent := t.TempDir()
 			dir := filepath.Join(parent, "out")
 			budget := c.budget
-			err := p.collectArchive(context.Background(), []string{"exec", fixtureName, guestPath, "diag", "/r"}, dir, &budget)
+			err := p.collectArchive(context.Background(), fixtureName, []string{guestPath, "diag", "/r"}, dir, &budget)
 			switch {
 			case name == "empty-input":
 				if err != nil {

@@ -181,7 +181,7 @@ func TestPartialHelperInstallationFallsBackOnlyAfterRemoval(t *testing.T) {
 		r := newRecorder()
 		p := newProvider(t, r)
 		writeMarker(t, p, "bivouac-macos-fixture")
-		p.exec = failedHelper{r, cleanupFails}
+		p.rt = argvRuntime{failedHelper{r, cleanupFails}}
 		err := p.StartRunner(context.Background(), "bivouac-macos-fixture", []byte("synthetic-jit"))
 		if (err != nil) != cleanupFails {
 			t.Fatal("partial helper cleanup outcome", err)

@@ -141,7 +141,8 @@ type AppSandbox struct {
 	SSHKey        string `toml:"ssh_key"`
 }
 
-// Tart configures the Tart CLI provider.
+// Tart configures the macOS provider. Guests are clones of a local
+// Tart-format baseline, run by bivouac's own VM helper.
 type Tart struct {
 	// Containers optionally adds an isolated Linux engine clone to each job.
 	Containers *Containers `toml:"containers"`
@@ -150,24 +151,21 @@ type Tart struct {
 	// CPU and MemoryGB size each clone; 0 keeps the baseline's values.
 	CPU      int `toml:"cpu"`
 	MemoryGB int `toml:"memory_gb"`
-	// ExtraArgs are appended to `tart run --no-graphics`, as an array.
-	ExtraArgs []string `toml:"extra_args"`
 	// RunnerDir is the preinstalled runner inside the guest.
 	RunnerDir string `toml:"runner_dir"`
-	// Binary is the tart executable; default "tart" on PATH.
-	Binary string `toml:"binary"`
 	// HostVMLimit is Apple's concurrent macOS guest ceiling per host.
 	HostVMLimit int `toml:"host_vm_limit"`
 	// ForeignSlots are guests another manager (Tartelet) may be running at
 	// the same time; bivouac also counts running VMs it does not own.
 	ForeignSlots int `toml:"foreign_slots"`
 	// BootstrapShare is an optional host directory shared read-only into the
-	// guest for bootstrap files. Empty means no share.
+	// guest (as /Volumes/My Shared Files/bivouac). Empty means no share.
 	BootstrapShare string `toml:"bootstrap_share"`
 }
 
-// Containers is deliberately limited to Tart Linux guests. No host daemon,
-// arbitrary socket, launch flags, or host mounts are configurable.
+// Containers is deliberately limited to Linux guests from a local
+// Tart-format baseline. No host daemon, arbitrary socket, launch options, or
+// host mounts are configurable.
 type Containers struct {
 	Engine   string `toml:"engine"` // docker or podman
 	Baseline string `toml:"baseline"`
@@ -275,9 +273,6 @@ func (c *Config) applyDefaults() {
 		if p.Type == "tart" && p.Tart != nil {
 			if p.Tart.RunnerDir == "" {
 				p.Tart.RunnerDir = "/Users/admin/actions-runner"
-			}
-			if p.Tart.Binary == "" {
-				p.Tart.Binary = "tart"
 			}
 			if p.Tart.HostVMLimit == 0 {
 				p.Tart.HostVMLimit = 2
@@ -446,16 +441,6 @@ func (c *Config) Validate() error {
 			if strings.HasPrefix(p.Tart.Baseline, NamePrefix) {
 				errs = append(errs, fmt.Errorf("provider %q: tart.baseline may not start with %q", name, NamePrefix))
 			}
-			for _, a := range p.Tart.ExtraArgs {
-				if strings.ContainsAny(a, " \t\n") {
-					errs = append(errs, fmt.Errorf("provider %q: tart.extra_args entries are single arguments, not shell strings: %q", name, a))
-				}
-				// The launch log is neither redacted nor bounded, so guest
-				// console output must not reach it. Start refuses it too.
-				if a == "--serial" || strings.HasPrefix(a, "--serial=") {
-					errs = append(errs, fmt.Errorf("provider %q: tart.extra_args may not include --serial", name))
-				}
-			}
 			if p.Tart.HostVMLimit < 1 || p.Tart.ForeignSlots < 0 || p.Tart.ForeignSlots >= p.Tart.HostVMLimit {
 				errs = append(errs, fmt.Errorf("provider %q: need 0 <= foreign_slots < host_vm_limit", name))
 			}
@@ -477,13 +462,6 @@ func (c *Config) Validate() error {
 				}
 				if c.Cache.Enabled || p.Tart.BootstrapShare != "" {
 					errs = append(errs, fmt.Errorf("provider %q: isolated containers prohibit the host cache and bootstrap shares", name))
-				}
-				for _, a := range p.Tart.ExtraArgs {
-					switch a {
-					case "--no-audio", "--no-clipboard", "--no-keyboard", "--no-pointer", "--no-trackpad":
-					default:
-						errs = append(errs, fmt.Errorf("provider %q: isolated containers prohibit tart extra argument %q", name, a))
-					}
 				}
 			}
 		case "":
@@ -586,7 +564,6 @@ idle_pool = 1               # jit demand only; kept warm while on
 baseline = "ci-macos"
 cpu = 6
 memory_gb = 8
-extra_args = ["--no-audio", "--no-clipboard"]
 runner_dir = "/Users/admin/actions-runner"
 host_vm_limit = 2
 foreign_slots = 1            # leave one macOS guest slot for Tartelet during validation

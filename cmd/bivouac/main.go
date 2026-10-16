@@ -19,10 +19,12 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/engine"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/paths"
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 const usage = `usage: bivouac <command> [flags]
@@ -107,6 +109,24 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 	if cmd == "appsandbox" {
 		return appsandboxCmd(ctx, args, os.Stdout)
+	}
+	if cmd == "guest-agent" {
+		if len(args) != 0 {
+			return errUsage
+		}
+		return guestagent.RunAgent(ctx)
+	}
+	if cmd == "vm" {
+		if len(args) == 0 || args[0] != "run" {
+			return errUsage
+		}
+		opts, err := vm.ParseArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		// The helper handles SIGTERM and SIGINT itself, logging the power-off
+		// and waiting for the VM to stop before it releases the lock.
+		return vm.RunHelper(context.WithoutCancel(ctx), opts, os.Stdout)
 	}
 	if cmd == "engine" {
 		if len(args) == 1 {

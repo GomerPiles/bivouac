@@ -88,7 +88,7 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 
 func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error {
 	if p.cfg.Containers == nil {
-		return p.startVM(ctx, name, p.RunArgs(name, p.cfg.ExtraArgs), log)
+		return p.startVM(ctx, name, p.runnerLaunch(), log)
 	}
 	a, b, err := p.pairStatus(ctx, name)
 	if err != nil {
@@ -97,10 +97,11 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 	if !a.Exists || !b.Exists || !a.Owned || !b.Owned {
 		return provider.ErrNotOwned
 	}
-	policy, err := p.isolation(ctx)
+	softnet, err := p.isolation(ctx)
 	if err != nil {
 		return err
 	}
+	policy := softnet.Block
 	// Save the effective policy for adoption; it is not allowed to change on a
 	// live job. Both markers remain until their respective VM is deleted.
 	for _, n := range []string{name, name + "-engine"} {
@@ -114,10 +115,11 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 			return err
 		}
 	}
-	if err = p.startVM(ctx, name+"-engine", isolatedArgs(name+"-engine", policy), log); err != nil {
+	// Isolated guests get Softnet, no input devices, and no shares.
+	if err = p.startVM(ctx, name+"-engine", Launch{Softnet: &softnet}, log); err != nil {
 		return err
 	}
-	return p.startVM(ctx, name, isolatedArgs(name, policy), log)
+	return p.startVM(ctx, name, Launch{Softnet: &softnet}, log)
 }
 
 func (p *Provider) WaitReady(ctx context.Context, name string) error {
@@ -164,30 +166,30 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 		if err != nil {
 			return errors.New("open container guest helper")
 		}
-		_, err = p.output(ctx, []string{"exec", f.name, "install", "-m", "0600", "/dev/null", engine.GuestHelper}, nil)
+		_, err = p.output(ctx, f.name, []string{"install", "-m", "0600", "/dev/null", engine.GuestHelper}, nil)
 		if err == nil {
-			_, err = p.output(ctx, []string{"exec", "-i", f.name, "dd", "of=" + engine.GuestHelper, "status=none"}, file)
+			_, err = p.output(ctx, f.name, []string{"dd", "of=" + engine.GuestHelper, "status=none"}, file)
 		}
 		_ = file.Close()
 		if err != nil {
 			return errors.New("deliver private container helper")
 		}
-		if _, err = p.output(ctx, []string{"exec", f.name, "chmod", "0700", engine.GuestHelper}, nil); err != nil {
+		if _, err = p.output(ctx, f.name, []string{"chmod", "0700", engine.GuestHelper}, nil); err != nil {
 			return err
 		}
-		if _, err = p.output(ctx, []string{"exec", f.name, engine.GuestHelper, "engine", "dns"}, nil); err != nil {
+		if _, err = p.output(ctx, f.name, []string{engine.GuestHelper, "engine", "dns"}, nil); err != nil {
 			return errors.New("configure public guest DNS")
 		}
 	}
 	// Verify a matching CLI exists in the runner baseline. Never install tools.
-	if _, err = p.output(ctx, []string{"exec", name, p.cfg.Containers.Engine, "--version"}, nil); err != nil {
+	if _, err = p.output(ctx, name, []string{p.cfg.Containers.Engine, "--version"}, nil); err != nil {
 		return errors.New("container CLI missing from macOS baseline")
 	}
 	i, err := p.pairRecord(name)
 	if err != nil {
 		return err
 	}
-	plan := RelayPlan{StatePath: p.records.Path(), Home: p.home, Binary: p.cfg.Binary, Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
+	plan := RelayPlan{StatePath: p.records.Path(), Home: p.home, Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
 	start := p.startRelay
 	if start == nil {
 		start = startDetachedRelay
@@ -237,7 +239,7 @@ func (p *Provider) engineHealthy(ctx context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	_, err = p.output(ctx, []string{"exec", name, engine.GuestHelper, "engine", "probe"}, nil)
+	_, err = p.output(ctx, name, []string{engine.GuestHelper, "engine", "probe"}, nil)
 	if err != nil {
 		// Both VMs run, are owned, and the policy holds: a failed probe is a
 		// guest agent transport failure. The relay retires the pair itself on

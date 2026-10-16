@@ -87,6 +87,14 @@ func (e env) run(ctx context.Context, args []string) error {
 		return fail(err)
 	}
 	defer closeProviders(providers)
+	// Only the daemon runs guests; list and cleanup work without this.
+	for name, p := range providers {
+		if r, ok := p.(interface{ CheckRuntime(context.Context) error }); ok {
+			if err := r.CheckRuntime(ctx); err != nil {
+				return fail(fmt.Errorf("provider %q: %w", name, err))
+			}
+		}
+	}
 	var cacheService *cache.Service
 	if cfg.Cache.Enabled {
 		service, cacheErr := cache.Start(e.layout.Cache, cfg.Cache.Listen, cfg.Cache.GuestHost, cfg.Cache.MaxGB<<30, cfg.Cache.MaxObjectMB<<20, cfg.Budget.JobTimeout.Duration+time.Hour, log)
