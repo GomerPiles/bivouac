@@ -90,6 +90,15 @@ manager. Removing it does not stop an active manager or VM. Privileged App Sandb
 and its broker remain explicit operator prerequisites; this task never installs
 or launches an elevated engine, service, or broker.
 
+The portable Windows `Control.ps1` launcher checks native process-job membership
+before starting an absent manager. A hidden window is not an independent
+lifetime: a manager inherits its launcher's Windows job, and a development app
+can close that job while native App Sandbox guests survive. A contained or
+unverifiable launch is refused before prerequisite checks, stale-PID archival,
+or mode changes. Use the ordinary desktop shortcut or the explicitly installed
+login task. Mode commands to an already running manager remain available from
+contained shells. No startup task or elevated process is installed implicitly.
+
 ## Demand: runner scale sets
 
 One scale set per provider entry, named by `scaleset` in the config and
