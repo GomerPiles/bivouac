@@ -401,6 +401,78 @@ func (s *Store) fill(ctx context.Context, id string, size int64, fetch func(cont
 	return record, nil
 }
 
+// stage reserves capacity for bytes written outside a fill, such as a relayed
+// upload whose identity is known only once upstream commits it. Staged files
+// use the fill prefix, so startup discards any that an interruption leaves.
+type stage struct {
+	store *Store
+	bytes int64
+}
+
+func (s *Store) newStage() *stage { return &stage{store: s} }
+
+func (s *Store) stageFile() (*os.File, error) { return os.CreateTemp(s.dir, "fill-") }
+
+// grow reserves n more bytes, evicting idle objects by last use as needed.
+func (st *stage) grow(n int64) error {
+	s := st.store
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n < 0 || st.bytes+n > s.maxObject {
+		return failure("object_limit")
+	}
+	if err := s.makeRoom(n, 0); err != nil {
+		return err
+	}
+	s.reserved += n
+	st.bytes += n
+	return nil
+}
+
+func (st *stage) shrink(n int64) {
+	st.store.mu.Lock()
+	defer st.store.mu.Unlock()
+	st.store.reserved -= n
+	st.bytes -= n
+}
+
+// commit stores exactly the staged byte count that write produces under key and
+// hands the reservation to the new entry. write may delete staged files as it
+// copies them, so disk use exceeds the reservation by at most one staged file.
+// present reports that key is already stored or filling; nothing is written.
+func (st *stage) commit(ctx context.Context, key string, write func(context.Context, io.Writer) error) (present bool, err error) {
+	s := st.store
+	id := identity(key)
+	s.mu.Lock()
+	size := st.bytes
+	release := func() { s.reserved -= size; st.bytes = 0 }
+	if _, ok := s.entries[id]; ok || s.flights[id] != nil {
+		release()
+		s.mu.Unlock()
+		return true, nil
+	}
+	if err = s.makeRoom(0, 1); err != nil {
+		release()
+		s.mu.Unlock()
+		return false, err
+	}
+	pending := &flight{done: make(chan struct{})}
+	s.flights[id] = pending
+	s.mu.Unlock()
+	record, err := s.fill(ctx, id, size, write)
+	s.mu.Lock()
+	release()
+	if err == nil {
+		s.entries[id] = record
+		s.used += record.Size
+	}
+	pending.err = err
+	delete(s.flights, id)
+	close(pending.done)
+	s.mu.Unlock()
+	return false, err
+}
+
 // StoreDiagnostics counts local losses without retaining object identifiers.
 type StoreDiagnostics struct {
 	Evictions             uint64 `json:"evictions"`

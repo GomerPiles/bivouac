@@ -42,6 +42,7 @@ type Config struct {
 type Cache struct {
 	Enabled      bool   `toml:"enabled"`
 	ReleaseProxy bool   `toml:"release_proxy"`
+	StoreUploads bool   `toml:"store_uploads"`
 	Listen       string `toml:"listen"`
 	GuestHost    string `toml:"guest_host"`
 	MaxGB        int64  `toml:"max_gb"`
@@ -329,6 +330,9 @@ func (c *Config) Validate() error {
 	var errs []error
 	if c.Cache.ReleaseProxy && !c.Cache.Enabled {
 		errs = append(errs, errors.New("cache.release_proxy requires cache.enabled"))
+	}
+	if c.Cache.StoreUploads && !c.Cache.Enabled {
+		errs = append(errs, errors.New("cache.store_uploads requires cache.enabled"))
 	}
 	if c.Cache.Enabled {
 		if ip := net.ParseIP(c.Cache.GuestHost); ip == nil || ip.IsUnspecified() || ip.IsMulticast() {

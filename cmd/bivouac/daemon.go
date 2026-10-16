@@ -101,6 +101,9 @@ func (e env) run(ctx context.Context, args []string) error {
 		if cacheErr == nil && cfg.Cache.ReleaseProxy {
 			service.EnableReleaseProxy()
 		}
+		if cacheErr == nil && cfg.Cache.StoreUploads {
+			service.EnableUploadStore()
+		}
 		if cacheErr != nil {
 			log.Warn("cache service unavailable; guests use upstream downloads")
 		} else {
