@@ -226,6 +226,9 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	client := ssh.NewClient(clientConn, channels, requests)
 	defer func() { _ = client.Close() }()
 	report.SSHAuthenticated = true
+	if err = checkSSHExecution(sshCtx, client, &report); err != nil {
+		return report, err
+	}
 	if c.RenderProbe != nil {
 		if err = a.verify(ctx, c, runtimeID); err != nil {
 			return report, err

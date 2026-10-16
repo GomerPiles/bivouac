@@ -625,9 +625,14 @@ ordinary-token media test inspects its name in the ISO's Joliet directory.
 An optional hash-pinned standalone native C++ probe runs only inside the guest,
 through a small fixed SSH bootstrap and an interactive guest scheduled task.
 The command stays below the Windows default shell limit: trusted embedded code
-and instance data arrive in separate fields of stdin JSON. Fixed numeric failure
+and instance data arrive in separate fields of newline-framed stdin JSON.
+Execution does not depend on stdin EOF. Separate bounded fixed command/stdin
+round trips distinguish authentication from remote command execution before a
+five-minute desktop request; all fit inside the guest budget. A timeout closes
+the owned SSH client instead of replaying a command. Fixed numeric failure
 stages replace raw guest errors. The setup marker is written only after the
-agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI without adding cgo to the Go host.
+agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI
+without adding cgo to the Go host.
 Readiness requires setup completion, the intended console user's Explorer and
 Default input desktop. The probe requires hardware D3D11 (software adapters are
 rejected), successful windowed presentation, and matching red/green pixels in

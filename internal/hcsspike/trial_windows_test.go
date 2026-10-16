@@ -77,7 +77,7 @@ func (f *fakeBackend) Probe(_ context.Context, _ Config, _ string) (Report, erro
 	if f.probeChange != nil {
 		f.probeChange(f.vm)
 	}
-	return Report{AgentConnected: true, DisplayReady: true, SSHAuthenticated: f.probeErr == nil}, f.probeErr
+	return Report{AgentConnected: true, DisplayReady: true, SSHAuthenticated: f.probeErr == nil, SSHCommandReady: f.probeErr == nil, SSHStdinReady: f.probeErr == nil}, f.probeErr
 }
 
 func testJournal(t *testing.T) (Config, *journal) {

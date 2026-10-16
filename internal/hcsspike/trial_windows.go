@@ -60,6 +60,8 @@ type Report struct {
 	GPUAssigned      bool   `json:"gpu_assigned"`
 	DisplayReady     bool   `json:"display_ready"`
 	SSHAuthenticated bool   `json:"ssh_authenticated"`
+	SSHCommandReady  bool   `json:"ssh_command_ready"`
+	SSHStdinReady    bool   `json:"ssh_stdin_ready"`
 	Cleaned          bool   `json:"cleaned"`
 }
 

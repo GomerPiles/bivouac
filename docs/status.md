@@ -94,20 +94,21 @@ paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
 The full offline trial with 2 CPUs and 4 GiB RAM validates child-only answer
 staging, detach-before-start, native running, GPU assignment, guest-agent
 initialization, reported display-driver readiness and ephemeral authenticated
-SSH. Read-only inspection after failure confirms setup/OOBE complete, the
-intended autologon account and registered agent/SSH services. The fixed desktop
-command failed before returning a render report; the setup-complete marker was
-absent. The stopped child was detached and cleanup confirmed native absence and
-removed its disk/journal. Only the lock remains.
+SSH. Read-only inspection confirms setup/OOBE complete, the intended autologon
+account, registered agent/SSH services and the setup-complete marker. The desktop
+validation request timed out without a fixed step or render report. Inspection
+detached the stopped child and cleanup confirmed native absence and removed its
+disk/journal. Only the lock remains.
 The independent template's cached Audit/sysprep answer is overridden only inside
-the new child. Its pinned hash was unchanged by read-only inspection. Short
-specialization commands within the Windows schema limit are now live validated.
-The desktop SSH command was 9,954 characters, exceeding the default command
-shell limit. It now uses a small fixed launcher with the embedded script and
-instance data on stdin; an ordinary-token fixture passes a larger payload
-through cmd.exe without changing data into code. Guest setup now waits for the
-agent service to reach Running before writing its marker. These corrections and
-bounded numeric failure stages need a live retry. Console readiness, hardware
+the new child; its pinned hash was unchanged by read-only inspection. Short
+specialization commands and the agent-service readiness wait are live validated.
+The desktop launcher stays below the shell command limit. Its payload is now
+newline-framed so it need not wait for stdin EOF; a large ordinary-token fixture
+executes through cmd.exe while stdin remains open. A timed-out request closes
+its owned SSH client. New separate 30-second command and framed-stdin checks
+report fixed booleans before the desktop request, which has its own five-minute
+bound inside the guest budget. The timeout's cause is not established. These
+transport diagnostics need live validation; console readiness, hardware
 rendering/presentation and pixel readback remain unverified.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled

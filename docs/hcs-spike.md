@@ -29,22 +29,24 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
 The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
 answer staging, protected permissions, detach-before-start, native running/GPU
 assignment, guest-agent initialization, reported display-driver readiness and
-ephemeral authenticated SSH. Its fixed desktop command failed without a render
-report. Read-only inspection after confirmed native absence found setup/OOBE
-complete, the expected autologon account and registered agent/SSH services, but
-no setup-complete marker. Inspection detached the child and matching cleanup
-removed its disk/journal.
+ephemeral authenticated SSH. Its desktop validation request timed out without a
+fixed step or render report. Read-only inspection after confirmed native absence
+found setup/OOBE complete, the expected autologon account, registered agent/SSH
+services and the setup-complete marker. Inspection detached the child and
+matching cleanup removed its disk/journal.
 
 The independent template's cached Audit/sysprep answer is overridden only inside
 the disposable child; its pinned hash was unchanged by read-only inspection.
-The short specialization script path is live validated. The previous desktop
-SSH command was 9,954 characters, exceeding the default Windows command shell
-limit. It now invokes a small fixed launcher; the embedded script and instance
-data travel through stdin JSON. A regression sends a larger payload through
-cmd.exe and verifies that data remains literal. Guest setup waits for the agent
-service to reach Running before marking completion. Fixed numeric error stages
-identify readiness/console, probe transfer and task-launch failures without raw
-guest diagnostics. These corrections need a live retry. Desktop readiness,
+The short specialization path and service-readiness marker are live validated.
+The small desktop launcher avoids the Windows command shell limit. Its JSON
+payload now ends with a newline; execution begins on that frame without waiting
+for stdin EOF. An ordinary-token regression passes a larger-than-probe payload
+through cmd.exe while stdin stays open. Two separate 30-second checks distinguish
+fixed SSH command execution from framed-stdin delivery before desktop validation,
+which has its own five-minute bound within the overall guest budget. A timeout
+closes the owned SSH client, and no command is replayed. Only fixed booleans,
+numeric stages and sanitized errors are retained. The timeout's cause remains
+unproven; these transport diagnostics need a live retry. Desktop readiness,
 hardware rendering/presentation and pixel readback remain unverified.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
@@ -193,7 +195,9 @@ operator agreement on those resources.
    configuration is a refusal, not an invitation to bypass proof.
 
 Success reports `agent_connected`, `gpu_assigned` (when requested),
-`display_ready`, `ssh_authenticated` and `cleaned`. These mean that HCS accepted
+`display_ready`, `ssh_authenticated`, `ssh_command_ready`, `ssh_stdin_ready` and
+`cleaned`. The two SSH execution fields distinguish a fixed no-input command
+from a framed-stdin command round trip. These mean that HCS accepted
 GPU assignment, the guest agent reported the display driver ready, SSH actually
 authenticated, and cleanup completed. With `render_probe`, success also requires
 `guest_ready`, `desktop_ready`, `hardware_d3d11`, `presented` and `pixel_readback`.
