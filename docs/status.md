@@ -105,15 +105,13 @@ embedded hash and the probe against its configured pin before execution. This
 path passes live: setup readiness, the intended active console user's Explorer,
 the Default input desktop and interactive native-probe execution are confirmed.
 Driver destinations require the documented
-`C:\Windows\System32\HostDriverStore\FileRepository` tree. With the corrected
-path, the pinned native probe's saved report confirms hardware D3D11 on the
-host GPU, successful presentation and both GPU and composited-desktop pixel
-checks (stage 7, HRESULT 0). Read-only inspection verifies the report and probe
-hash. The SSH report was rejected as malformed, so the complete automated
-success path is not yet validated. The guest now writes and flushes JSON through
-the console directly; parse failures report only byte counts and numeric offsets.
-A synthetic successful report passes through the real framed launcher under
-Windows PowerShell. These reporting changes await a live trial.
+`C:\Windows\System32\HostDriverStore\FileRepository` tree. The complete guarded
+trial passes: setup and console readiness, authenticated SSH, hardware D3D11 on
+the host GPU, successful presentation and both GPU and composited-desktop pixel
+checks (stage 7, HRESULT 0). The host accepts the strict JSON report, written and
+flushed directly through the guest console. Numeric diagnostics confirm one
+GPU-PV device without a problem code after 136 copied driver files. The owned
+VM, child disk and journal are removed, with native absence confirmed.
 Corrected hidden-folder inspection and matching cleanup finish successfully;
 the VM, child and journal are removed and only the trial lock remains. Some
 files observed live were absent in the stopped clone after forced termination,

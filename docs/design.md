@@ -684,15 +684,16 @@ bulk transfer still stalls after receiving its length header. Media delivery
 of the public validation assets with small SSH metadata, setup/console readiness,
 Default input desktop and interactive native-probe execution pass live. Driver
 destinations require `C:\Windows\System32\HostDriverStore\FileRepository`.
-With that path, the pinned native probe's saved report confirms hardware D3D11,
-presentation and GPU/desktop pixel readback (stage 7, HRESULT 0); read-only
-inspection verifies the report and probe hash. The SSH report was malformed,
-so complete automated success remains pending. The guest now writes and flushes
-JSON directly to the console; strict parse failures expose only byte counts and
-numeric offsets. A synthetic report passes through the real framed launcher,
-but these reporting changes await live validation. Forced termination can leave
-the stopped disk without files already observed live; read-only inspection does not override a completed live
-check. Process-loss recovery and networking/isolation remain unverified.
+The complete guarded trial passes with that path: setup/console readiness,
+authenticated SSH, hardware D3D11, presentation and GPU/desktop pixel readback
+(stage 7, HRESULT 0). The guest writes and flushes JSON directly to the console;
+the host accepts the strict report over SSH. Numeric diagnostics confirm one
+GPU-PV device without a problem code after 136 copied driver files. Native
+absence and automatic child/journal cleanup are confirmed. Parse failures expose
+only byte counts and numeric offsets. Forced termination can leave the stopped
+disk without files already observed live; read-only inspection does not override
+a completed live check. Input, process-loss recovery and networking/isolation
+remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.
