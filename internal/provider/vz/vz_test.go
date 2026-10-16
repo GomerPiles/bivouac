@@ -475,7 +475,8 @@ func TestCheckNestedFollowsTheHost(t *testing.T) {
 // A store too deep for guest agent sockets must stop the daemon at startup,
 // before it accepts a job whose guest could never start.
 func TestRuntimeRefusesStoreTooLongForAgentSockets(t *testing.T) {
-	p, err := New("macos", config.VZ{}, "controller", "/"+strings.Repeat("v", 100), nil)
+	store := filepath.Join(t.TempDir(), strings.Repeat("v", 100))
+	p, err := New("macos", config.VZ{}, "controller", store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
