@@ -1,0 +1,12 @@
+name: Isolated cache validation
+description: Exercise official Actions archives and public release downloads on a disposable guest
+inputs:
+  mode:
+    required: true
+    description: save, restore, fallback, outage, limited, or mixed
+  nonce:
+    required: true
+    description: Unique identifier shared by save and restore dispatches
+runs:
+  using: node24
+  main: index.cjs
