@@ -9,10 +9,13 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 // NetworkPolicy includes every local IPv4 address/subnet (including public
@@ -66,40 +69,53 @@ func compact(a []string) []string {
 }
 
 // CheckIsolation does not create a network or modify privilege configuration.
-// Softnet's hidden probe exits before vmnet/DHCP initialization.
-func CheckIsolation(ctx context.Context) (string, error) {
+// Softnet's hidden probe exits before vmnet/DHCP initialization. The result
+// is how the VM helper runs softnet, with the current block list.
+func CheckIsolation(ctx context.Context) (vm.SoftnetOptions, error) {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return "", errors.New("isolated container pairs require Apple Silicon macOS")
+		return vm.SoftnetOptions{}, errors.New("isolated container pairs require Apple Silicon macOS")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	bin, err := exec.LookPath("softnet")
+	found, err := exec.LookPath("softnet")
 	if err != nil {
-		return "", errors.New("softnet is required; no NAT fallback")
+		return vm.SoftnetOptions{}, errors.New("softnet is required; no NAT fallback")
+	}
+	bin, err := filepath.EvalSymlinks(found)
+	if err == nil {
+		bin, err = filepath.Abs(bin)
+	}
+	if err != nil {
+		return vm.SoftnetOptions{}, errors.New("resolve softnet")
 	}
 	helper := CLI{Binary: bin}
-	h, err := output(ctx, helper, []string{"--help"}, nil, defaultOutputLimit)
+	h, err := output(ctx, helper, []string{"--help"}, defaultOutputLimit)
 	if err != nil || !strings.Contains(string(h), "@host") || !strings.Contains(string(h), "--block") {
-		return "", errors.New("softnet must support --block and @host")
+		return vm.SoftnetOptions{}, errors.New("softnet must support --block and @host")
 	}
 	probe := []string{"--vm-fd", "0", "--vm-mac-address", "02:00:00:00:00:01", "--sudo-escalation-probing"}
 	fi, err := os.Stat(bin)
 	if err != nil {
-		return "", err
+		return vm.SoftnetOptions{}, err
 	}
-	if fi.Mode()&os.ModeSetuid != 0 {
+	suid := fi.Mode()&os.ModeSetuid != 0
+	if suid {
 		if !rootSUID(fi) {
-			return "", errors.New("softnet SUID binary must be root-owned and not group/world-writable")
+			return vm.SoftnetOptions{}, errors.New("softnet SUID binary must be root-owned and not group/world-writable")
 		}
-		// A SUID binary can probe directly; Tart still refuses if it is not root.
-		_, err = output(ctx, helper, probe, nil, defaultOutputLimit)
+		// A SUID binary can probe directly; softnet refuses if it is not root.
+		_, err = output(ctx, helper, probe, defaultOutputLimit)
 	} else {
-		_, err = output(ctx, CLI{Binary: "sudo"}, append([]string{"-n", bin}, probe...), nil, defaultOutputLimit)
+		_, err = output(ctx, CLI{Binary: "/usr/bin/sudo"}, append([]string{"-n", bin}, probe...), defaultOutputLimit)
 	}
 	if err != nil {
-		return "", errors.New("softnet privilege probe failed; configure privileges outside bivouac, no VM started")
+		return vm.SoftnetOptions{}, errors.New("softnet privilege probe failed; configure privileges outside bivouac, no VM started")
 	}
-	return NetworkPolicy()
+	policy, err := NetworkPolicy()
+	if err != nil {
+		return vm.SoftnetOptions{}, err
+	}
+	return vm.SoftnetOptions{Binary: bin, Sudo: !suid, Block: policy}, nil
 }
 
 func (p *Provider) preflightEngine(ctx context.Context) error {
@@ -134,13 +150,9 @@ func (p *Provider) preflightEngine(ctx context.Context) error {
 // CheckContainers is the read-only doctor/pre-admission check. It never boots
 // a baseline, opens a container daemon, or changes privilege configuration.
 func (p *Provider) CheckContainers(ctx context.Context) error { return p.preflightEngine(ctx) }
-func (p *Provider) isolation(ctx context.Context) (string, error) {
+func (p *Provider) isolation(ctx context.Context) (vm.SoftnetOptions, error) {
 	if p.checkIsolation != nil {
 		return p.checkIsolation(ctx)
 	}
 	return CheckIsolation(ctx)
-}
-
-func isolatedArgs(name, policy string) []string {
-	return []string{"run", "--no-graphics", "--no-audio", "--no-clipboard", "--no-keyboard", "--no-pointer", "--no-trackpad", "--net-softnet", "--net-softnet-block=" + policy, name}
 }

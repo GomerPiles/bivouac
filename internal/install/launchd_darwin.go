@@ -93,10 +93,20 @@ func plistPath() (string, error) {
 
 func domain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
 
+// errOtherHome refuses login item changes from a BIVOUAC_HOME layout: the one
+// LaunchAgent label always runs the default layout, so acting on it from a
+// validation home would start, replace, or remove the default daemon.
+var errOtherHome = errors.New("the login item runs the default home only; with BIVOUAC_HOME set, use `bivouac run` in the foreground")
+
+func otherHome() bool { return os.Getenv("BIVOUAC_HOME") != "" }
+
 // Install writes the LaunchAgent and bootstraps it. The daemon reads the
 // durable mode and exits at once when it is off, so installing never starts
 // accepting jobs by itself.
 func Install(ctx context.Context, p Paths) (string, error) {
+	if otherHome() {
+		return "", errOtherHome
+	}
 	path, err := plistPath()
 	if err != nil {
 		return "", err
@@ -120,6 +130,9 @@ func Install(ctx context.Context, p Paths) (string, error) {
 
 // Uninstall boots the agent out and removes the plist.
 func Uninstall(ctx context.Context) error {
+	if otherHome() {
+		return errOtherHome
+	}
 	path, err := plistPath()
 	if err != nil {
 		return err
@@ -133,11 +146,18 @@ func Uninstall(ctx context.Context) error {
 
 // Kickstart starts the daemon now if it is loaded but not running.
 func Kickstart(ctx context.Context) error {
+	if otherHome() {
+		return errOtherHome
+	}
 	return launchctl(ctx, "kickstart", domain()+"/"+Label)
 }
 
 // Installed reports whether the plist exists and launchd knows the label.
+// A BIVOUAC_HOME layout never has a login item.
 func Installed(ctx context.Context) (plist string, loaded bool, err error) {
+	if otherHome() {
+		return "", false, nil
+	}
 	path, err := plistPath()
 	if err != nil {
 		return "", false, err

@@ -793,7 +793,6 @@ func (m *Manager) spec(inst *state.Instance, pcfg config.Provider) (provider.Spe
 		spec.Baseline = pcfg.Tart.Baseline
 		spec.CPU = pcfg.Tart.CPU
 		spec.MemoryMB = pcfg.Tart.MemoryGB * 1024
-		spec.Launch.Args = append([]string(nil), pcfg.Tart.ExtraArgs...)
 	default:
 		return spec, fmt.Errorf("unsupported provider type %q", pcfg.Type)
 	}

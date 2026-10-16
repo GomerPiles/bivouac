@@ -79,12 +79,12 @@ func (p *Provider) installGuestHelper(ctx context.Context, name string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := p.output(ctx, []string{"exec", name, "/usr/bin/install", "-m", "0600", "/dev/null", guestHelper}, nil); err != nil {
+	if _, err := p.output(ctx, name, []string{"/usr/bin/install", "-m", "0600", "/dev/null", guestHelper}, nil); err != nil {
 		return errors.New("prepare guest helper")
 	}
-	if _, err := p.output(ctx, []string{"exec", "-i", name, "dd", "of=" + guestHelper, "status=none"}, f); err != nil {
+	if _, err := p.output(ctx, name, []string{"dd", "of=" + guestHelper, "status=none"}, f); err != nil {
 		return errors.New("install guest helper")
 	}
-	_, err = p.output(ctx, []string{"exec", name, "chmod", "0700", guestHelper}, nil)
+	_, err = p.output(ctx, name, []string{"chmod", "0700", guestHelper}, nil)
 	return err
 }

@@ -14,10 +14,9 @@ import (
 	"time"
 )
 
-// fakeTart is a fixture executable standing in for tart. Its second argument
-// selects the behaviour; the first is the tart subcommand, which decides
-// whether stderr may appear in errors.
-const fakeTart = `#!/bin/sh
+// fakeHost is a fixture host command. Its second argument selects the
+// behaviour.
+const fakeHost = `#!/bin/sh
 case "$2" in
 flood) exec /usr/bin/yes ;;
 small) echo ok ;;
@@ -30,8 +29,8 @@ esac
 
 func fixtureCLI(t *testing.T) CLI {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "tart")
-	if err := os.WriteFile(bin, []byte(fakeTart), 0o700); err != nil { // #nosec G306 -- Executable fixture in t.TempDir().
+	bin := filepath.Join(t.TempDir(), "host-command")
+	if err := os.WriteFile(bin, []byte(fakeHost), 0o700); err != nil { // #nosec G306 -- Executable fixture in t.TempDir().
 		t.Fatal(err)
 	}
 	return CLI{Binary: bin}
@@ -41,12 +40,12 @@ func TestCLIOutputIsBounded(t *testing.T) {
 	cli := fixtureCLI(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if out, err := output(ctx, cli, []string{"exec", "small"}, nil, statusOutputLimit); err != nil || string(out) != "ok\n" {
+	if out, err := output(ctx, cli, []string{"probe", "small"}, statusOutputLimit); err != nil || string(out) != "ok\n" {
 		t.Fatalf("small output: %q %v", out, err)
 	}
 	for _, mode := range []string{"flood", "stderr-flood"} {
 		start := time.Now()
-		_, err := output(ctx, cli, []string{"exec", mode}, nil, statusOutputLimit)
+		_, err := output(ctx, cli, []string{"probe", mode}, statusOutputLimit)
 		if !errors.Is(err, ErrOutputLimit) {
 			t.Fatalf("%s: %v, want ErrOutputLimit", mode, err)
 		}
@@ -59,15 +58,14 @@ func TestCLIOutputIsBounded(t *testing.T) {
 func TestCLIErrorTextIsBoundedAndRedacted(t *testing.T) {
 	cli := fixtureCLI(t)
 	ctx := context.Background()
-	_, err := output(ctx, cli, []string{"exec", "fail"}, nil, statusOutputLimit)
+	_, err := output(ctx, cli, []string{"probe", "fail"}, statusOutputLimit)
 	var te *Error
-	if !errors.As(err, &te) || strings.Contains(err.Error(), "boom") {
-		t.Fatalf("guest stderr in exec error: %v", err)
+	if !errors.As(err, &te) {
+		t.Fatalf("error type %T", err)
 	}
-	_, err = output(ctx, cli, []string{"clone", "fail"}, nil, statusOutputLimit)
 	msg := err.Error()
 	if !strings.Contains(msg, "boom <redacted> second line") || strings.Contains(msg, "\n") || strings.Contains(msg, "ghs_") {
-		t.Fatalf("tart stderr not redacted on one line: %q", msg)
+		t.Fatalf("stderr not redacted on one line: %q", msg)
 	}
 	long := &Error{Args: []string{"clone"}, Err: errors.New("exit status 1"), Stderr: strings.Repeat("e", stderrLimit)}
 	if len(long.Error()) > 1024 {
@@ -76,7 +74,7 @@ func TestCLIErrorTextIsBoundedAndRedacted(t *testing.T) {
 }
 
 func TestStartedProcessHasOwnProcessGroup(t *testing.T) {
-	proc, err := (CLI{Binary: "/bin/sleep"}).Start(context.Background(), []string{"30"}, io.Discard)
+	proc, err := (CLI{Binary: "/bin/sleep"}).startInput(context.Background(), []string{"30"}, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +91,7 @@ func TestStartedProcessHasOwnProcessGroup(t *testing.T) {
 // A grandchild holding the copied output pipe cannot keep a started process
 // looking alive after the process itself exits.
 func TestStartedProcessDoneDespiteLingeringGrandchild(t *testing.T) {
-	proc, err := fixtureCLI(t).Start(context.Background(), []string{"run", "linger"}, io.Discard)
+	proc, err := fixtureCLI(t).startInput(context.Background(), []string{"run", "linger"}, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +107,11 @@ func TestStartedProcessDoneDespiteLingeringGrandchild(t *testing.T) {
 func TestStartedProcessIgnoresLaterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := (CLI{Binary: "/bin/sleep"}).Start(ctx, []string{"30"}, io.Discard); !errors.Is(err, context.Canceled) {
+	if _, err := (CLI{Binary: "/bin/sleep"}).startInput(ctx, []string{"30"}, nil, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatalf("start with cancelled context: %v", err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
-	proc, err := (CLI{Binary: "/bin/sleep"}).Start(ctx, []string{"30"}, io.Discard)
+	proc, err := (CLI{Binary: "/bin/sleep"}).startInput(ctx, []string{"30"}, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

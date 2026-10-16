@@ -2,6 +2,11 @@
 
 package tart
 
-import "os/exec"
+import (
+	"errors"
+	"os/exec"
+)
 
 func detach(*exec.Cmd) {}
+
+func terminate(int, bool) error { return errors.New("VM helpers run only on macOS") }
