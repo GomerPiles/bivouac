@@ -352,9 +352,9 @@ func TestUnattendCommandsRespectWindowsSchemaLengths(t *testing.T) {
 	}
 }
 
-func TestDesktopLauncherUsesFrameWithoutWaitingForEOF(t *testing.T) {
+func TestDesktopLauncherUsesLengthFrameWithoutWaitingForEOF(t *testing.T) {
 	command := desktopValidationCommand()
-	if len(utf16.Encode([]rune(command))) > 2048 {
+	if len(utf16.Encode([]rune(command))) > 4096 {
 		t.Fatal("desktop launcher risks the Windows shell command limit")
 	}
 	value := `synthetic <&'" $() ; | > data`
@@ -363,6 +363,13 @@ func TestDesktopLauncherUsesFrameWithoutWaitingForEOF(t *testing.T) {
 	if err != nil || len(input) < 1<<20 {
 		t.Fatal("fixture must exercise a large framed payload")
 	}
+	if int(binary.LittleEndian.Uint32(input[:4])) != len(input)-4 {
+		t.Fatal("length prefix does not describe the exact UTF-8 payload")
+	}
+	if len(bytes.Split(input[4:], []byte{'\n'})) != 1 {
+		t.Fatal("JSON fixture unexpectedly depends on line delimiters")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	sys, err := windows.GetSystemDirectory()
@@ -392,5 +399,31 @@ func TestDesktopLauncherUsesFrameWithoutWaitingForEOF(t *testing.T) {
 	}
 	if string(out.data) != value {
 		t.Fatal("stdin data was changed or interpreted as code")
+	}
+}
+
+func TestDesktopLengthFrameRejectsOversizedAndTruncatedPayloads(t *testing.T) {
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		size uint32
+		body string
+	}{{0, ""}, {100000001, ""}, {32, "{}"}} {
+		input := make([]byte, 4)
+		binary.LittleEndian.PutUint32(input, item.size)
+		input = append(input, item.body...)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, filepath.Join(sys, "cmd.exe"), "/d", "/s", "/c", desktopValidationCommand())
+		cmd.Stdin = bytes.NewReader(input)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		err := cmd.Run()
+		cancel()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 18 {
+			t.Fatal("invalid frame was not rejected before script execution")
+		}
 	}
 }

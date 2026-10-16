@@ -10,7 +10,7 @@ it does not replace `bivouac`.
 An approved offline trial against an independent immutable template copy reached
 HCS `Running` state, accepted post-start GPU-PV assignment, explicitly terminated
 the owned VM, confirmed native absence and removed its journal/disposable child.
-The trial root contains only its lock file. The protected lab retains the
+That native-only trial left only its lock file. The protected lab retains the
 independent baseline, pinned executables, configurations and bounded result files.
 No startup component or production configuration was changed.
 
@@ -29,26 +29,27 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
 The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
 answer staging, protected permissions, detach-before-start, native running/GPU
 assignment, guest-agent initialization, reported display-driver readiness and
-ephemeral authenticated SSH. Separate fixed command and framed-stdin round trips
-pass live. Full desktop validation still times out at its own five-minute bound,
-without a render report. Read-only inspection after confirmed native absence
-finds setup/OOBE complete, the intended autologon account, agent/SSH services and
-the setup-complete marker. Inspection detaches the child and matching cleanup
-removes its disk/journal.
+ephemeral authenticated SSH. Fixed command and small framed-stdin checks pass
+live. The full desktop request times out at its five-minute bound; checkpoint 1
+confirms the launcher began but did not finish reading the large input frame.
+Console readiness and rendering were not reached or verified by that request.
+Previous read-only inspection confirmed setup/OOBE complete, the intended
+account, agent/SSH services and the setup-complete marker.
 
-The independent template's cached Audit/sysprep answer is overridden only inside
-the disposable child; its pinned hash was unchanged by read-only inspection.
-The short specialization path and service-readiness marker are live validated.
-The small desktop launcher consumes newline-framed JSON without depending on
-stdin EOF; a large ordinary-token regression executes with stdin held open.
-Basic transport checks are limited to 30 seconds each, while desktop validation
-has five minutes inside the overall guest budget. A timeout closes the owned
-SSH client, and no command is replayed. Only allowlisted numeric progress phases
-cross the stderr sink. After frame parsing, fixed phases are also recorded in
-the disposable guest so a stopped-clone inspection can distinguish workflow
-progress from SSH output/exit handling. Any offline native-probe report must be
-bounded and re-encoded as fixed booleans/numbers only. These new checkpoints
-need a live retry; the stall's cause and hardware rendering remain unverified.
+The VM is confirmed absent. The latest stopped-clone inspection failed when
+reading hidden ProgramData metadata without Force. The finally path detached
+the mount, and the owned child/journal remain for matching cleanup. This metadata
+lookup failure reproduces without elevation; the corrected retry first verifies
+detachment and cleans that retained child before creating a new one.
+
+The small launcher now reads a four-byte little-endian length and exactly that
+many UTF-8 JSON bytes, in chunks of at most 4096 bytes. It no longer waits for EOF
+or a huge console text line. A large ordinary-token regression keeps stdin open;
+oversized and truncated frames are rejected. Separate command/input checks keep
+their 30-second bounds and desktop validation its five-minute bound within the
+guest budget. The new transfer and corrected offline inspection need live
+validation. The timeout's precise transport cause and hardware rendering remain
+unverified.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -87,7 +88,7 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   pinned native probe and runs it in an interactive guest scheduled task. It
   accepts only bounded fixed booleans/numbers, never arbitrary guest diagnostics.
   A small encoded launcher avoids the SSH shell command-length limit; trusted
-  embedded code and instance data are separate fields of the stdin JSON payload.
+  embedded code and instance data are separate fields of the length-prefixed stdin JSON payload.
 - A separate protected journal, child marker and exact HCS owner/runtime proof.
   An existing native name is never replaced. Creation is never replayed after
   response loss. Cleanup runs independently of caller cancellation, confirms
@@ -232,8 +233,9 @@ entry into a stage, not its completion.
 
 | Step | Stage entered |
 | --- | --- |
-| 1 | Wait for the input frame |
-| 2 | Parse the received frame |
+| 1 | Read the four-byte frame length |
+| 4 | Read the bounded frame payload |
+| 2 | Decode and parse the received UTF-8 payload |
 | 3 | Invoke the embedded validation script |
 | 17 | Verify the intended guest identity |
 | 19 | Compile the fixed console API bindings |

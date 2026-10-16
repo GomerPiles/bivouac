@@ -94,25 +94,23 @@ paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
 The full offline trial with 2 CPUs and 4 GiB RAM validates child-only answer
 staging, detach-before-start, native running, GPU assignment, guest-agent
 initialization, reported display-driver readiness and ephemeral authenticated
-SSH. Fixed command execution and framed-stdin round trips also pass live.
+SSH. Fixed command execution and small framed-stdin round trips pass live.
 Read-only inspection confirms setup/OOBE complete, the intended autologon account,
-registered agent/SSH services and the setup-complete marker. Full desktop
-validation still times out at its five-minute bound without a render report;
-this is now isolated from basic SSH execution/input. Inspection detached the
-stopped child and cleanup confirmed native absence and removed its disk/journal.
-Only the lock remains.
-The independent template's cached Audit/sysprep answer is overridden only inside
-the new child; its pinned hash was unchanged by read-only inspection. Short
-specialization commands and the agent-service readiness wait are live validated.
-The small desktop launcher uses newline-framed JSON and does not depend on stdin
-EOF. A large ordinary-token fixture executes through cmd.exe with stdin held
-open. Each command/stdin diagnostic has a 30-second bound; the desktop request
-has its own five-minute bound, inside the guest budget. A timeout closes the
-owned SSH client without replay. New numeric progress checkpoints cross the
-stderr sink through an allowlist and are also written inside the disposable
-guest after frame parsing. Stopped-clone inspection can read only fixed checkpoint
-and native-probe report fields. These diagnostics need a live retry; the stall's
-cause, console readiness and hardware rendering/presentation remain unverified.
+agent/SSH services and the setup-complete marker. The full desktop request times
+out at five minutes. Its latest numeric checkpoint is 1: the launcher started
+but did not finish reading the large input frame. Console readiness and native
+rendering were not reached or verified by that request.
+The VM is confirmed absent. The added stopped-clone inspection failed on hidden
+`ProgramData` metadata; its finally path detached the mount, while conservative
+failure handling retained the owned child/journal for matching cleanup. The
+metadata lookup issue reproduces without elevation and is corrected with Force.
+A corrected retry will first verify detachment and clean that recorded child.
+The new child-only transport uses a four-byte little-endian byte length followed
+by UTF-8 JSON, read in at most 4096-byte chunks. It avoids both EOF dependence
+and a huge console text line. Large-payload and oversized/truncated-frame fixtures
+pass without elevation. This transfer change and corrected inspection still
+need a live trial. The immutable independent template, production CI and installed
+provider remain unchanged; guest services/display drivers remain dependencies.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow
@@ -122,7 +120,7 @@ planning also passes without opening any image or contacting the HCS service.
 An approved offline native-only trial reached HCS `Running` state, accepted
 GPU-PV assignment, explicitly terminated the owned VM, confirmed native absence
 and removed its journal/disposable child. It used an independent immutable
-template copy with 1 CPU, 2 GiB RAM and no NIC; only the trial lock file remains.
+template copy with 1 CPU, 2 GiB RAM and no NIC.
 The default properties query and retaining the created handle through verified
 termination are live validated. Production CI/configuration was unchanged.
 Console/desktop readiness, hardware rendering, input, process-loss

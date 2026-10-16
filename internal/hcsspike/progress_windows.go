@@ -45,7 +45,7 @@ func (p *validationProgress) Write(data []byte) (int, error) {
 }
 func validValidationStep(step uint32) bool {
 	switch step {
-	case 1, 2, 3, 17, 19, 20, 21, 22, 23, 24, 25:
+	case 1, 2, 3, 4, 17, 19, 20, 21, 22, 23, 24, 25:
 		return true
 	}
 	return false

@@ -625,8 +625,10 @@ ordinary-token media test inspects its name in the ISO's Joliet directory.
 An optional hash-pinned standalone native C++ probe runs only inside the guest,
 through a small fixed SSH bootstrap and an interactive guest scheduled task.
 The command stays below the Windows default shell limit: trusted embedded code
-and instance data arrive in separate fields of newline-framed stdin JSON.
-Execution does not depend on stdin EOF. Separate bounded fixed command/stdin
+and instance data arrive in separate fields of length-prefixed stdin JSON: four
+little-endian bytes describe the UTF-8 payload, read in chunks of at most 4096
+bytes with a fixed allocation bound. Execution depends on neither stdin EOF nor
+a huge console text line. Separate bounded fixed command/stdin
 round trips distinguish authentication from remote command execution before a
 five-minute desktop request; all fit inside the guest budget. A timeout closes
 the owned SSH client instead of replaying a command. Fixed numeric failure
@@ -664,7 +666,8 @@ inspection. Normal `cleanup` rechecks proofs/absence and removes retained files.
 Child-only staging, offline HCS running state, GPU assignment and explicit
 native/storage cleanup are validated. Setup/OOBE completion, the guest agent,
 reported display-driver readiness, ephemeral authenticated SSH, fixed command
-execution and framed-stdin delivery are also live validated. Console readiness, rendering, process-loss recovery and
+execution and small framed-stdin delivery are also live validated. The large
+console-line transfer stalls; length-prefixed stream delivery needs a live trial. Console readiness, rendering, process-loss recovery and
 networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template

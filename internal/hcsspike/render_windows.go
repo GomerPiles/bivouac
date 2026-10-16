@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,7 @@ var guestValidate string
 
 // Keep the remote command below cmd.exe's limit, independently of script/probe
 // growth. Both the embedded script and its data are sent as JSON on stdin.
-const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-SpikeStep([int]$s){[Console]::Error.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(($env:SystemRoot+'\AppSandbox\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};try{Write-SpikeStep 1;$line=[Console]::In.ReadLine();if(!$line -or $line.Length -gt 100000000){exit 18};Write-SpikeStep 2;$p=$line|ConvertFrom-Json;Write-SpikeStep 3;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
+const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-SpikeStep([int]$s){[Console]::Error.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(($env:SystemRoot+'\AppSandbox\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};function Read-SpikeBytes([int]$n){$b=New-Object byte[] $n;$o=0;while($o -lt $n){$r=$i.Read($b,$o,[Math]::Min(4096,$n-$o));if($r -le 0){throw 'frame'};$o+=$r};return ,$b};try{Write-SpikeStep 1;$i=[Console]::OpenStandardInput();$n=[BitConverter]::ToUInt32((Read-SpikeBytes 4),0);if(!$n -or $n -gt 100000000){exit 18};Write-SpikeStep 4;$b=Read-SpikeBytes $n;Write-SpikeStep 2;$p=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;Write-SpikeStep 3;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
 
 func desktopValidationCommand() string {
 	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(guestValidateBootstrap)
@@ -87,7 +88,12 @@ func guestScriptInput(script string, data any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(input, '\n'), nil
+	if len(input) > 100000000 {
+		return nil, errors.New("guest script input exceeds bound")
+	}
+	framed := make([]byte, 4, len(input)+4)
+	binary.LittleEndian.PutUint32(framed, uint32(len(input))) // #nosec G115 -- The immutable input length is checked above against a 100 MB cap.
+	return append(framed, input...), nil
 }
 
 func checkSSHExecution(ctx context.Context, client *ssh.Client, report *Report) error {
