@@ -82,7 +82,7 @@ func randomToken() string {
 // Start binds one authenticated endpoint. host is the address reachable from guests.
 // TLS private keys and capabilities exist only in memory and rotate after restart.
 func Start(dir, listen, host string, maxBytes, maxObject int64, ttl time.Duration, logger *slog.Logger) (*Service, error) {
-	store, err := Open(dir, maxBytes, maxObject)
+	store, err := Open(dir, maxBytes, maxObject, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The listener's write timeout started before the fill. Bound only serving.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(serveTimeout))
 	if err != nil {
-		s.log.Warn("cache fill unavailable", "kind", "actions_archive")
+		reason, status := failureDetails(err)
+		s.log.Warn("cache fill unavailable", "kind", "actions_archive", "object", s.store.label(l.key), "reason", reason, "status", status, "bytes", l.size)
 		s.recordTransfer(l.token, false, cacheBypass, 0, true)
 		// The original signed URL is a GitHub-issued capability. Redirect remains
 		// authorized by the upstream; no local object is exposed after a failed fill.
@@ -275,7 +276,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = f.Close() }()
 	s.objectHeaders(w, l)
-	s.log.Info("cache object served", "kind", "actions_archive", "hit", hit, "bytes", l.size)
+	s.log.Info("cache object served", "kind", "actions_archive", "object", s.store.label(l.key), "hit", hit, "bytes", l.size)
 	measured := &transferWriter{ResponseWriter: w, status: http.StatusOK}
 	http.ServeContent(measured, r, "archive", time.Time{}, f)
 	outcome := cacheMiss
@@ -287,6 +288,15 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	length, lengthErr := strconv.ParseInt(measured.Header().Get("Content-Length"), 10, 64)
 	incomplete := lengthErr == nil && measured.status != http.StatusNotModified && measured.bytes != length
+	if measured.failed || incomplete {
+		reason := measured.reason
+		if r.Context().Err() != nil {
+			reason = deliveryFailure(r.Context().Err())
+		} else if reason == "" {
+			reason = "length_mismatch"
+		}
+		s.log.Warn("cache response incomplete", "kind", "actions_archive", "object", s.store.label(l.key), "reason", reason, "status", measured.status, "expected_bytes", length, "delivered_bytes", measured.bytes)
+	}
 	s.recordTransfer(l.token, false, outcome, measured.bytes, measured.failed || incomplete)
 }
 
@@ -342,6 +352,8 @@ func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := s.client.Do(req)
 	if err != nil {
+		reason, _ := failureDetails(upstreamFailure(err))
+		s.log.Info("cache lease unavailable", "reason", reason)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -349,6 +361,11 @@ func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
 	// HEAD validates this fresh signed capability even when bytes are cached.
 	// Never authorize a read by a guessed object identity or an expired SAS.
 	if response.StatusCode != 200 || response.ContentLength < 0 || response.ContentLength > s.store.maxObject {
+		reason := "upstream_status"
+		if response.StatusCode == http.StatusOK {
+			reason = "object_limit"
+		}
+		s.log.Info("cache lease unavailable", "reason", reason, "status", response.StatusCode, "bytes", response.ContentLength)
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -402,15 +419,24 @@ func (s *Service) fetch(ctx context.Context, l lease, out io.Writer) error {
 	req.Header.Set("If-Match", l.etag)
 	response, err := s.client.Do(req)
 	if err != nil {
-		return errors.New("upstream download unavailable")
+		return upstreamFailure(err)
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != 200 || (response.ContentLength >= 0 && response.ContentLength != l.size) {
-		return errors.New("upstream download changed")
+	if response.StatusCode != http.StatusOK {
+		return &fault{reason: "upstream_status", status: response.StatusCode}
+	}
+	if response.Header.Get("ETag") != l.etag {
+		return failure("upstream_identity")
+	}
+	if response.ContentLength >= 0 && response.ContentLength != l.size {
+		return failure("length_mismatch")
 	}
 	n, err := io.Copy(out, response.Body)
-	if err != nil || n != l.size {
-		return errors.New("incomplete upstream download")
+	if err != nil {
+		return bodyFailure(ctx, err)
+	}
+	if n != l.size {
+		return failure("length_mismatch")
 	}
 	return nil
 }

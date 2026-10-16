@@ -4,11 +4,14 @@ package cache
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +36,9 @@ const maxEntries = 4096
 // except by readers of the fill that just hashed those bytes.
 type Store struct {
 	mu                                  sync.Mutex
+	log                                 *slog.Logger
+	labelKey                            []byte
+	diagnostics                         StoreDiagnostics
 	dir                                 string
 	maxBytes, maxObject, used, reserved int64
 	entries                             map[string]entry
@@ -40,7 +46,7 @@ type Store struct {
 	flights                             map[string]*flight
 }
 
-func Open(dir string, maxBytes, maxObject int64) (*Store, error) {
+func Open(dir string, maxBytes, maxObject int64, logger *slog.Logger) (*Store, error) {
 	if maxObject <= 0 || maxBytes < maxObject {
 		return nil, errors.New("invalid cache limits")
 	}
@@ -51,7 +57,9 @@ func Open(dir string, maxBytes, maxObject int64) (*Store, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("cache directory must be a real directory")
 	}
-	s := &Store{dir: dir, maxBytes: maxBytes, maxObject: maxObject, entries: map[string]entry{}, readers: map[string]int{}, flights: map[string]*flight{}}
+	labelKey := make([]byte, 32)
+	_, _ = rand.Read(labelKey)
+	s := &Store{log: logger, labelKey: labelKey, dir: dir, maxBytes: maxBytes, maxObject: maxObject, entries: map[string]entry{}, readers: map[string]int{}, flights: map[string]*flight{}}
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -76,8 +84,12 @@ func Open(dir string, maxBytes, maxObject int64) (*Store, error) {
 				s.entries[id] = record
 				s.used += record.Size
 			} else {
-				_ = os.Remove(s.path(id))
-				_ = os.Remove(filepath.Join(dir, name))
+				if os.Remove(s.path(id)) == nil {
+					s.diagnostics.StartupDiscardedFiles++
+				}
+				if os.Remove(filepath.Join(dir, name)) == nil {
+					s.diagnostics.StartupDiscardedFiles++
+				}
 			}
 		}
 	}
@@ -86,16 +98,21 @@ func Open(dir string, maxBytes, maxObject int64) (*Store, error) {
 		name := file.Name()
 		if len(name) == 64 && digestString(name) {
 			if _, ok := s.entries[name]; !ok {
-				_ = os.Remove(s.path(name))
+				if os.Remove(s.path(name)) == nil {
+					s.diagnostics.StartupDiscardedFiles++
+				}
 			}
 		}
 		if len(name) > 5 && name[:5] == "fill-" {
-			_ = os.Remove(filepath.Join(dir, name))
+			if os.Remove(filepath.Join(dir, name)) == nil {
+				s.diagnostics.StartupDiscardedFiles++
+			}
 		}
 	}
 	s.mu.Lock()
 	err = s.makeRoom(0, 0)
 	s.mu.Unlock()
+	logger.Info("cache store opened", "objects", len(s.entries), "stored_bytes", s.used, "max_bytes", maxBytes, "max_object_bytes", maxObject, "startup_discarded_files", s.diagnostics.StartupDiscardedFiles)
 	return s, err
 }
 
@@ -107,12 +124,23 @@ func digestString(v string) bool {
 	return e == nil
 }
 func (s *Store) path(id string) string { return filepath.Join(s.dir, id) }
+
+// label names an object in logs. The per-session key lets one session's events
+// be correlated without letting a reader confirm a guessed URL or asset.
+func (s *Store) label(key string) string { return s.labelID(identity(key)) }
+
+func (s *Store) labelID(id string) string {
+	mac := hmac.New(sha256.New, s.labelKey)
+	_, _ = mac.Write([]byte(id))
+	return hex.EncodeToString(mac.Sum(nil)[:6])
+}
+
 func identity(key string) string {
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Store) remove(id string) error {
+func (s *Store) remove(id, reason string) error {
 	if s.readers[id] > 0 {
 		return errors.New("cache object is in use")
 	}
@@ -120,7 +148,15 @@ func (s *Store) remove(id string) error {
 		return err
 	}
 	_ = os.Remove(s.path(id) + ".json")
-	s.used -= s.entries[id].Size
+	size := s.entries[id].Size
+	s.used -= size
+	if reason == "capacity" {
+		s.diagnostics.Evictions++
+		s.diagnostics.EvictedBytes += uint64(size) // #nosec G115 -- Only admitted entries with nonnegative sizes reach removal.
+	} else {
+		s.diagnostics.Invalidations++
+	}
+	s.log.Info("cache object discarded", "object", s.labelID(id), "reason", reason, "bytes", size)
 	delete(s.entries, id)
 	return nil
 }
@@ -152,17 +188,17 @@ func (s *Store) makeRoom(n int64, slots int) error {
 		idle += e.Size
 	}
 	if s.used-idle+s.reserved+n > s.maxBytes || len(s.entries)-len(ages)+len(s.flights)+slots > maxEntries {
-		return errors.New("cache capacity unavailable")
+		return failure("capacity")
 	}
 	sort.Slice(ages, func(i, j int) bool { return ages[i].at.Before(ages[j].at) })
 	for _, a := range ages {
 		if fits() {
 			break
 		}
-		_ = s.remove(a.id)
+		_ = s.remove(a.id, "capacity")
 	}
 	if !fits() {
-		return errors.New("cache capacity unavailable")
+		return failure("capacity")
 	}
 	return nil
 }
@@ -173,23 +209,23 @@ func (s *Store) makeRoom(n int64, slots int) error {
 func (s *Store) verify(id string, record entry, size int64, trusted bool) (*Object, error) {
 	f, err := os.Open(s.path(id))
 	if err != nil {
-		return nil, err
+		return nil, failure("store_open")
 	}
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() != record.Size || record.Size != size {
 		_ = f.Close()
-		return nil, errors.New("cache object corrupt")
+		return nil, failure("store_integrity")
 	}
 	if !trusted {
 		hash := sha256.New()
 		n, err := io.Copy(hash, f)
 		if err != nil || n != record.Size || hex.EncodeToString(hash.Sum(nil)) != record.Digest {
 			_ = f.Close()
-			return nil, errors.New("cache object corrupt")
+			return nil, failure("store_integrity")
 		}
 		if _, err = f.Seek(0, io.SeekStart); err != nil {
 			_ = f.Close()
-			return nil, err
+			return nil, failure("store_read")
 		}
 	}
 	now := time.Now()
@@ -208,7 +244,7 @@ func (s *Store) unpin(id string, record entry) bool {
 	}
 	delete(s.readers, id)
 	if current, ok := s.entries[id]; ok && current == record {
-		return s.remove(id) == nil
+		return s.remove(id, "invalid") == nil
 	}
 	return true
 }
@@ -241,7 +277,7 @@ func (o *Object) Close() error {
 // oversized objects are refused. Checksums are verified outside the store lock.
 func (s *Store) Get(ctx context.Context, key string, size int64, fetch func(context.Context, io.Writer) error) (*Object, bool, error) {
 	if size < 0 || size > s.maxObject {
-		return nil, false, errors.New("cache object size unsupported")
+		return nil, false, failure("object_limit")
 	}
 	id := identity(key)
 	// Coalesced waiters read bytes that the fill they waited for just hashed.
@@ -257,9 +293,12 @@ func (s *Store) Get(ctx context.Context, key string, size int64, fetch func(cont
 			s.mu.Unlock()
 			if f, err := s.verify(id, record, size, trusted); err == nil {
 				return f, true, nil
+			} else {
+				reason, _ := failureDetails(err)
+				s.log.Warn("cache object validation failed", "object", s.labelID(id), "reason", reason, "bytes", record.Size)
 			}
 			if !s.unpin(id, record) {
-				return nil, false, errors.New("corrupt cache object is still in use")
+				return nil, false, failure("invalid_object_in_use")
 			}
 			trusted = false
 			continue
@@ -316,17 +355,20 @@ type limitedWriter struct {
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	if int64(len(p)) > w.left {
-		return 0, errors.New("cache object exceeds its declared size")
+		return 0, failure("length_mismatch")
 	}
 	n, e := w.w.Write(p)
 	w.left -= int64(n)
-	return n, e
+	if e != nil {
+		return n, failure("store_write")
+	}
+	return n, nil
 }
 
 func (s *Store) fill(ctx context.Context, id string, size int64, fetch func(context.Context, io.Writer) error) (entry, error) {
 	f, err := os.CreateTemp(s.dir, "fill-")
 	if err != nil {
-		return entry{}, err
+		return entry{}, failure("store_create")
 	}
 	temp := f.Name()
 	defer func() { _ = f.Close(); _ = os.Remove(temp) }()
@@ -336,17 +378,17 @@ func (s *Store) fill(ctx context.Context, id string, size int64, fetch func(cont
 		return entry{}, err
 	}
 	if writer.left != 0 {
-		return entry{}, errors.New("cache object is shorter than its declared size")
+		return entry{}, failure("length_mismatch")
 	}
 	record := entry{Size: size, Digest: hex.EncodeToString(hash.Sum(nil))}
 	if err = f.Sync(); err != nil {
-		return entry{}, err
+		return entry{}, failure("store_sync")
 	}
 	if err = f.Close(); err != nil {
-		return entry{}, err
+		return entry{}, failure("store_close")
 	}
 	if err = os.Rename(temp, s.path(id)); err != nil {
-		return entry{}, err
+		return entry{}, failure("store_commit")
 	}
 	data, err := json.Marshal(record)
 	if err == nil {
@@ -354,7 +396,21 @@ func (s *Store) fill(ctx context.Context, id string, size int64, fetch func(cont
 	}
 	if err != nil {
 		_ = os.Remove(s.path(id))
-		return entry{}, err
+		return entry{}, failure("store_commit")
 	}
 	return record, nil
+}
+
+// StoreDiagnostics counts local losses without retaining object identifiers.
+type StoreDiagnostics struct {
+	Evictions             uint64 `json:"evictions"`
+	EvictedBytes          uint64 `json:"evicted_bytes"`
+	Invalidations         uint64 `json:"invalidations"`
+	StartupDiscardedFiles uint64 `json:"startup_discarded_files"`
+}
+
+func (s *Store) Diagnostics() StoreDiagnostics {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.diagnostics
 }

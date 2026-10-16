@@ -880,6 +880,17 @@ excluded, and concurrent coalesced reads count as hits. Proxy bypass totals
 include uncached forwarded GETs, not only release assets. These are delivered
 bytes, not unique stored bytes, total upstream traffic or a bandwidth benchmark.
 
+The per-minute controller summary adds store totals: objects, committed and
+reserved bytes, capacity evictions and evicted bytes, invalidations, and
+startup-discarded files. Store, fill and delivery events carry fixed reason
+categories, HTTP statuses, byte counts and an object label, never URLs, keys,
+object hashes or raw transport/filesystem errors. The label is a truncated
+HMAC of the object identity under a random per-session key: it links one
+session's events for an object without letting a log reader confirm a guessed
+URL or asset. A fill also requires the upstream GET's ETag to match the
+lease's HEAD. A lost SSH cache transport is reported, with its guest, only
+when requests were in progress; an idle loss is ordinary guest deletion.
+
 The existing authenticated TLS service exposes a fixed numeric-only `/metrics`
 read for the calling guest's capability. Revocation/expiry prevents reads and
 capability rotation resets that guest's counters. Session totals reset with the

@@ -480,8 +480,8 @@ public HTTPS hosts use opaque tunnels. Host and baseline trust remain unchanged.
 Newly uploaded Actions archives enter this read-through cache on
 their first restore. A service outage returns lease requests to upstream;
 a failed fill redirects upstream. No upload/storage quota reduction is
-claimed. Logs report object class, hit/miss, and size without source URLs
-or credentials. Limits include in-flight reservations of each fill's declared
+claimed. Logs report object class, hit/miss, size and a per-session object
+label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
 size; eviction never touches instance state. Corrupt and incomplete objects are discarded.
 
 Defaults are 20 GiB total and 2048 MiB per object; `max_gb` and `max_object_mb`
@@ -503,6 +503,24 @@ Actions acceleration alone, leave `enabled = true` and set `release_proxy = fals
 Fresh guests then receive no proxy root or settings. Cache objects are expendable; the cache
 directory can be removed while off. Keep the ownership state directory
 intact. Production cutover and Tartelet remain independent of cache setup.
+
+### Investigating unexpected misses
+
+A GitHub cache-key hit can still be a local miss: GitHub found the archive and
+bivouac downloaded its bytes. Archive `bypasses` with `failures` mean a failed
+local fill was redirected to GitHub. Release downloads appear under
+`release proxy`.
+
+In controller logs, follow the miss's `object` label (valid for one manager
+session) through `cache object discarded` (`reason=capacity` or `invalid`),
+`cache object validation failed`, `cache fill unavailable`,
+`release cache bypass` and `cache response incomplete`. `cache store opened`
+shows what survived a restart; `cache store summary` totals losses each minute.
+Fill reasons are `capacity`, `object_limit`, `upstream_status`,
+`upstream_identity`, `upstream_body`, `upstream_transport`, `length_mismatch`,
+`timeout`, `canceled`, and `store_*` for local filesystem failures.
+`cache SSH transport ended during requests` names a guest whose transport
+dropped mid-transfer. Keep the cache while investigating; it is evidence.
 
 ## Cutover (after validation)
 
