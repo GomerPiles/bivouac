@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -20,45 +21,57 @@ func baselineStore(t *testing.T) Store {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	home := Store(root)
-	dir := home.Dir("base")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{ConfigFile: testConfig, DiskFile: "disk", NVRAMFile: "nvram"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+	tart := t.TempDir()
+	for name, body := range map[string]string{tartConfigFile: tartFixture, DiskFile: "disk", NVRAMFile: "nvram"} {
+		if err := os.WriteFile(filepath.Join(tart, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := home.Import(tart, "base", testManifest().Guest); err != nil {
+		t.Fatal(err)
 	}
 	return home
 }
 
-func TestCloneResizeListDelete(t *testing.T) {
+func TestImportCloneListDelete(t *testing.T) {
 	home := baselineStore(t)
-	if err := home.Clone("base", "bivouac-a"); err != nil {
+	if m, err := ReadManifest(home.Dir("base")); err != nil || !reflect.DeepEqual(m, testManifest()) {
+		t.Fatalf("imported %+v, %v", m, err)
+	}
+	if _, err := os.Lstat(filepath.Join(home.Dir("base"), tartConfigFile)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("import kept Tart's config.json")
+	}
+	if err := home.Clone("base", "bivouac-a", CloneOptions{CPU: 1}); err == nil {
+		t.Fatal("clone went below the minimum CPU count")
+	}
+	if err := home.Clone("base", "bivouac-a", CloneOptions{MemoryMiB: 1024}); err == nil {
+		t.Fatal("clone went below the minimum memory")
+	}
+	if err := home.Clone("base", "bivouac-a", CloneOptions{CPU: 8, MemoryMiB: 16384}); err != nil {
 		t.Fatal(err)
 	}
-	base, _ := ReadConfig(home.Dir("base"))
-	clone, err := ReadConfig(home.Dir("bivouac-a"))
+	clone, err := ReadManifest(home.Dir("bivouac-a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clone.MACAddress == base.MACAddress {
-		t.Fatal("clone kept the baseline MAC address")
+	if clone.MAC == testManifest().MAC || clone.CPU != 8 || clone.MemoryMiB != 16384 || clone.Guest != testManifest().Guest {
+		t.Fatalf("clone manifest %+v", clone)
 	}
 	if data, _ := os.ReadFile(filepath.Join(home.Dir("bivouac-a"), DiskFile)); string(data) != "disk" {
 		t.Fatal("disk not cloned")
 	}
-	if err := home.Clone("base", "bivouac-a"); err == nil {
+	if err := home.Clone("base", "bivouac-a", CloneOptions{}); err == nil {
 		t.Fatal("clone replaced an existing VM")
 	}
-	if err := home.Resize("bivouac-a", 1, 0); err == nil {
-		t.Fatal("resize went below cpuCountMin")
-	}
-	if err := home.Resize("bivouac-a", 8, 16384); err != nil {
+	// A directory without a manifest is not a baseline.
+	if err := os.Mkdir(home.Dir("tart-only"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := ReadConfig(home.Dir("bivouac-a")); c.CPUCount != 8 || c.MemorySize != 16<<30 {
-		t.Fatalf("resized to %d CPUs, %d bytes", c.CPUCount, c.MemorySize)
+	if err := home.Clone("tart-only", "bivouac-b", CloneOptions{}); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("cloned a directory without a manifest: %v", err)
+	}
+	if err := os.Remove(home.Dir("tart-only")); err != nil {
+		t.Fatal(err)
 	}
 	// A crashed clone leaves only a hidden staging directory, and the socket
 	// directory is hidden too; neither is listed.
@@ -73,7 +86,7 @@ func TestCloneResizeListDelete(t *testing.T) {
 		t.Fatalf("list = %+v, %v", entries, err)
 	}
 	// A VM whose lock cannot be read counts as running and hides no other.
-	unreadable := filepath.Join(home.Dir("base"), ConfigFile)
+	unreadable := filepath.Join(home.Dir("base"), ManifestFile)
 	if err := os.Chmod(unreadable, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +156,7 @@ func TestLockMarksTheVMRunning(t *testing.T) {
 	if err := home.Delete("base"); err == nil {
 		t.Fatal("deleted a running VM")
 	}
-	if err := home.Resize("base", 4, 0); err == nil {
-		t.Fatal("resized a running VM")
-	}
-	if err := home.Clone("base", "bivouac-copy"); err == nil {
+	if err := home.Clone("base", "bivouac-copy", CloneOptions{}); err == nil {
 		t.Fatal("cloned a running baseline")
 	}
 	// The holder is a test binary, not `bivouac vm run --dir <dir>`.

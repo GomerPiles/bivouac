@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
@@ -30,12 +32,8 @@ type callRecorder interface {
 
 type callRuntime struct{ calls callRecorder }
 
-func (c callRuntime) Clone(ctx context.Context, baseline, name string) error {
-	return c.calls.Run(ctx, []string{"Clone", baseline, name}, nil, io.Discard)
-}
-
-func (c callRuntime) Resize(ctx context.Context, name string, cpu, memoryMB int) error {
-	return c.calls.Run(ctx, []string{"Resize", name, "cpu=" + strconv.Itoa(cpu), "memory=" + strconv.Itoa(memoryMB)}, nil, io.Discard)
+func (c callRuntime) Clone(ctx context.Context, baseline, name string, opts vm.CloneOptions) error {
+	return c.calls.Run(ctx, []string{"Clone", baseline, name, "cpu=" + strconv.Itoa(opts.CPU), "memory=" + strconv.Itoa(opts.MemoryMiB)}, nil, io.Discard)
 }
 
 // Start records the VM name last.
@@ -49,6 +47,15 @@ func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink
 	}
 	if launch.Softnet != nil {
 		call = append(call, "softnet-block="+launch.Softnet.Block)
+	}
+	if d := launch.Machine.Display; d.Width != 0 {
+		call = append(call, fmt.Sprintf("display=%dx%d@%d", d.Width, d.Height, d.PPI))
+	}
+	if launch.Machine.DiskSync != "" {
+		call = append(call, "disk-sync="+launch.Machine.DiskSync)
+	}
+	if launch.Machine.Nested {
+		call = append(call, "nested")
 	}
 	return c.calls.Start(ctx, append(call, name), sink)
 }
@@ -91,6 +98,7 @@ type recorder struct {
 	launchOut string            // written by the VM helper instead of "started"
 	readyErrs []error           // returned in turn by the readiness command
 	started   []*fakeProc
+	store     vm.Store // set by newProvider; Clone copies manifests in it
 }
 
 type fakeProc struct {
@@ -136,6 +144,15 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 			return nil, errors.New("baseline does not exist")
 		}
 		r.vms[args[2]] = false
+		// Like the real store, a clone carries its baseline's manifest.
+		if data, err := os.ReadFile(filepath.Join(r.store.Dir(args[1]), vm.ManifestFile)); err == nil {
+			if err := os.MkdirAll(r.store.Dir(args[2]), 0o700); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(filepath.Join(r.store.Dir(args[2]), vm.ManifestFile), data, 0o600); err != nil {
+				return nil, err
+			}
+		}
 		return nil, nil
 	case "List":
 		var out []vm.Entry
@@ -197,15 +214,39 @@ func (r *recorder) Start(_ context.Context, args []string, sink io.Writer) (Proc
 	return p, nil
 }
 
+// writeTestManifest makes dir a VM of guestOS with the current guest agent.
+func writeTestManifest(t *testing.T, dir, guestOS string) {
+	t.Helper()
+	m := vm.Manifest{Version: vm.ManifestVersion, OS: guestOS, Arch: "arm64", CPU: 2, MemoryMiB: 4096, MAC: "02:00:00:00:00:01", Guest: vm.Guest{AgentVersion: guestagent.Version}}
+	if guestOS == "darwin" {
+		m.MacOS = &vm.MacOSPlatform{HardwareModel: []byte("hw"), MachineID: []byte("id")}
+		m.Guest.RunnerDir = "/Users/admin/actions-runner"
+		m.Guest.Sudo = true
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, vm.ManifestFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newProvider(t *testing.T, r *recorder) *Provider {
 	t.Helper()
 	store := t.TempDir()
+	r.store = vm.Store(store)
 	for name := range r.vms {
-		if err := os.MkdirAll(filepath.Join(store, name), 0o700); err != nil {
-			t.Fatal(err)
+		guestOS := "darwin"
+		if strings.HasPrefix(name, "linux") {
+			guestOS = "linux"
 		}
+		writeTestManifest(t, filepath.Join(store, name), guestOS)
 	}
-	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2}
+	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, HostVMLimit: 2}
 	p, err := New("macos", cfg, "ctl-1", store, callRuntime{r})
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +266,7 @@ func TestLifecycleArguments(t *testing.T) {
 	if err := p.Create(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"Clone", "base", "bivouac-macos-abc"}, {"Resize", "bivouac-macos-abc", "cpu=4", "memory=8192"}}
+	want := [][]string{{"Clone", "base", "bivouac-macos-abc", "cpu=4", "memory=8192"}}
 	for i, w := range want {
 		if strings.Join(r.calls[i], " ") != strings.Join(w, " ") {
 			t.Fatalf("call %d = %v, want %v", i, r.calls[i], w)
@@ -331,5 +372,102 @@ func TestRunnerJobIdentity(t *testing.T) {
 		if st, _ := parseRunnerStatus("listening\n" + metadata); st.Job != nil {
 			t.Fatalf("accepted malformed identity: %+v", st.Job)
 		}
+	}
+}
+
+func TestCreateRefusesBaselinesItCannotDrive(t *testing.T) {
+	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
+	for name, c := range map[string]struct {
+		edit func(*vm.Manifest)
+		want string
+	}{
+		"no manifest":   {nil, "bivouac vz import"},
+		"linux":         {func(m *vm.Manifest) { m.OS, m.MacOS = "linux", nil }, "not darwin"},
+		"old agent":     {func(m *vm.Manifest) { m.Guest.AgentVersion = guestagent.Version + 1 }, "install the matching agent"},
+		"no runner dir": {func(m *vm.Manifest) { m.Guest.RunnerDir = "" }, "--runner-dir"},
+	} {
+		r := newRecorder()
+		p := newProvider(t, r)
+		path := filepath.Join(p.vmDir("base"), vm.ManifestFile)
+		if c.edit == nil {
+			_ = os.Remove(path)
+		} else {
+			m, err := vm.ReadManifest(p.vmDir("base"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.edit(&m)
+			data, _ := json.Marshal(m)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := p.Create(context.Background(), spec)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+		if len(r.calls) != 0 {
+			t.Errorf("%s: touched the runtime: %v", name, r.calls)
+		}
+	}
+}
+
+func TestRunnerLaunchCarriesMachineOptions(t *testing.T) {
+	p, r := ownedFixture(t)
+	r.vms[fixtureName] = false
+	p.cfg.Machine = config.Machine{Display: config.Display{Width: 1920, Height: 1080, PPI: 144}, DiskSync: "none"}
+	if err := p.Start(context.Background(), fixtureName, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(r.calls[len(r.calls)-1], " "); got != "Start input display=1920x1080@144 disk-sync=none "+fixtureName {
+		t.Fatalf("start = %q", got)
+	}
+}
+
+func TestReleaseProxyNeedsRecordedSudo(t *testing.T) {
+	p, _ := ownedFixture(t)
+	if err := p.checkReleaseProxy(fixtureName); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := vm.ReadManifest(p.vmDir(fixtureName))
+	m.Guest.Sudo = false
+	data, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(p.vmDir(fixtureName), vm.ManifestFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.checkReleaseProxy(fixtureName); err == nil {
+		t.Fatal("release proxy allowed without sudo")
+	}
+}
+
+func TestNestedVirtualizationOnlyForLinuxGuests(t *testing.T) {
+	r := newRecorder()
+	p := newProvider(t, r)
+	p.cfg.Machine.NestedVirtualization = true
+	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
+	if err := p.Create(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "only to Linux guests") {
+		t.Fatalf("nested macOS runner: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("touched the runtime: %v", r.calls)
+	}
+}
+
+func TestCheckNestedFollowsTheHost(t *testing.T) {
+	if err := CheckNested(config.VZ{}); err != nil {
+		t.Fatalf("no nesting requested: %v", err)
+	}
+	cfg := config.VZ{Containers: &config.Containers{Machine: config.Machine{NestedVirtualization: true}}}
+	supported, hostErr := vm.NestedVirtualizationSupported()
+	err := CheckNested(cfg)
+	switch {
+	case hostErr != nil:
+		if !errors.Is(err, hostErr) {
+			t.Fatalf("CheckNested = %v, want %v", err, hostErr)
+		}
+	case supported && err != nil:
+		t.Fatalf("supporting host refused: %v", err)
+	case !supported && !errors.Is(err, vm.ErrNestedUnsupported):
+		t.Fatalf("CheckNested = %v, want ErrNestedUnsupported", err)
 	}
 }

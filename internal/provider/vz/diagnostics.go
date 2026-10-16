@@ -53,8 +53,15 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 	}
 	budget := newDiagBudget()
 	var errs []error
+	runnerDir, err := p.runnerDir(name)
+	if err != nil {
+		errs = append(errs, err)
+	}
 	for _, part := range []struct{ mode, sub string }{{"diag", "guest"}, {"diag-runner", "runner"}} {
-		argv := []string{guestPath, part.mode, p.cfg.RunnerDir}
+		if runnerDir == "" {
+			break
+		}
+		argv := []string{guestPath, part.mode, runnerDir}
 		if err := p.collectArchive(ctx, name, argv, filepath.Join(dir, part.sub), budget); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", part.mode, err))
 		}

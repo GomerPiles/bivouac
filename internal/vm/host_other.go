@@ -9,10 +9,10 @@ import (
 )
 
 // Clone is unavailable off macOS.
-func (Store) Clone(string, string) error { return ErrUnsupported }
+func (Store) Clone(string, string, CloneOptions) error { return ErrUnsupported }
 
-// Resize is unavailable off macOS.
-func (Store) Resize(string, int, int) error { return ErrUnsupported }
+// Import is unavailable off macOS.
+func (Store) Import(string, string, Guest) error { return ErrUnsupported }
 
 // List is unavailable off macOS.
 func (Store) List() ([]Entry, error) { return nil, ErrUnsupported }
@@ -28,6 +28,9 @@ func RunHelper(context.Context, RunOptions, io.Writer) error { return ErrUnsuppo
 
 // CheckEntitlement is unavailable off macOS.
 func CheckEntitlement(context.Context, string) error { return ErrUnsupported }
+
+// NestedVirtualizationSupported is false off macOS.
+func NestedVirtualizationSupported() (bool, error) { return false, ErrUnsupported }
 
 // ErrForeignHolder reports a VM lock held by something other than its helper.
 var ErrForeignHolder = errors.New("VM is held by a process that is not its bivouac helper")

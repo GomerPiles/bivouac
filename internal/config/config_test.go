@@ -5,13 +5,24 @@ import (
 	"testing"
 )
 
+func TestMachineOptionsParse(t *testing.T) {
+	text := strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }\n# disk_sync = \"none\"", "[providers.macos.vz.machine]\ndisplay = { width = 1920, height = 1080, ppi = 144 }\ndisk_sync = \"none\"", 1)
+	c, err := Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := c.Providers["macos"].VZ.Machine; m != (Machine{Display: Display{Width: 1920, Height: 1080, PPI: 144}, DiskSync: "none"}) {
+		t.Fatalf("machine = %+v", m)
+	}
+}
+
 func TestExampleParses(t *testing.T) {
 	c, err := Parse([]byte(Example))
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := c.Providers["macos"]
-	if p.VZ.RunnerDir == "" || p.VZ.HostVMLimit != 2 {
+	if p.VZ.HostVMLimit != 2 {
 		t.Fatalf("defaults not applied: %+v", p.VZ)
 	}
 	if c.Budget.JobTimeout.Hours() != 2 {
@@ -64,7 +75,10 @@ func TestRejects(t *testing.T) {
 		"negative timeout": strings.Replace(Example, `job_timeout = "2h"`, `job_timeout = "-2h"`, 1),
 		"negative idle":    strings.Replace(Example, `idle_timeout = "10m"`, `idle_timeout = "-1s"`, 1),
 		"vz cpu":           strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
-		"vz memory":        strings.Replace(Example, `memory_gb = 8`+"\n"+`runner_dir`, `memory_gb = 4096`+"\n"+`runner_dir`, 1),
+		"vz memory":        strings.Replace(Example, `memory_gb = 8`+"\n"+`host_vm_limit`, `memory_gb = 4096`+"\n"+`host_vm_limit`, 1),
+		"vz runner_dir":    strings.Replace(Example, `memory_gb = 8`+"\n", `memory_gb = 8`+"\n"+`runner_dir = "/Users/admin/actions-runner"`+"\n", 1),
+		"machine display":  strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }", "[providers.macos.vz.machine]\ndisplay = { width = 1920 }", 1),
+		"machine sync":     strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }\n# disk_sync = \"none\"", "[providers.macos.vz.machine]\ndisk_sync = \"unsafe\"", 1),
 	}
 	for name, text := range cases {
 		if _, err := Parse([]byte(text)); err == nil {
@@ -127,5 +141,16 @@ func TestCacheConfiguration(t *testing.T) {
 		if cfg.Validate() == nil {
 			t.Fatal("invalid cache config accepted")
 		}
+	}
+}
+
+func TestNestedVirtualizationParses(t *testing.T) {
+	text := Example + "\n[providers.macos.vz.machine]\nnested_virtualization = true\n"
+	c, err := Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Providers["macos"].VZ.Machine.NestedVirtualization {
+		t.Fatal("nested_virtualization not parsed")
 	}
 }

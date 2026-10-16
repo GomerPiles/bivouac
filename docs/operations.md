@@ -336,19 +336,25 @@ the daemon refuses to start without it, and `doctor` checks it.
 
 **VM store.** Baselines and clones live in bivouac's VM store:
 `~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
-`bivouac doctor` names it. Copy a Tart-format baseline in with an APFS clone
-(instant on the same volume), never a move of a VM another tool still uses:
+`bivouac doctor` names it and checks the baseline's manifest. Import a
+stopped Tart-format VM, which clones it when it is on the same volume and
+writes the manifest:
 
 ```bash
-cp -c -R ~/.tart/vms/<baseline> "$HOME/Library/Application Support/bivouac/vms/<baseline>"
+bivouac vz import --runner-dir /Users/admin/actions-runner --sudo ~/.tart/vms/<vm> <baseline>
 ```
+
+Pass `--sudo` only if the guest user has passwordless sudo (the release
+proxy needs it). The import records this binary's guest agent protocol, so
+import again after installing a new agent. A Linux engine baseline needs no
+`--runner-dir`.
 
 Bivouac does not see VMs in other tools' directories, so `foreign_slots`
 must reserve Apple's guest slots for any other manager.
 
 **macOS baseline.** Bivouac reaches the guest through its own agent, not
 Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
-baselines itself, prepare one with Tart before copying it into the store:
+baselines itself, prepare one with Tart before importing it:
 boot it, then install the darwin/arm64 `bivouac` binary as
 `/usr/local/bin/bivouac` (root:wheel, 0755) and
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
@@ -359,9 +365,13 @@ the old one; overwriting the running binary in place corrupts it. Reinstall
 it only when its protocol version changes.
 
 **Moving from the Tart CLI runtime.** Drain to idle first: guests started by
-`tart run` are not adopted. Copy the baseline into the VM store, set
-`type = "vz"`, and rename `[providers.*.tart]` to `[providers.*.vz]` without
-`binary` or `extra_args`; config validation rejects the old names.
+`tart run` are not adopted. Import the baseline, set `type = "vz"`, and
+rename `[providers.*.tart]` to `[providers.*.vz]` without `binary`,
+`extra_args`, or `runner_dir` (now in the manifest); config validation
+rejects the old names. Typed options in `[providers.*.vz.machine]` replace
+`extra_args`. `nested_virtualization = true` needs an M3 or newer Mac with
+macOS 15 and a Linux guest, such as the engine VM in
+`[providers.*.vz.containers.machine]`; the daemon refuses to start otherwise.
 
 Validation config (while Tartelet keeps production):
 
@@ -629,8 +639,9 @@ Use a separate `BIVOUAC_HOME`, an isolated `bivouac-` test scale set or JIT
 label, and a one-job budget. Never change Tartelet, production labels, or the
 personal Docker/Podman/Lima configuration.
 
-Prepare a **local Linux/arm64 Tart-format baseline** through the image
-administrator's normal process, then shut it down and keep it immutable. It
+Prepare a **local Linux/arm64 Tart-format VM** through the image
+administrator's normal process, shut it down, and import it with
+`bivouac vz import`; keep the imported baseline immutable. It
 needs the linux/arm64 `bivouac` binary at `/usr/local/bin/bivouac` with
 [`bivouac-guest-agent.service`](../tools/linux/bivouac-guest-agent.service)
 enabled, a rootful Docker daemon at

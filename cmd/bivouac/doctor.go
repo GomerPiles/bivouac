@@ -171,12 +171,15 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	} else {
 		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
 	}
-	if c, err := vm.ReadConfig(vm.Store(e.layout.VMs).Dir(t.Baseline)); err != nil {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q in %s: %v", t.Baseline, e.layout.VMs, err))
-	} else if c.OS != "darwin" {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q is a %s VM, not macOS", t.Baseline, c.OS))
+	if m, err := vz.CheckBaseline(e.layout.VMs, t.Baseline, "darwin"); err != nil {
+		add("FAIL", "baseline "+name, err.Error())
+	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {
+		add("FAIL", "machine "+name, err.Error())
 	} else {
-		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s; its guest agent is checked when a guest boots", t.Baseline, e.layout.VMs))
+		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s: guest agent protocol %d, runner in %s", t.Baseline, e.layout.VMs, m.Guest.AgentVersion, m.Guest.RunnerDir))
+	}
+	if err := vz.CheckNested(*t); err != nil {
+		add("FAIL", "machine "+name, err.Error())
 	}
 	cpu, mem := t.CPU, t.MemoryGB
 	if c := t.Containers; c != nil {

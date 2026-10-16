@@ -17,9 +17,8 @@ import (
 
 // Runtime is the VM layer under the provider. Tests substitute a recorder.
 type Runtime interface {
-	Clone(ctx context.Context, baseline, name string) error
-	// Resize sets CPU count and memory (MiB) of a stopped VM; 0 keeps a value.
-	Resize(ctx context.Context, name string, cpu, memoryMB int) error
+	// Clone copies baseline to name with its own MAC, CPU, and memory.
+	Clone(ctx context.Context, baseline, name string, opts vm.CloneOptions) error
 	// Start launches the VM helper, whose host-side status goes to sink.
 	Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error)
 	// Exec runs argv through the guest agent. A stdout write error stops
@@ -34,11 +33,12 @@ type Runtime interface {
 	List(ctx context.Context) ([]vm.Entry, error)
 }
 
-// Launch selects devices for one VM.
+// Launch selects devices and machine options for one VM.
 type Launch struct {
 	Share   string // read-only host directory, or empty
 	Input   bool   // keyboard and pointing devices
 	Softnet *vm.SoftnetOptions
+	Machine vm.MachineOptions
 }
 
 // local is the real Runtime: VM directories in bivouac's store, each VM run
@@ -64,12 +64,8 @@ func (l *local) check(ctx context.Context) error {
 	return nil
 }
 
-func (l *local) Clone(_ context.Context, baseline, name string) error {
-	return l.store.Clone(baseline, name)
-}
-
-func (l *local) Resize(_ context.Context, name string, cpu, memoryMB int) error {
-	return l.store.Resize(name, cpu, memoryMB)
+func (l *local) Clone(_ context.Context, baseline, name string, opts vm.CloneOptions) error {
+	return l.store.Clone(baseline, name, opts)
 }
 
 // helperArgs is the exact argument array the helper receives.
@@ -78,7 +74,7 @@ func (l *local) helperArgs(name string, launch Launch) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := vm.RunOptions{Dir: l.store.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, AgentSocket: socket, Softnet: launch.Softnet}
+	opts := vm.RunOptions{Dir: l.store.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, AgentSocket: socket, Softnet: launch.Softnet, Machine: launch.Machine}
 	return append([]string{"vm", "run"}, opts.Args()...), nil
 }
 
