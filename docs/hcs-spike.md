@@ -26,23 +26,25 @@ trial. Removing the host application/daemon is feasible at the native VM layer;
 replacing the complete CI provider still requires image provisioning, guest
 readiness, graphics/input, networking/isolation and lifecycle validation.
 
-The full guest trial, including corrected removable-media naming, reached native
-running/GPU assignment but the agent did not become reachable within its
-ten-minute budget. Read-only inspection after confirmed native absence found
-the agent binary but no fixed setup-complete marker or MSI SSH-server binary.
-The image was detached and the retained child/journal were then removed.
-Read-only inspection of the independent template found setup/OOBE in progress,
-a generalized-to-OOBE image state, no registered agent/SSH services and a cached
-answer that reseals into Audit mode and runs sysprep. Its hash remained unchanged.
-This is a likely provisioning gate; it does not establish the timeout's cause.
-Child-only staging now writes the trial answer into the higher-priority embedded
-answer directory. The first attempt refused a pre-existing empty directory
-before native create; read-only inspection and cleanup succeeded. The next
-attempt passed that guard but failed setting directory permissions before native
-create; read-only inspection and cleanup succeeded. The permission update now
-uses a DACL-only native call that preserves owner/group and avoids unrelated
-audit changes. It needs a live retry. Guest readiness, SSH and rendering remain
-unverified live.
+The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only answer
+staging, its protected DACL and detach-before-start. Native running/GPU assignment
+passed, but the agent did not become reachable within ten minutes. Read-only
+inspection after confirmed native absence found the embedded answer and an
+image state advanced to specialized-to-OOBE; setup/OOBE were still in progress,
+with no agent/SSH service registration or setup-complete marker. Bounded setup
+error codes are `0x80004005`, `0x80220005` and `0x00000490`; they do not identify
+the failed setting. Inspection detached the child and matching cleanup removed
+its disk/journal.
+
+The independent template's cached Audit/sysprep answer is overridden only inside
+the disposable child. Its pinned hash was unchanged by read-only inspection.
+A source audit found that the encoded specialization command was 814 characters,
+exceeding the documented 259-character `RunSynchronousCommand/Path` limit. It now
+uses a short fixed script path; the script is staged beside the answer inside
+the protected child directory. A regression checks actual emitted command-field
+lengths. This is a concrete schema defect, not a proven explanation of all setup
+errors. The correction still needs a live trial. Guest readiness, SSH and
+rendering remain unverified live.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -59,7 +61,8 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   directory is Administrators/SYSTEM-only before the owned VM access grant.
   Before HCS creation, fixed Storage code mounts only the new child, guards
   against an explicit offline answer pointer, and writes the answer into
-  `Windows\Panther\Unattend\unattend.xml`. An existing empty directory is
+  `Windows\Panther\Unattend\unattend.xml` and its fixed specialization script.
+  An existing empty directory is
   accepted; existing contents, links or unexpected ownership records are refused.
   The child is detached before native dispatch; the immutable parent stays pinned.
   No NIC, nested virtualization, audio,
@@ -242,3 +245,8 @@ Embedded child-answer precedence uses the same documented search order. The
 [offline registry library](https://learn.microsoft.com/en-us/windows/win32/devnotes/offline-registry-library-portal)
 checks the explicit pointer without mounting hives in the host registry or saving
 modified hives.
+
+Specialization uses a fixed script path to respect the documented
+[`RunSynchronousCommand/Path` limit](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-deployment-runsynchronous-runsynchronouscommand-path).
+First-logon commands are separately checked against their
+[`CommandLine` limit](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-firstlogoncommands-synchronouscommand-commandline).

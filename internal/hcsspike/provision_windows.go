@@ -36,6 +36,9 @@ var guestSetup string
 //go:embed stage_setup.ps1
 var stageSetup string
 
+//go:embed guest_specialize.ps1
+var guestSpecialize string
+
 func validatePinned(c Config, f PinnedFile) error {
 	h, err := hex.DecodeString(f.SHA256)
 	if !localPath(f.Source) || within(c.Root, f.Source) || err != nil || len(h) != 32 {
@@ -107,11 +110,10 @@ func xmlText(s string) string {
 }
 func unattended(c Config, password string) string {
 	// Code is fixed; instance fields appear only in XML data elements.
-	specialize := encodedPowerShell(`$ErrorActionPreference='Stop';if(Get-Service AppSandboxAgent -ErrorAction SilentlyContinue){Set-Service AppSandboxAgent -StartupType Disabled};New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE' -Name BypassNRO -Value 1 -PropertyType DWord -Force | Out-Null`)
 	boot := encodedPowerShell(`$ErrorActionPreference='Stop';$d=Get-Volume | Where-Object FileSystemLabel -eq 'HCSSETUP' | Select-Object -First 1;if(!$d.DriveLetter){exit 1};& (Join-Path ($d.DriveLetter+':\') 'SETUP.PS1')`)
 	return fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-<settings pass="specialize"><component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><ComputerName>%s</ComputerName></component><component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><RunSynchronous><RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>powershell.exe -NoProfile -NonInteractive -EncodedCommand %s</Path></RunSynchronousCommand></RunSynchronous></component></settings>
+<settings pass="specialize"><component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><ComputerName>%s</ComputerName></component><component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><RunSynchronous><RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Windows\Panther\Unattend\specialize.ps1</Path></RunSynchronousCommand></RunSynchronous></component></settings>
 <settings pass="oobeSystem">
 <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale></component>
 <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -119,7 +121,7 @@ func unattended(c Config, password string) string {
 <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Name>%s</Name><Group>Administrators</Group><Password><Value>%s</Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
 <AutoLogon><Enabled>true</Enabled><Username>%s</Username><Password><Value>%s</Value><PlainText>true</PlainText></Password><LogonCount>1</LogonCount></AutoLogon>
 <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><Description>Initialize disposable HCS guest</Description><CommandLine>powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s</CommandLine><RequiresUserInput>false</RequiresUserInput></SynchronousCommand></FirstLogonCommands>
-</component></settings></unattend>`, xmlText(c.name()), specialize, xmlText(c.GuestUser), xmlText(password), xmlText(c.GuestUser), xmlText(password), boot)
+</component></settings></unattend>`, xmlText(c.name()), xmlText(c.GuestUser), xmlText(password), xmlText(c.GuestUser), xmlText(password), boot)
 }
 func makeSetupISO(ctx context.Context, c Config) error {
 	private := filepath.Join(c.directory(), "setup-private")
@@ -167,7 +169,7 @@ func makeSetupISO(ctx context.Context, c Config) error {
 	}
 	password := "Bv!" + hex.EncodeToString(random[:])
 	clear(random[:])
-	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
+	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "specialize": guestSpecialize, "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
 	if err != nil {
 		return errors.New("cannot encode private setup input")
 	}

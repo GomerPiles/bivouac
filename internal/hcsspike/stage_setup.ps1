@@ -71,10 +71,12 @@ public static class SpikeOfflineAnswer {
   $aclError=[SpikeOfflineAnswer]::ProtectDirectory($answerDirectory,'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
   if($aclError -ne 0){throw 'Cannot protect child answer directory'}
   $phaseCode=63
-  $file=Join-Path $answerDirectory 'unattend.xml'
-  $content=[Text.Encoding]::UTF8.GetBytes($data.unattend)
-  $output=[IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-  try{$output.Write($content,0,$content.Length);$output.Flush($true)}finally{$output.Dispose();[Array]::Clear($content,0,$content.Length)}
+  foreach($entry in @(@('specialize.ps1',$data.specialize),@('unattend.xml',$data.unattend))){
+   $file=Join-Path $answerDirectory $entry[0]
+   $content=[Text.Encoding]::UTF8.GetBytes($entry[1])
+   $output=[IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+   try{$output.Write($content,0,$content.Length);$output.Flush($true)}finally{$output.Dispose();[Array]::Clear($content,0,$content.Length)}
+  }
  } finally {
   if($image){try{if($partition){Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{Dismount-DiskImage -ImagePath $expectedDisk}}
  }

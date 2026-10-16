@@ -607,10 +607,13 @@ The ISO is created in an administrator/SYSTEM-only child directory before HCS
 grants the owned VM access, and is removed with the disposable child. The guest
 password never enters configuration, journal, command arguments or diagnostics.
 Before native create dispatch, fixed elevated Storage code mounts only the new
-child and writes the same answer into an absent or empty
+child and writes the same answer plus a fixed specialization script into an
+absent or empty
 `Windows\Panther\Unattend` directory with administrator/SYSTEM permissions.
 The native DACL-only update preserves owner/group and does not request audit
-changes.
+changes. Specialization invokes the staged script by a short fixed path, within
+Windows' 259-character synchronous-command limit; first-logon command fields
+have a separate 1024-character limit. Tests check the emitted XML values.
 This outranks a cached template answer; nonempty directories, reparse paths and
 an explicit offline `SYSTEM\Setup\UnattendFile` pointer are refused. The
 pointer check uses the system offline-registry library read-only, without loading
@@ -647,8 +650,9 @@ confirms native absence before retaining a failed child's journal/storage for
 operator-approved read-only inspection. It reports `native_absent` and
 `storage_retained`; an ambiguous create never confirms absence or permits such
 inspection. Normal `cleanup` rechecks proofs/absence and removes retained files.
-Offline HCS running state, GPU assignment and explicit native/storage
-cleanup are validated; guest readiness, rendering, SSH, process-loss recovery
+Child-only staging, offline HCS running state, GPU assignment and explicit
+native/storage cleanup are validated. The guest reaches specialized-to-OOBE but
+has not completed setup; guest readiness, rendering, SSH, process-loss recovery
 and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template

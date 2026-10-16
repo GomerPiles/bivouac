@@ -309,3 +309,45 @@ func TestOfflineDirectoryProtectionChangesOnlyDACL(t *testing.T) {
 		t.Fatal("DACL lost intended access")
 	}
 }
+
+func TestUnattendCommandsRespectWindowsSchemaLengths(t *testing.T) {
+	d := xml.NewDecoder(strings.NewReader(unattended(exampleConfig(), "synthetic")))
+	pathCount, commandCount := 0, 0
+	for {
+		token, err := d.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		limit := 0
+		switch start.Name.Local {
+		case "Path":
+			limit = 259
+			pathCount++
+		case "CommandLine":
+			limit = 1024
+			commandCount++
+		default:
+			continue
+		}
+		var value string
+		if err := d.DecodeElement(&value, &start); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(utf16.Encode([]rune(value))); n == 0 || n > limit {
+			t.Fatalf("%s exceeds Windows schema limit %d", start.Name.Local, limit)
+		}
+		if start.Name.Local == "Path" && !strings.HasSuffix(value, `-File C:\Windows\Panther\Unattend\specialize.ps1`) {
+			t.Fatal("specialize must use the staged fixed script")
+		}
+	}
+	if pathCount != 1 || commandCount != 1 {
+		t.Fatal("expected setup commands missing")
+	}
+}
