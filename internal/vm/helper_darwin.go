@@ -21,10 +21,10 @@ import (
 const connectTimeout = 5 * time.Second
 
 // RunHelper is `bivouac vm run`: it holds dir's lock, boots the VM, proxies
-// AgentSocket connections to the guest agent's vsock port, and exits when
-// the guest stops. SIGTERM or SIGINT powers the VM off at once, as `tart
-// stop` does: guests are disposable, so a guest shutdown only delays
-// teardown (a macOS guest ignores the request). Killing the helper powers
+// agent socket connections to the guest agent's vsock port, and exits when
+// the guest stops. SIGTERM or SIGINT powers the VM off at once: guests are
+// disposable, so a guest shutdown only delays teardown (a macOS guest
+// ignores the request). Killing the helper powers
 // the VM off too, because the framework ends a VM whose owning process exits.
 //
 // Output is host-side status only; the guest console is never attached.
@@ -39,9 +39,9 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err != nil {
 		return err
 	}
-	socket := filepath.Join(opts.Dir, AgentSocket)
-	if len(socket) > maxSocketPath {
-		return fmt.Errorf("guest agent socket path exceeds %d bytes", maxSocketPath)
+	socket := opts.AgentSocket
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		return err
 	}
 	lock, err := Acquire(opts.Dir)
 	if err != nil {
@@ -79,7 +79,8 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	}
 	logf("started %s guest with %d CPUs and %d MiB", c.OS, c.CPUCount, c.MemorySize>>20)
 
-	// Holding the lock proves any existing socket file is stale.
+	// Holding the lock proves any existing socket file is stale: the socket
+	// is named after this VM alone.
 	_ = os.Remove(socket)
 	listener, err := listenPrivate(socket)
 	if err != nil {
@@ -164,7 +165,8 @@ func (m *machine) proxy(host net.Conn, port uint32) {
 }
 
 // softnet is the privileged packet filter process between the guest and
-// vmnet, connected over a datagram socket pair as Tart connects it.
+// vmnet, connected over a datagram socket pair with Softnet's end as its
+// stdin, the interface Softnet defines.
 type softnet struct {
 	cmd  *exec.Cmd
 	vmFD int

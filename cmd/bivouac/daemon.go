@@ -18,7 +18,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/manager"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/redact"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
@@ -82,7 +82,7 @@ func (e env) run(ctx context.Context, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	providers, err := buildProviders(ctx, cfg, store)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
 	if err != nil {
 		return fail(err)
 	}
@@ -159,7 +159,7 @@ func (e env) githubClients(ctx context.Context, cfg *config.Config) (github.Scal
 	return c, nil, err
 }
 
-func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store) (map[string]provider.Provider, error) {
+func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store, vms string) (map[string]provider.Provider, error) {
 	out := map[string]provider.Provider{}
 	for name, p := range cfg.Providers {
 		switch p.Type {
@@ -177,8 +177,8 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store)
 				return nil, err
 			}
 			out[name] = wp
-		case "tart":
-			tp, err := tart.New(name, *p.Tart, store.ControllerID(), nil)
+		case "vz":
+			tp, err := vz.New(name, *p.VZ, store.ControllerID(), vms, nil)
 			if err != nil {
 				closeProviders(out)
 				return nil, err

@@ -1,5 +1,5 @@
 // Package paths resolves the platform-conventional locations of bivouac's
-// config file, state directory, and log directory.
+// config file, state, log, cache, and VM store directories.
 package paths
 
 import (
@@ -16,6 +16,7 @@ type Layout struct {
 	Logs        string // daemon and launch logs
 	Diagnostics string // per-instance diagnostics, under Logs
 	Cache       string // bounded opaque objects, separate from ownership state
+	VMs         string // macOS VM store: baselines and their clones
 }
 
 // Resolve returns the layout. BIVOUAC_HOME puts everything under one
@@ -71,6 +72,7 @@ func under(configDir, stateDir, logDir string) Layout {
 		Logs:        logDir,
 		Diagnostics: filepath.Join(logDir, "diagnostics"),
 		Cache:       filepath.Join(stateDir, "cache"),
+		VMs:         filepath.Join(stateDir, "vms"),
 	}
 }
 

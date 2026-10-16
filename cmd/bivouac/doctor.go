@@ -12,7 +12,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vm"
@@ -101,11 +101,11 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			}
 			continue
 		}
-		if p.Type != "tart" {
+		if p.Type != "vz" {
 			add("WARN", "provider "+name, "type "+p.Type+" is not implemented on this host")
 			continue
 		}
-		e.doctorTart(ctx, name, p, host, cfg, add)
+		e.doctorVZ(ctx, name, p, host, cfg, add)
 	}
 
 	if cfg.Budget.ReserveCPU >= host.CPUs {
@@ -162,8 +162,8 @@ func (e env) doctor(ctx context.Context, args []string) error {
 	return report(checks)
 }
 
-func (e env) doctorTart(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
-	t := p.Tart
+func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
+	t := p.VZ
 	if exe, err := os.Executable(); err != nil {
 		add("FAIL", "vm "+name, err.Error())
 	} else if err := vm.CheckEntitlement(ctx, exe); err != nil {
@@ -171,23 +171,18 @@ func (e env) doctorTart(ctx context.Context, name string, p config.Provider, hos
 	} else {
 		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
 	}
-	home, err := tart.Home()
-	if err != nil {
-		add("FAIL", "baseline "+name, err.Error())
-		return
-	}
-	if c, err := vm.ReadConfig(vm.Home(home).Dir(t.Baseline)); err != nil {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q: %v", t.Baseline, err))
+	if c, err := vm.ReadConfig(vm.Store(e.layout.VMs).Dir(t.Baseline)); err != nil {
+		add("FAIL", "baseline "+name, fmt.Sprintf("%q in %s: %v", t.Baseline, e.layout.VMs, err))
 	} else if c.OS != "darwin" {
 		add("FAIL", "baseline "+name, fmt.Sprintf("%q is a %s VM, not macOS", t.Baseline, c.OS))
 	} else {
-		add("PASS", "baseline "+name, t.Baseline+"; its guest agent is checked when a guest boots")
+		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s; its guest agent is checked when a guest boots", t.Baseline, e.layout.VMs))
 	}
 	cpu, mem := t.CPU, t.MemoryGB
-	if e := t.Containers; e != nil {
-		cpu += e.CPU
-		mem += e.MemoryGB
-		tp, err := tart.New(name, *t, "doctor", nil)
+	if c := t.Containers; c != nil {
+		cpu += c.CPU
+		mem += c.MemoryGB
+		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}

@@ -1,6 +1,6 @@
 //go:build unix
 
-package tart
+package vz
 
 import (
 	"errors"

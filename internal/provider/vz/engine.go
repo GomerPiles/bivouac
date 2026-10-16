@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"bytes"
@@ -189,7 +189,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	plan := RelayPlan{StatePath: p.records.Path(), Home: p.home, Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
+	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
 	start := p.startRelay
 	if start == nil {
 		start = startDetachedRelay

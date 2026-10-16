@@ -16,7 +16,7 @@ import (
 // milliseconds) and gives the copy a fresh MAC address. The copy is staged
 // under a hidden name and renamed into place, so a crash never leaves a
 // half-copied VM under name.
-func (h Home) Clone(baseline, name string) error {
+func (h Store) Clone(baseline, name string) error {
 	if err := validName(baseline); err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (h Home) Clone(baseline, name string) error {
 }
 
 // Resize sets CPU count and memory (MiB) of a stopped VM. Zero keeps a value.
-func (h Home) Resize(name string, cpu, memoryMB int) error {
+func (h Store) Resize(name string, cpu, memoryMB int) error {
 	if err := validName(name); err != nil {
 		return err
 	}
@@ -121,8 +121,8 @@ func (h Home) Resize(name string, cpu, memoryMB int) error {
 }
 
 // Lock is the running VM's claim on its directory: an fcntl write lock on
-// config.json, the same lock Tart takes, so `tart list` reports the VM as
-// running and Tart refuses to start or delete it.
+// config.json, whose holder's pid identifies the helper. It is the lock Tart
+// takes too, so a VM directory is never run by both.
 //
 // POSIX releases fcntl locks when the process closes any descriptor of the
 // file, so the holder must never open config.json again while it runs. In
@@ -185,12 +185,12 @@ func Holder(dir string) (int, error) {
 	return int(lk.Pid), nil
 }
 
-// List returns every VM directory under h with its running state. Staging
-// directories (hidden names) are skipped. A VM whose lock cannot be read is
+// List returns every VM directory in the store with its running state.
+// Hidden entries (staging directories and the socket directory) are skipped. A VM whose lock cannot be read is
 // reported running, so it still counts against the host limit and is never
 // treated as stopped; one unreadable directory does not hide the others.
-func (h Home) List() ([]Entry, error) {
-	entries, err := os.ReadDir(filepath.Join(string(h), "vms"))
+func (h Store) List() ([]Entry, error) {
+	entries, err := os.ReadDir(string(h))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -209,7 +209,7 @@ func (h Home) List() ([]Entry, error) {
 }
 
 // Delete removes a stopped VM directory. Callers check ownership first.
-func (h Home) Delete(name string) error {
+func (h Store) Delete(name string) error {
 	if err := validName(name); err != nil {
 		return err
 	}
@@ -223,6 +223,10 @@ func (h Home) Delete(name string) error {
 	}
 	if pid != 0 {
 		return fmt.Errorf("VM %q is running", name)
+	}
+	// A helper that was killed leaves its socket behind.
+	if socket, err := h.SocketPath(name); err == nil {
+		_ = os.Remove(socket)
 	}
 	return os.RemoveAll(dir)
 }

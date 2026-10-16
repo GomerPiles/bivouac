@@ -10,7 +10,7 @@ import (
 )
 
 // ErrForeignHolder reports a VM lock held by something other than a bivouac
-// VM helper for that directory (for example `tart run`); it is never signalled.
+// VM helper for that directory (such as another VM tool); it is never signalled.
 var ErrForeignHolder = errors.New("VM is held by a process that is not its bivouac helper")
 
 // HelperPID returns the pid of the bivouac helper running dir, 0 when the VM

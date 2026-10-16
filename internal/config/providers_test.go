@@ -7,10 +7,10 @@ import (
 
 func TestCrossProviderRules(t *testing.T) {
 	second := func(name, scaleset string, foreign int) string {
-		return Example + fmt.Sprintf("\n[providers.%s]\ntype = \"tart\"\nscaleset = %q\n\n[providers.%s.tart]\nbaseline = \"ci-macos\"\nforeign_slots = %d\n", name, scaleset, name, foreign)
+		return Example + fmt.Sprintf("\n[providers.%s]\ntype = \"vz\"\nscaleset = %q\n\n[providers.%s.vz]\nbaseline = \"ci-macos\"\nforeign_slots = %d\n", name, scaleset, name, foreign)
 	}
 	if _, err := Parse([]byte(second("studio", "bivouac-studio", 1))); err != nil {
-		t.Fatalf("valid second Tart provider: %v", err)
+		t.Fatalf("valid second vz provider: %v", err)
 	}
 	cases := map[string]string{
 		"duplicate scaleset":   second("studio", "bivouac-MACOS-experimental", 1),

@@ -23,7 +23,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/paths"
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
@@ -46,8 +46,8 @@ Setup:
   config validate  check the config file   (also: config example, config path)
   secret set       store a credential-store item from a file or stdin
   secret check     report whether an item exists   (also: secret delete)
-  tart list        show guests bivouac owns and guests it does not
-  tart cleanup     delete orphaned guests that carry bivouac's own metadata
+  vz list          show guests bivouac owns and guests it does not
+  vz cleanup       delete orphaned guests that carry bivouac's own metadata
   appsandbox inspect  read-only daemon/version/VM inventory (no startup)
   appsandbox broker   operator-started elevated lifecycle broker
   crosvm validate     credential-free Linux GPU/lifecycle/recovery test
@@ -97,7 +97,7 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 	if cmd == "guest" {
 		if len(args) == 3 && args[0] == "macos" {
-			return tart.RunGuest(ctx, args[1], args[2], os.Stdout)
+			return vz.RunGuest(ctx, args[1], args[2], os.Stdout)
 		}
 		if len(args) == 2 && args[0] == "linux" {
 			return crosvm.RunLinuxGuest(ctx, args[1], os.Stdin, os.Stdout)
@@ -132,13 +132,13 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		if len(args) == 1 {
 			switch args[0] {
 			case "check-isolation":
-				_, err := tart.CheckIsolation(ctx)
+				_, err := vz.CheckIsolation(ctx)
 				if err == nil {
 					fmt.Println("isolation preflight available; no VM started")
 				}
 				return err
 			case "relay":
-				return tart.RunRelay(ctx, os.Stdin)
+				return vz.RunRelay(ctx, os.Stdin)
 			case "listen":
 				return engine.GuestListen(ctx)
 			case "probe":
@@ -179,8 +179,8 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		return e.configCmd(args)
 	case "secret":
 		return e.secretCmd(ctx, args)
-	case "tart":
-		return e.tartCmd(ctx, args)
+	case "vz":
+		return e.vzCmd(ctx, args)
 	case "version":
 		fmt.Println("bivouac", version())
 		return nil

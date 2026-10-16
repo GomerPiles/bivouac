@@ -1,16 +1,17 @@
 //go:build integration
 
-package tart
+package vz
 
 // Real-host validation of the VM runtime. Run on an Apple Silicon Mac with a
-// local baseline that has the bivouac guest agent installed, and a bivouac
-// binary signed with tools/macos/bivouac.entitlements:
+// baseline in the VM store (BIVOUAC_HOME's when set) that has the bivouac
+// guest agent installed, and a bivouac binary signed with
+// tools/macos/bivouac.entitlements:
 //
-//	BIVOUAC_TART_BASELINE=<baseline> BIVOUAC_EXE=<signed bivouac> \
-//	  go test -tags integration -run TestRealGuest -v ./internal/provider/tart/
+//	BIVOUAC_VZ_BASELINE=<baseline> BIVOUAC_EXE=<signed bivouac> \
+//	  go test -tags integration -run TestRealGuest -v ./internal/provider/vz/
 //
 // It clones the baseline twice, proves the guest agent session is Aqua, that
-// the helper receives exactly its argument array and holds Tart's lock, that
+// the helper receives exactly its argument array and holds the VM lock, that
 // a sentinel written in one clone is absent in the next, that cleanup refuses
 // the baseline, and it prints clone, boot, and teardown timings.
 
@@ -27,25 +28,27 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/paths"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func TestRealGuest(t *testing.T) {
-	baseline := os.Getenv("BIVOUAC_TART_BASELINE")
+	baseline := os.Getenv("BIVOUAC_VZ_BASELINE")
 	if baseline == "" {
-		t.Skip("BIVOUAC_TART_BASELINE not set")
+		t.Skip("BIVOUAC_VZ_BASELINE not set")
 	}
 	exe := os.Getenv("BIVOUAC_EXE")
 	if exe == "" {
 		t.Skip("BIVOUAC_EXE not set")
 	}
-	home, err := Home()
+	layout, err := paths.Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Tart{Baseline: baseline, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2, ForeignSlots: 1}
-	p, err := New("macos", cfg, "integration-ctl", &local{home: vm.Home(home), exe: exe})
+	store := vm.Store(layout.VMs)
+	cfg := config.VZ{Baseline: baseline, RunnerDir: "/Users/admin/actions-runner", HostVMLimit: 2, ForeignSlots: 1}
+	p, err := New("macos", cfg, "integration-ctl", layout.VMs, &local{store: store, exe: exe})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,10 +86,14 @@ func TestRealGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		args := strings.TrimSpace(string(ps))
-		if want := strings.Join(append([]string{exe}, p.LaunchArgs(name)...), " "); args != want {
+		launchArgs, err := p.LaunchArgs(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := strings.Join(append([]string{exe}, launchArgs...), " "); args != want {
 			t.Fatalf("launched process %q, want %q", args, want)
 		}
-		if holder, err := vm.Holder(vm.Home(home).Dir(name)); err != nil || holder != pid {
+		if holder, err := vm.Holder(store.Dir(name)); err != nil || holder != pid {
 			t.Fatalf("lock holder = %d, %v; want helper %d", holder, err, pid)
 		}
 		t.Logf("round %d: helper process: %s", round, args)

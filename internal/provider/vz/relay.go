@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"context"
@@ -14,12 +14,13 @@ import (
 	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 // RelayPlan contains no credentials. It selects one recorded pair, never an
 // endpoint supplied by a workflow. The subprocess opens no host network socket.
 type RelayPlan struct {
-	StatePath, Home                                string
+	StatePath, Store                               string
 	Name, InstanceID, ControllerID, Engine, Policy string
 }
 
@@ -49,7 +50,7 @@ func (r RelayPlan) verify() error {
 	if err := r.verifyRecord(); err != nil {
 		return err
 	}
-	p := Provider{home: r.Home, controllerID: r.ControllerID}
+	p := Provider{store: vm.Store(r.Store), controllerID: r.ControllerID}
 	a, ok := p.readMeta(r.Name)
 	if !ok || a.ControllerID != r.ControllerID || a.InstanceID != r.InstanceID || a.EngineName != r.Name+"-engine" || a.ParentName != "" || a.NetworkPolicy != r.Policy {
 		return provider.ErrNotOwned
@@ -76,7 +77,7 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	rt, err := newLocal(r.Home)
+	rt, err := newLocal(r.Store)
 	if err != nil {
 		return err
 	}
@@ -89,7 +90,7 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 			if r.verifyRecord() != nil {
 				return
 			}
-			p := Provider{home: r.Home}
+			p := Provider{store: vm.Store(r.Store)}
 			m, ok := p.readMeta(name)
 			if !ok || m.ControllerID != r.ControllerID || m.InstanceID != r.InstanceID {
 				continue

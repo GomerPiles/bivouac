@@ -17,7 +17,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/install"
 	"github.com/GomerPiles/bivouac/internal/manager"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
 )
@@ -217,9 +217,9 @@ func (e env) secretCmd(ctx context.Context, args []string) error {
 	return errUsage
 }
 
-// tartCmd inspects and cleans up macOS guests through the provider, with
+// vzCmd inspects and cleans up macOS guests through the provider, with
 // the same ownership checks the daemon uses.
-func (e env) tartCmd(ctx context.Context, args []string) error {
+func (e env) vzCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errUsage
 	}
@@ -246,7 +246,7 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	providers, err := buildProviders(ctx, cfg, store)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
 	if err != nil {
 		return err
 	}
@@ -280,7 +280,7 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 		return nil
 	case "cleanup":
 		var dry bool
-		if err := parseFlags("tart cleanup", args[1:], func(fs *flag.FlagSet) { fs.BoolVar(&dry, "dry-run", false, "only report") }); err != nil {
+		if err := parseFlags("vz cleanup", args[1:], func(fs *flag.FlagSet) { fs.BoolVar(&dry, "dry-run", false, "only report") }); err != nil {
 			return err
 		}
 		for _, name := range cfg.ProviderNames() {
@@ -309,8 +309,12 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 		return nil
 	case "run-args":
 		for _, name := range cfg.ProviderNames() {
-			if tp, ok := providers[name].(*tart.Provider); ok {
-				fmt.Printf("%s: bivouac %s\n", name, strings.Join(tp.LaunchArgs("<name>"), " "))
+			if tp, ok := providers[name].(*vz.Provider); ok {
+				args, err := tp.LaunchArgs("<name>")
+				if err != nil {
+					return err
+				}
+				fmt.Printf("%s: bivouac %s\n", name, strings.Join(args, " "))
 			}
 		}
 		return nil
