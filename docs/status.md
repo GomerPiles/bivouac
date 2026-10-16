@@ -82,6 +82,13 @@ Open:
 - Private-peer and source-MAC filtering are inconclusive in the tested
   topology. The interface guard is periodic, not atomic, and stops after
   broker loss.
+- Automatic broker admission recovery after interface changes is covered by
+  fake-backed tests: quarantine stays closed through stopped/absent VMs and
+  partial network cleanup, then a successful guard pass admits fresh guests with
+  current host policy without broker restart. Addition/removal, repeated changes,
+  canceled passes and retained-record recovery across restart are covered. This
+  change is not deployed to the installed controller or validated with live NIC
+  changes.
 - The administrator-only native fault-injection test is compiled but has
   not run. Recovery of a guest retained across reboot, reboot mid-job, and
   a cleanup soak are untested.
