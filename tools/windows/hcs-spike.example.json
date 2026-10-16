@@ -10,7 +10,7 @@
   "drivers": [
     {
       "source": "C:\\HCSLab\\Drivers\\vendor",
-      "guest_path": "C:\\Windows\\HostDriverStore\\FileRepository\\vendor"
+      "guest_path": "C:\\Windows\\System32\\HostDriverStore\\FileRepository\\vendor"
     }
   ],
   "timeout_seconds": 180

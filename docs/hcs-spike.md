@@ -44,10 +44,12 @@ Default input desktop and interactive native-probe execution. The probe stops
 at adapter validation: explicit selection finds no acceptable hardware adapter
 among four DXGI candidates (stage 3, DXGI_ERROR_NOT_FOUND). Presentation and pixel
 readback remain unverified. The selected host driver package matches the host
-GPU and driver version. A bounded read-only guest GPU-PV readiness wait, display
-device/problem counters and the agent's driver-copy count now distinguish
-pending device startup from persistent GPU failure; these diagnostics need a
-live trial. No raw device identities, names or driver paths enter reports.
+GPU and driver version. The bounded read-only readiness check confirms one
+GPU-PV device with problem Code 43 after 136 driver files were copied. The
+destination lacked `System32`; configuration now requires
+`C:\Windows\System32\HostDriverStore\FileRepository`, matching Windows GPU-PV
+and the upstream implementation. The corrected destination awaits a live trial.
+No raw device identities, names or driver paths enter reports.
 
 The VM, disposable child and journal are removed; native absence is confirmed.
 Read-only inspection completed, but some files observed live were absent after
@@ -203,7 +205,7 @@ operator agreement on those resources.
    hash, select only the needed host-matching GPU DriverStore payloads, and
    generate a fresh 16-byte lowercase hexadecimal `instance_id`. The example
    identity must not be reused for independent trials. Driver destinations are
-   restricted to the guest `C:\Windows\HostDriverStore\FileRepository` tree.
+   restricted to the guest `C:\Windows\System32\HostDriverStore\FileRepository` tree.
    Automatic driver discovery, vendor runtime/shim packaging and OpenGL/Vulkan
    mapping-layer preparation are outside this spike. A prepared image may
    already contain the required drivers; then `drivers` can be omitted.

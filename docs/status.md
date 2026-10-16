@@ -108,8 +108,11 @@ The explicit-selection probe enumerates four DXGI adapters but finds no
 acceptable hardware candidate (stage 3, DXGI_ERROR_NOT_FOUND); default selection
 is no longer the only explanation. The selected driver package matches the host
 GPU and driver version. Hardware rendering, presentation and pixel readback
-remain unverified. A bounded read-only GPU-PV readiness wait and numeric device,
-problem and driver-copy counters now await live validation.
+remain unverified. The bounded read-only readiness check confirms one GPU-PV
+device with problem Code 43 after 136 driver files were copied. The driver
+destination lacked `System32`; validation, examples and protocol fixtures now
+require the documented `C:\Windows\System32\HostDriverStore\FileRepository`
+tree. This corrected destination awaits live validation.
 Corrected hidden-folder inspection and matching cleanup finish successfully;
 the VM, child and journal are removed and only the trial lock remains. Some
 files observed live were absent in the stopped clone after forced termination,

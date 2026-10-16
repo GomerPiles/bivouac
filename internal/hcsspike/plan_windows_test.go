@@ -14,7 +14,7 @@ func exampleConfig() Config {
 
 func TestPlanHasNoNetworkOrPersonalShares(t *testing.T) {
 	c := exampleConfig()
-	c.Drivers = []DriverShare{{Source: `C:\Tests\Drivers\vendor`, GuestPath: `C:\Windows\HostDriverStore\FileRepository\vendor`}}
+	c.Drivers = []DriverShare{{Source: `C:\Tests\Drivers\vendor`, GuestPath: `C:\Windows\System32\HostDriverStore\FileRepository\vendor`}}
 	p, err := Plan(c)
 	if err != nil {
 		t.Fatal(err)
@@ -69,11 +69,14 @@ func TestConfigRejectsUnsafeInputs(t *testing.T) {
 		"unbounded duration":   func(c *Config) { c.TimeoutSeconds = 0 },
 		"user injection":       func(c *Config) { c.GuestUser = "ci\ncommand" },
 		"destination injection": func(c *Config) {
-			c.Drivers = []DriverShare{{Source: `C:\Drivers`, GuestPath: "C:\\Windows\\HostDriverStore\\FileRepository\\x|other"}}
+			c.Drivers = []DriverShare{{Source: `C:\Drivers`, GuestPath: "C:\\Windows\\System32\\HostDriverStore\\FileRepository\\x|other"}}
+		},
+		"driver path missing System32": func(c *Config) {
+			c.Drivers = []DriverShare{{Source: `C:\Drivers`, GuestPath: `C:\Windows\HostDriverStore\FileRepository\vendor`}}
 		},
 		"arbitrary guest destination": func(c *Config) { c.Drivers = []DriverShare{{Source: `C:\Drivers`, GuestPath: `C:\Users\ciuser`}} },
 		"source contains root": func(c *Config) {
-			c.Drivers = []DriverShare{{Source: `C:\Tests`, GuestPath: `C:\Windows\HostDriverStore\FileRepository\x`}}
+			c.Drivers = []DriverShare{{Source: `C:\Tests`, GuestPath: `C:\Windows\System32\HostDriverStore\FileRepository\x`}}
 		},
 	}
 	for name, mutate := range tests {

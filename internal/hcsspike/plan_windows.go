@@ -126,7 +126,7 @@ func (c Config) Validate() error {
 		return errors.New("at most 16 driver shares, only with GPU enabled")
 	}
 	for _, driver := range c.Drivers {
-		if !localPath(driver.Source) || within(c.Root, driver.Source) || within(driver.Source, c.Root) || !localPath(driver.GuestPath) || !strings.HasPrefix(strings.ToLower(driver.GuestPath), `c:\windows\hostdriverstore\filerepository\`) {
+		if !localPath(driver.Source) || within(c.Root, driver.Source) || within(driver.Source, c.Root) || !localPath(driver.GuestPath) || !strings.HasPrefix(strings.ToLower(driver.GuestPath), `c:\windows\system32\hostdriverstore\filerepository\`) {
 			return errors.New("driver sources must be external local directories; destinations must be under the guest HostDriverStore FileRepository")
 		}
 	}

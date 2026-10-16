@@ -685,9 +685,12 @@ of the public validation assets with small SSH metadata, setup/console readiness
 Default input desktop and interactive native-probe execution pass live. The
 explicit-selection probe reaches DXGI enumeration but finds no acceptable
 hardware adapter among four candidates (stage 3, DXGI_ERROR_NOT_FOUND). Hardware
-rendering/presentation and pixel readback remain unverified. A bounded read-only
-GPU-PV device readiness wait and numeric device/copy diagnostics need live
-validation; guest copy completion alone is not driver readiness. Forced termination can leave the stopped disk without files
+rendering/presentation and pixel readback remain unverified. The bounded read-only
+GPU-PV readiness check reports one device with problem Code 43 after 136 files
+were copied; guest copy completion alone is not driver readiness. Driver
+destinations must include `System32` in the documented guest
+`C:\Windows\System32\HostDriverStore\FileRepository` tree; the corrected path
+awaits live validation. Forced termination can leave the stopped disk without files
 already observed live; read-only inspection does not override a completed live
 check. Process-loss recovery and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only

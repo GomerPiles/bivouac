@@ -109,12 +109,12 @@ func TestAgentBoundsUnterminatedOutput(t *testing.T) {
 
 func TestGPUProtocolUsesOnlyValidatedDestinations(t *testing.T) {
 	c := exampleConfig()
-	c.Drivers = []DriverShare{{Source: `C:\Tests\Drivers\vendor`, GuestPath: `C:\Windows\HostDriverStore\FileRepository\vendor`}}
+	c.Drivers = []DriverShare{{Source: `C:\Tests\Drivers\vendor`, GuestPath: `C:\Windows\System32\HostDriverStore\FileRepository\vendor`}}
 	var out strings.Builder
 	if err := writeGPU(&out, c); err != nil {
 		t.Fatal(err)
 	}
-	expected := "gpu_query_response:1\nAppSandbox.Drv.0|C:\\Windows\\HostDriverStore\\FileRepository\\vendor|\n"
+	expected := "gpu_query_response:1\nAppSandbox.Drv.0|C:\\Windows\\System32\\HostDriverStore\\FileRepository\\vendor|\n"
 	if out.String() != expected || strings.Contains(out.String(), c.Drivers[0].Source) {
 		t.Fatal("driver protocol differs or exposes host source")
 	}
@@ -140,13 +140,13 @@ func TestAgentCancellationClosesBlockedTransport(t *testing.T) {
 func TestAgentWaitsForDriverCopyBeforeDeclaringReady(t *testing.T) {
 	c := exampleConfig()
 	c.GPU = true
-	c.Drivers = []DriverShare{{Source: `C:\Fixture\Drivers`, GuestPath: `C:\Windows\HostDriverStore\FileRepository\fixture`}}
+	c.Drivers = []DriverShare{{Source: `C:\Fixture\Drivers`, GuestPath: `C:\Windows\System32\HostDriverStore\FileRepository\fixture`}}
 	report, err := agentTestConfig(t, c, func(conn net.Conn) error {
 		if _, err := io.WriteString(conn, "hello\n"); err != nil {
 			return err
 		}
 		reader := bufio.NewReader(conn)
-		for _, expected := range []string{"gpu_query_response:1\n", "AppSandbox.Drv.0|C:\\Windows\\HostDriverStore\\FileRepository\\fixture|\n", "1:ssh_enable\n"} {
+		for _, expected := range []string{"gpu_query_response:1\n", "AppSandbox.Drv.0|C:\\Windows\\System32\\HostDriverStore\\FileRepository\\fixture|\n", "1:ssh_enable\n"} {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				return err
