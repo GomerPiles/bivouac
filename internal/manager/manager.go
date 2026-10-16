@@ -48,6 +48,8 @@ type Options struct {
 	// PollInterval is how often guests are asked about their runner; tests
 	// shorten it. Default 2s.
 	PollInterval time.Duration
+	// QueuePollInterval bounds REST queue checks. Default 30s.
+	QueuePollInterval time.Duration
 	// RunnerStatusGrace bounds consecutive guest transport failures. Default 60s.
 	RunnerStatusGrace time.Duration
 	// RunnerStatusTimeout bounds each status probe. Default 15s.
@@ -79,16 +81,20 @@ type Options struct {
 type Manager struct {
 	o Options
 
-	admissionMu sync.Mutex // capacity check and durable reservation across pollers
-	mu          sync.Mutex
-	root        context.Context // Run's context; instance lifecycles hang off it, not off a poller
-	accepting   atomic.Bool     // mode is on: capacity may be offered and guests launched
-	runs        map[string]*run // active instance goroutines by instance ID
-	pollers     map[string]*poller
-	events      chan struct{}
-	phase       string
-	wg          sync.WaitGroup
-	poolRetry   map[string]time.Time
+	admissionMu  sync.Mutex // capacity check and durable reservation across pollers
+	mu           sync.Mutex
+	root         context.Context // Run's context; instance lifecycles hang off it, not off a poller
+	accepting    atomic.Bool     // mode is on: capacity may be offered and guests launched
+	runs         map[string]*run // active instance goroutines by instance ID
+	pollers      map[string]*poller
+	events       chan struct{}
+	phase        string
+	wg           sync.WaitGroup
+	poolRetry    map[string]time.Time
+	queueCancel  context.CancelFunc
+	queueDone    chan struct{}
+	queueCounts  map[string]int
+	queueUpdated time.Time
 }
 
 type run struct {
@@ -118,8 +124,13 @@ func New(o Options) (*Manager, error) {
 	if o.Config == nil || o.Store == nil || o.Log == nil || o.NewID == nil {
 		return nil, errors.New("manager: incomplete options")
 	}
-	if o.Config.GitHub.Demand == config.DemandJIT && o.JIT == nil || o.Config.GitHub.Demand == config.DemandScaleSet && o.GitHub == nil {
+	if o.Config.GitHub.Demand.UsesRESTJIT() && o.JIT == nil || o.Config.GitHub.Demand == config.DemandScaleSet && o.GitHub == nil {
 		return nil, errors.New("manager: missing demand client")
+	}
+	if o.Config.GitHub.Demand == config.DemandQueued {
+		if _, ok := o.JIT.(github.JobQueue); !ok {
+			return nil, errors.New("manager: missing queued-job reader")
+		}
 	}
 	for name := range o.Config.Providers {
 		if _, ok := o.Providers[name]; !ok {
@@ -128,6 +139,9 @@ func New(o Options) (*Manager, error) {
 	}
 	if o.PollInterval == 0 {
 		o.PollInterval = 2 * time.Second
+	}
+	if o.QueuePollInterval == 0 {
+		o.QueuePollInterval = 30 * time.Second
 	}
 	if o.RunnerStatusGrace == 0 {
 		o.RunnerStatusGrace = time.Minute
@@ -170,6 +184,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(m.o.Tick)
 	defer ticker.Stop()
 	defer m.stopPollers()
+	defer m.stopQueuePoller()
 	performance := perf.NewSampler(m.o.Files.Dir)
 	nextPerformance := time.Now()
 	for {
@@ -209,6 +224,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			m.o.Log.Info("shutting down; active guests keep running and are reconciled on the next start")
 			m.stopPollers()
+			m.stopQueuePoller()
 			m.cancelRuns(false)
 			m.wg.Wait()
 			return nil
@@ -225,12 +241,19 @@ func (m *Manager) apply(ctx context.Context, mode control.Mode) bool {
 	// Keep the session open in drain and stop. Local execution capacity is
 	// zero in those modes; assigned jobs wait for on. Only off closes it.
 	m.accepting.Store(mode == control.ModeOn)
+	if mode != control.ModeOn {
+		m.stopQueuePoller()
+	}
 	switch mode {
 	case control.ModeOn:
-		if m.o.Config.GitHub.Demand == config.DemandJIT {
+		switch m.o.Config.GitHub.Demand {
+		case config.DemandQueued:
+			m.startQueuePoller(ctx)
+			m.setPhase("waiting for queued jobs")
+		case config.DemandJIT:
 			m.fillPool(ctx)
 			m.setPhase("maintaining idle pool")
-		} else {
+		default:
 			m.startPollers(ctx)
 			m.setPhase("polling")
 		}
@@ -555,7 +578,7 @@ func (m *Manager) track(ctx context.Context, inst *state.Instance, adopted bool)
 func (m *Manager) Wait() { m.wg.Wait() }
 
 func (m *Manager) fail(inst *state.Instance, err error) {
-	if m.o.Config.GitHub.Demand == config.DemandJIT {
+	if m.o.Config.GitHub.Demand.UsesRESTJIT() {
 		m.mu.Lock()
 		m.poolRetry[inst.Provider] = time.Now().Add(30 * time.Second)
 		m.mu.Unlock()
@@ -698,12 +721,13 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 			teardown(reasonStopStartup)
 			return
 		}
-		if m.o.Config.GitHub.Demand == config.DemandJIT && !m.accepting.Load() {
+		if m.o.Config.GitHub.Demand.UsesRESTJIT() && (!m.accepting.Load() ||
+			m.o.Config.GitHub.Demand == config.DemandQueued && !m.queueWaiting(inst.Provider)) {
 			teardown("idle pool paused")
 			return
 		}
 		var jit github.JITConfig
-		if m.o.Config.GitHub.Demand == config.DemandJIT {
+		if m.o.Config.GitHub.Demand.UsesRESTJIT() {
 			jit, err = m.o.JIT.GenerateRunnerJIT(ctx, inst.Name, m.o.Config.GitHub.RunnerGroup, pcfg.Labels, "_work")
 		} else {
 			jit, err = m.o.GitHub.GenerateJIT(ctx, inst.ScaleSetID, inst.Name, "_work")
@@ -721,7 +745,8 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 			teardown(reasonStopStartup)
 			return
 		}
-		if m.o.Config.GitHub.Demand == config.DemandJIT && !m.accepting.Load() {
+		if m.o.Config.GitHub.Demand.UsesRESTJIT() && (!m.accepting.Load() ||
+			m.o.Config.GitHub.Demand == config.DemandQueued && !m.queueWaiting(inst.Provider)) {
 			teardown("idle pool paused")
 			return
 		}
@@ -897,11 +922,19 @@ func (m *Manager) waitRunner(ctx context.Context, r *run, p provider.Provider, i
 					}
 				})
 			}
-			if m.o.Config.GitHub.Demand == config.DemandJIT && !m.accepting.Load() && cur.Job == nil && st.Job == nil {
+			if m.o.Config.GitHub.Demand.UsesRESTJIT() && !m.accepting.Load() && cur.Job == nil && st.Job == nil {
 				// Withdraw before stopping the guest. A busy-runner rejection
 				// protects a job accepted concurrently with drain/off.
 				if err := m.registry().RemoveRunner(ctx, cur.RunnerID); err == nil {
 					return "idle pool paused"
+				}
+			}
+			if m.o.Config.GitHub.Demand == config.DemandQueued && cur.Job == nil && st.Job == nil &&
+				!cur.ListenedAt.IsZero() && time.Since(cur.ListenedAt) >= m.o.SurplusGrace && !m.queueWaiting(inst.Provider) {
+				// A cancelled or reassigned job must not leave an idle VM behind.
+				// Busy-runner rejection still protects a concurrent assignment.
+				if err := m.registry().RemoveRunner(ctx, cur.RunnerID); err == nil {
+					return "no matching queued job remains"
 				}
 			}
 			if cur.Phase == state.PhaseRunning && cur.Job == nil {
@@ -916,7 +949,7 @@ func (m *Manager) waitRunner(ctx context.Context, r *run, p provider.Provider, i
 			idle = m.o.Config.Budget.SweepIdleTimeout.Duration
 		}
 		if cur.Job == nil && st.State == provider.RunnerListening && st.Job == nil && cur.Phase == state.PhaseListening && !cur.ListenedAt.IsZero() && time.Since(cur.ListenedAt) > idle {
-			if m.o.Config.GitHub.Demand == config.DemandJIT {
+			if m.o.Config.GitHub.Demand.UsesRESTJIT() {
 				if err := m.registry().RemoveRunner(ctx, cur.RunnerID); err != nil {
 					if err := sleep(ctx, m.o.PollInterval); err != nil {
 						return reasonCancelled
@@ -1103,7 +1136,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if pc.VZ != nil && pc.VZ.Containers != nil && inst.ContainerEngine != pc.VZ.Containers.Engine {
 			return fmt.Errorf("%w: cannot change container engine with retained records; finish cleanup first", ErrRefused)
 		}
-		if (inst.ScaleSetID == 0) != (m.o.Config.GitHub.Demand == config.DemandJIT) {
+		if (inst.ScaleSetID == 0) != (m.o.Config.GitHub.Demand.UsesRESTJIT()) {
 			return fmt.Errorf("%w: cannot change demand mode with retained instance records; finish cleanup first", ErrRefused)
 		}
 	}
@@ -1304,7 +1337,7 @@ func Describe(s *control.Status, mode control.Mode, alive bool) string {
 }
 
 func (m *Manager) registry() github.RunnerRegistry {
-	if m.o.Config.GitHub.Demand == config.DemandJIT {
+	if m.o.Config.GitHub.Demand.UsesRESTJIT() {
 		return m.o.JIT
 	}
 	return m.o.GitHub

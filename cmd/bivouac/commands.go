@@ -79,7 +79,7 @@ func (e env) setMode(ctx context.Context, mode control.Mode, args []string) erro
 	if wait {
 		switch mode {
 		case control.ModeOn:
-			return e.waitForPhase(ctx, time.Minute, "polling", "maintaining idle pool")
+			return e.waitForPhase(ctx, time.Minute, "polling", "maintaining idle pool", "waiting for queued jobs")
 		case control.ModeOff:
 			return e.waitForPhase(ctx, 3*time.Hour, "exiting")
 		default:

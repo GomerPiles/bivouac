@@ -151,8 +151,18 @@ func (e env) githubClients(ctx context.Context, cfg *config.Config) (github.Scal
 		return nil, nil, fmt.Errorf("credential store item %q: %w", cfg.GitHub.PrivateKeySecret, err)
 	}
 	auth := github.AppAuth{ClientID: cfg.GitHub.AppClientID, InstallationID: cfg.GitHub.AppInstallationID, PrivateKeyPEM: key}
-	if cfg.GitHub.Demand == config.DemandJIT {
+	if cfg.GitHub.Demand.UsesRESTJIT() {
 		c, err := github.NewJITClient(cfg.GitHub.URL, auth, version())
+		if err == nil && cfg.GitHub.Demand == config.DemandQueued && cfg.GitHub.QueueReadSecret != "" {
+			var token []byte
+			token, err = secret.Default().Get(ctx, cfg.GitHub.QueueReadSecret)
+			if err == nil {
+				err = c.SetQueueReadToken(token)
+			}
+			if err != nil {
+				return nil, nil, errors.New("configured queue-read credential unavailable or invalid")
+			}
+		}
 		return nil, c, err
 	}
 	c, err := github.NewClient(cfg.GitHub.URL, auth, version())

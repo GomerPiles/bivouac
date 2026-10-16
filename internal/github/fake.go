@@ -25,6 +25,8 @@ type Fake struct {
 	removeError error
 	busyRunners map[int64]error
 	closed      bool
+	queuedJobs  []QueuedJob
+	queueError  error
 }
 
 // NewFake returns an empty fake.
@@ -239,4 +241,22 @@ func (f *Fake) SetRunnerRemoveError(id int64, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.busyRunners[id] = err
+}
+
+// SetQueuedJobs replaces the complete workflow-job snapshot used by queued mode.
+func (f *Fake) SetQueuedJobs(jobs []QueuedJob, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queuedJobs = append([]QueuedJob(nil), jobs...)
+	f.queueError = err
+}
+
+// QueuedJobs implements JobQueue without opening a scale-set session.
+func (f *Fake) QueuedJobs(ctx context.Context, _ []string) ([]QueuedJob, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]QueuedJob(nil), f.queuedJobs...), f.queueError
 }

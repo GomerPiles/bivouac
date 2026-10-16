@@ -182,6 +182,39 @@ mode with retained records is refused; finish cleanup before switching.
 Organization and repository endpoints are implemented; only organization
 registration against github.com has been validated live.
 
+## Demand: queued REST runners
+
+`demand = "queued"` uses the same ordinary ephemeral REST registrations and
+existing label arrays, with `idle_pool = 0` for every provider. It reads only
+the explicit `github.queue_repositories` (1–20 owner/repo names within the
+registration scope). A cancellable worker polls queued and in-progress workflow
+runs every 30 seconds, paginates their latest-attempt jobs, and admits only
+unassigned jobs whose status is queued and whose complete label set matches a
+provider. Explicit runner-group names must match too. One job is counted for
+only one provider when label sets overlap. GitHub remains the assignment authority.
+
+Each complete snapshot is used once for admission. Creating, booting, ready and
+listening guests already cover queued demand; running jobs consume budget but
+do not hide further queued jobs. No queue means no guest launch or warm-pool
+replacement. The official one-job runner's exit enters normal teardown. Demand
+that disappears during boot is checked again before registration and listener
+launch. A listening guest whose demand disappears retires after the normal
+surplus grace, withdrawing its registration first; a busy rejection preserves
+the accepted job. Startup failures retain the existing 30-second retry delay.
+
+Queue reads require repository Actions read access. The runner App can supply
+it, or `github.queue_read_secret` can name a separate token in the credential
+store, leaving a shared runner App unchanged. The separate token is used only
+for queue reads, never runner registration, and has no fallback to another
+credential on failure. Keys and tokens remain in memory; repository names,
+job names, workflow contents and API response bodies are not logged by the
+queue reader. API failures, malformed responses and scan bounds admit no
+demand. Each collection is capped at ten 100-entry pages, with at most 1,000
+queued jobs in a snapshot; an incomplete scan is an error, not a partial result.
+Stale or failed queue observations cannot maintain surplus idle guests. Drain,
+off and shutdown cancel and join queue reads without cancelling running jobs.
+`doctor --github` checks queue access without starting guests or registrations.
+
 ## Instance lifecycle
 
 Names: `bivouac-<provider>-<id>` for the guest and the runner. The state

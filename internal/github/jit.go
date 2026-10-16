@@ -40,6 +40,7 @@ type JITClient struct {
 	mu                          sync.Mutex
 	token                       string
 	expires                     time.Time
+	queueToken                  string // optional separate Actions-read credential; memory only
 }
 
 func NewJITClient(configURL string, auth AppAuth, version string) (*JITClient, error) {

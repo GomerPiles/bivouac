@@ -456,6 +456,52 @@ To return to scale sets: `bivouac off --wait`, verify no instance records or
 owned guests remain, restore `demand = "scaleset"` and the workflow's
 single scale-set label, then `bivouac on`. Never revoke the shared App.
 
+## Queued-only REST runners
+
+Use `demand = "queued"` when existing label arrays must keep routing normally
+but idle VMs must not consume host RAM. Unlike the JIT warm pool, this mode
+starts guests only after a complete queue read finds matching work and does
+not replace them after a job unless more matching work is queued.
+
+First `bivouac drain --wait`: active jobs finish, idle registrations withdraw,
+and owned guests are removed. Confirm no retained instance or native guest,
+then `bivouac off --wait` before changing the installed binary/configuration
+using the normal deployment procedure. Back up the configuration and manifest.
+Keep the existing provider labels, runner group, native ownership and broker
+configuration unchanged. For example, add these settings to the existing file:
+
+```toml
+[github]
+demand = "queued"
+queue_repositories = ["example-org/repo"]
+queue_read_secret = "queue-read"
+
+[providers.windows]
+idle_pool = 0
+
+[providers.linux]
+idle_pool = 0
+```
+
+Queue discovery needs repository **Actions: read** on those repositories.
+Prefer a separate credential restricted to those reads when the existing
+runner App is shared; do not change that App's permissions or installation.
+Store the token through the existing `bivouac secret set queue-read` stdin/file
+interface, never in TOML, command arguments, chat, diagnostics or logs. Omit
+`queue_read_secret` only if the runner App already has the required access.
+The runner App still needs its existing runner-registration permissions.
+
+Run `bivouac config validate` and `bivouac doctor --github` before CI On from
+the independent desktop context. A missing/revoked credential or failed queue
+read starts no guests and never falls back to a warm pool. Default queue
+polling adds up to 30 seconds before guest boot time. Verify zero guests with
+an empty queue, then a fresh guest for a queued job, normal job completion and
+owned teardown back to zero. An externally cancelled/reassigned job can leave
+a provisioning guest temporarily; it is withdrawn once readiness or the
+listening surplus grace makes safe cleanup possible. Busy-runner rejection
+protects a job accepted during withdrawal. Registration-cleanup failures keep
+their durable records and normal retry behavior.
+
 ## Optional transparent caching
 
 Caching is disabled by default. On the experimental macOS setup:
