@@ -41,10 +41,13 @@ The entry checks the script hash against this host build's embedded source;
 the script checks the native probe's configured hash before running it. This
 path passes live, including the intended active console user's Explorer,
 Default input desktop and interactive native-probe execution. The probe stops
-at adapter validation (stage 3, HRESULT 0) before hardware rendering is accepted;
-presentation and pixel readback remain unverified. The revised probe explicitly
-enumerates/selects hardware and reports adapter counts and numeric IDs; that
-selection change still needs a live trial.
+at adapter validation: explicit selection finds no acceptable hardware adapter
+among four DXGI candidates (stage 3, DXGI_ERROR_NOT_FOUND). Presentation and pixel
+readback remain unverified. The selected host driver package matches the host
+GPU and driver version. A bounded read-only guest GPU-PV readiness wait, display
+device/problem counters and the agent's driver-copy count now distinguish
+pending device startup from persistent GPU failure; these diagnostics need a
+live trial. No raw device identities, names or driver paths enter reports.
 
 The VM, disposable child and journal are removed; native absence is confirmed.
 Read-only inspection completed, but some files observed live were absent after

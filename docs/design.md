@@ -683,9 +683,11 @@ execution and small framed-stdin delivery are also live validated. The large
 bulk transfer still stalls after receiving its length header. Media delivery
 of the public validation assets with small SSH metadata, setup/console readiness,
 Default input desktop and interactive native-probe execution pass live. The
-probe stops at adapter validation (stage 3, HRESULT 0) without accepting hardware.
-Explicit hardware selection, rendering/presentation and pixel readback still
-need validation. Forced termination can leave the stopped disk without files
+explicit-selection probe reaches DXGI enumeration but finds no acceptable
+hardware adapter among four candidates (stage 3, DXGI_ERROR_NOT_FOUND). Hardware
+rendering/presentation and pixel readback remain unverified. A bounded read-only
+GPU-PV device readiness wait and numeric device/copy diagnostics need live
+validation; guest copy completion alone is not driver readiness. Forced termination can leave the stopped disk without files
 already observed live; read-only inspection does not override a completed live
 check. Process-loss recovery and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only

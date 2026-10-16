@@ -104,11 +104,12 @@ frame sent over SSH. The guest verifies the script against the host build's
 embedded hash and the probe against its configured pin before execution. This
 path passes live: setup readiness, the intended active console user's Explorer,
 the Default input desktop and interactive native-probe execution are confirmed.
-The probe stops at adapter validation (stage 3, HRESULT 0) without accepting
-hardware D3D11. Presentation and pixel readback remain unverified. The revised
-probe enumerates bounded DXGI adapters and explicitly selects hardware rather
-than the display default; numeric adapter counts/IDs will distinguish absence
-from selection failure. This selection change still needs live validation.
+The explicit-selection probe enumerates four DXGI adapters but finds no
+acceptable hardware candidate (stage 3, DXGI_ERROR_NOT_FOUND); default selection
+is no longer the only explanation. The selected driver package matches the host
+GPU and driver version. Hardware rendering, presentation and pixel readback
+remain unverified. A bounded read-only GPU-PV readiness wait and numeric device,
+problem and driver-copy counters now await live validation.
 Corrected hidden-folder inspection and matching cleanup finish successfully;
 the VM, child and journal are removed and only the trial lock remains. Some
 files observed live were absent in the stopped clone after forced termination,

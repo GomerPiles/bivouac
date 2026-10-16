@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +125,11 @@ func speakAgent(ctx context.Context, conn net.Conn, c Config, publicKey []byte) 
 			return report, errors.New("guest GPU preparation failed")
 		}
 		if strings.HasPrefix(line, "gpu_copy_done:") {
+			count, parseErr := strconv.ParseUint(strings.TrimPrefix(line, "gpu_copy_done:"), 10, 32)
+			if parseErr != nil || count > 8192 {
+				return report, errors.New("invalid bounded guest GPU file count")
+			}
+			report.GPUFilesCopied = uint32(count)
 			gpuReady = true
 		}
 		if keyReady && report.DisplayReady && gpuReady {
@@ -248,6 +254,10 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		report.RenderHardwareAdapterCount = observed.HardwareAdapterCount
 		report.RenderDefaultVendorID = observed.DefaultVendorID
 		report.RenderDefaultDeviceID = observed.DefaultDeviceID
+		report.GPUDeviceDiagnosticsValid = observed.GPUDeviceDiagnosticsValid
+		report.DisplayDeviceCount = observed.DisplayDeviceCount
+		report.VirtualRenderDeviceCount = observed.VirtualRenderDeviceCount
+		report.VirtualRenderProblemCode = observed.VirtualRenderProblemCode
 		return report, renderErr
 	}
 	return report, nil

@@ -45,6 +45,27 @@ public static class SpikeConsole {
  $probe=Join-Path $base 'render.exe'
  Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox\hcs-render-probe.exe') -Destination $probe
  if((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ine $data.sha256){exit 14}
+ # Read only fixed display/GPU-PV readiness facts. Never emit PnP identities,
+ # device names, driver paths, or arbitrary WMI/PowerShell diagnostics.
+ $gpuStatus=[ordered]@{valid=$false;display_count=0;virtual_count=0;problem_code=0}
+ $gpuUntil=[DateTime]::UtcNow.AddSeconds(30)
+ do {
+  try {
+   $nodes=@(Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPClass='Display'" -OperationTimeoutSec 10)
+   $drivers=@(Get-CimInstance -ClassName Win32_PnPSignedDriver -Filter "DeviceClass='DISPLAY'" -OperationTimeoutSec 10)
+   if($nodes.Count -gt 32 -or $drivers.Count -gt 32){throw 'device bound'}
+   $virtual=@($drivers | Where-Object InfName -ieq 'vrd.inf')
+   $problem=0
+   foreach($driver in $virtual){
+    $matching=@($nodes | Where-Object DeviceID -ieq $driver.DeviceID)
+    if($matching.Count -ne 1 -or $null -eq $matching[0].ConfigManagerErrorCode -or $matching[0].ConfigManagerErrorCode -gt 255){throw 'device status'}
+    $problem=[Math]::Max($problem,[int]$matching[0].ConfigManagerErrorCode)
+   }
+   $gpuStatus=[ordered]@{valid=$true;display_count=$nodes.Count;virtual_count=$virtual.Count;problem_code=$problem}
+  }catch{$gpuStatus=[ordered]@{valid=$false;display_count=0;virtual_count=0;problem_code=0};break}
+  if($gpuStatus.virtual_count -gt 0 -and $gpuStatus.problem_code -eq 0){break}
+  Start-Sleep -Milliseconds 500
+ }while([DateTime]::UtcNow -lt $gpuUntil)
  $step=23
  Write-SpikeStep 23
  $task='bivouac-hcs-spike-render'
@@ -64,7 +85,7 @@ public static class SpikeConsole {
   Write-SpikeStep 25
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
-  [ordered]@{guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id} | ConvertTo-Json -Compress
+  [ordered]@{guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code} | ConvertTo-Json -Compress
  } finally {Unregister-ScheduledTask -TaskName $task -Confirm:$false}
  exit 0
 } catch {exit $step}

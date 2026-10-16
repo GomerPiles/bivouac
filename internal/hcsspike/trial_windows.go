@@ -62,6 +62,11 @@ type Report struct {
 	RenderHardwareAdapterCount uint32 `json:"render_hardware_adapter_count,omitempty"`
 	RenderDefaultVendorID      uint32 `json:"render_default_vendor_id,omitempty"`
 	RenderDefaultDeviceID      uint32 `json:"render_default_device_id,omitempty"`
+	GPUDeviceDiagnosticsValid  bool   `json:"gpu_device_diagnostics_valid"`
+	DisplayDeviceCount         uint32 `json:"display_device_count,omitempty"`
+	VirtualRenderDeviceCount   uint32 `json:"virtual_render_device_count,omitempty"`
+	VirtualRenderProblemCode   uint32 `json:"virtual_render_problem_code,omitempty"`
+	GPUFilesCopied             uint32 `json:"gpu_files_copied,omitempty"`
 	NativeStarted              bool   `json:"native_started"`
 	AgentConnected             bool   `json:"agent_connected"`
 	GPUAssigned                bool   `json:"gpu_assigned"`

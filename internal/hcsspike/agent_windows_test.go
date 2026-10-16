@@ -79,7 +79,7 @@ func TestAgentRequiresDisplayAndAcknowledgedPublicKey(t *testing.T) {
 }
 
 func TestAgentRejectsUnsolicitedKeyAndGPUFailure(t *testing.T) {
-	for _, message := range []string{"ssh_key_deployed", "gpu_copy_error:guest-private-output", "gpu_device_failed:guest-private-output"} {
+	for _, message := range []string{"ssh_key_deployed", "gpu_copy_error:guest-private-output", "gpu_device_failed:guest-private-output", "gpu_copy_done:guest-private-output", "gpu_copy_done:8193"} {
 		t.Run(strings.SplitN(message, ":", 2)[0], func(t *testing.T) {
 			_, err := agentTest(t, func(conn net.Conn) error {
 				if _, err := readInitialization(conn); err != nil {
@@ -169,7 +169,7 @@ func TestAgentWaitsForDriverCopyBeforeDeclaringReady(t *testing.T) {
 		_, err := io.WriteString(conn, "gpu_copy_done:1\n")
 		return err
 	})
-	if err != nil || !report.AgentConnected || !report.DisplayReady {
+	if err != nil || !report.AgentConnected || !report.DisplayReady || report.GPUFilesCopied != 1 {
 		t.Fatalf("driver readiness: %v", err)
 	}
 }

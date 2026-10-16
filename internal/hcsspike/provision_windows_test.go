@@ -131,7 +131,7 @@ func TestRenderReportRejectsPartialAndSoftwareResults(t *testing.T) {
 	if _, err := validateRenderReport(data); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*renderResult){func(r *renderResult) { r.GuestReady = false }, func(r *renderResult) { r.DesktopReady = false }, func(r *renderResult) { r.PixelReadback = false }, func(r *renderResult) { r.Presented = false }, func(r *renderResult) { r.HardwareD3D11 = false }, func(r *renderResult) { r.HRESULT = 1 }, func(r *renderResult) { r.AdapterCount = 33 }, func(r *renderResult) { r.HardwareAdapterCount = 0 }, func(r *renderResult) { r.HardwareAdapterCount = 3 }, func(r *renderResult) { r.Stage = 6 }, func(r *renderResult) { r.VendorID = 0x1414; r.DeviceID = 0x8c }} {
+	for _, mutate := range []func(*renderResult){func(r *renderResult) { r.GuestReady = false }, func(r *renderResult) { r.DesktopReady = false }, func(r *renderResult) { r.PixelReadback = false }, func(r *renderResult) { r.Presented = false }, func(r *renderResult) { r.HardwareD3D11 = false }, func(r *renderResult) { r.HRESULT = 1 }, func(r *renderResult) { r.AdapterCount = 33 }, func(r *renderResult) { r.DisplayDeviceCount = 33 }, func(r *renderResult) { r.VirtualRenderDeviceCount = 1 }, func(r *renderResult) { r.VirtualRenderProblemCode = 256 }, func(r *renderResult) { r.HardwareAdapterCount = 0 }, func(r *renderResult) { r.HardwareAdapterCount = 3 }, func(r *renderResult) { r.Stage = 6 }, func(r *renderResult) { r.VendorID = 0x1414; r.DeviceID = 0x8c }} {
 		bad := good
 		mutate(&bad)
 		data, _ := json.Marshal(bad)

@@ -37,20 +37,24 @@ func desktopValidationCommand() string {
 }
 
 type renderResult struct {
-	ValidationStep       uint32 `json:"-"`
-	GuestReady           bool   `json:"guest_ready"`
-	DesktopReady         bool   `json:"desktop_ready"`
-	HardwareD3D11        bool   `json:"hardware_d3d11"`
-	Presented            bool   `json:"presented"`
-	PixelReadback        bool   `json:"pixel_readback"`
-	Stage                uint32 `json:"stage"`
-	HRESULT              uint32 `json:"hresult"`
-	VendorID             uint32 `json:"vendor_id"`
-	DeviceID             uint32 `json:"device_id"`
-	AdapterCount         uint32 `json:"adapter_count"`
-	HardwareAdapterCount uint32 `json:"hardware_adapter_count"`
-	DefaultVendorID      uint32 `json:"default_vendor_id"`
-	DefaultDeviceID      uint32 `json:"default_device_id"`
+	ValidationStep            uint32 `json:"-"`
+	GuestReady                bool   `json:"guest_ready"`
+	DesktopReady              bool   `json:"desktop_ready"`
+	HardwareD3D11             bool   `json:"hardware_d3d11"`
+	Presented                 bool   `json:"presented"`
+	PixelReadback             bool   `json:"pixel_readback"`
+	Stage                     uint32 `json:"stage"`
+	HRESULT                   uint32 `json:"hresult"`
+	VendorID                  uint32 `json:"vendor_id"`
+	DeviceID                  uint32 `json:"device_id"`
+	AdapterCount              uint32 `json:"adapter_count"`
+	HardwareAdapterCount      uint32 `json:"hardware_adapter_count"`
+	DefaultVendorID           uint32 `json:"default_vendor_id"`
+	DefaultDeviceID           uint32 `json:"default_device_id"`
+	GPUDeviceDiagnosticsValid bool   `json:"gpu_device_diagnostics_valid"`
+	DisplayDeviceCount        uint32 `json:"display_device_count"`
+	VirtualRenderDeviceCount  uint32 `json:"virtual_render_device_count"`
+	VirtualRenderProblemCode  uint32 `json:"virtual_render_problem_code"`
 }
 type boundedOutput struct{ data []byte }
 
@@ -67,6 +71,9 @@ func validateRenderReport(b []byte) (renderResult, error) {
 	d.DisallowUnknownFields()
 	if d.Decode(&r) != nil || d.Decode(new(any)) != io.EOF {
 		return r, errors.New("invalid bounded guest rendering report")
+	}
+	if r.DisplayDeviceCount > 32 || r.VirtualRenderDeviceCount > r.DisplayDeviceCount || r.VirtualRenderProblemCode > 255 {
+		return r, errors.New("invalid bounded guest GPU device counters")
 	}
 	if r.AdapterCount == 0 || r.AdapterCount > 32 || r.HardwareAdapterCount == 0 || r.HardwareAdapterCount > r.AdapterCount || !r.GuestReady || !r.DesktopReady || !r.HardwareD3D11 || !r.Presented || !r.PixelReadback || r.Stage != 7 || r.HRESULT != 0 || r.VendorID == 0 || (r.VendorID == 0x1414 && r.DeviceID == 0x8c) {
 		return r, errors.New("guest rendering checks did not all pass")
