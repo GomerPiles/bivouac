@@ -27,6 +27,7 @@ type native struct {
 	dll           *windows.LazyDLL
 	preparedOwner string
 	payloads      []payloadProof
+	resourceCheck func(Config) error
 }
 
 // HcsGrantVmAccess deliberately adds the owned VM account to payload ACLs.
@@ -236,6 +237,9 @@ func (a *native) Create(ctx context.Context, c Config) (system, bool, error) {
 	if _, err := operationTimeout(ctx); err != nil {
 		return nil, true, err
 	}
+	if err := a.requireHeadroom(c); err != nil {
+		return nil, true, err
+	}
 	for _, path := range []string{filepath.Join(c.Root, recordName(c)), filepath.Join(c.Root, markerName(c))} {
 		if err := appsandbox.CheckProtectedFile(path); err != nil {
 			return nil, true, errors.New("spike ownership and payloads must remain administrator-protected")
@@ -353,6 +357,9 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 	a.preparedOwner = ""
 	a.payloads = nil
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := a.requireHeadroom(c); err != nil {
 		return err
 	}
 	if err := appsandbox.CheckProtectedFile(c.directory()); err != nil {

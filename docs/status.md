@@ -128,8 +128,14 @@ and removed its journal/disposable child. It used an independent immutable
 template copy with 1 CPU, 2 GiB RAM and no NIC.
 The default properties query and retaining the created handle through verified
 termination are live validated. Production CI/configuration was unchanged.
-Console/desktop readiness, hardware rendering, input, process-loss
+Hardware rendering/presentation, pixel readback, input, process-loss
 cleanup/recovery and networking/isolation remain unverified.
+Ordinary-token headroom reporting and native admission checks refuse missing or
+insufficient physical/commit memory, trial-volume space and CPU capacity. Checks
+run before staging and HCS creation. A two-second resource watcher cancels only
+the isolated trial if the live reserve is lost; cleanup remains independent.
+Boundary, pre-dispatch refusal and watcher cancellation tests pass without a VM. Live guarded rendering
+validation is pending sufficient host headroom and explicit UAC consent.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

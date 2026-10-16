@@ -648,8 +648,17 @@ explicitly selects hardware for D3D11 (software adapters are rejected), successf
 both a staging texture and the composited desktop. Only fixed booleans/numbers
 cross back to the host; SSH code is fixed and all instance data arrives on stdin.
 
-Only `check` (DLL export resolution/token report) and `plan` (pure configuration
-validation/JSON generation) are intended for ordinary-token execution. Native
+`check` (DLL export resolution/token report), `plan` (pure configuration/JSON)
+and `headroom` (numeric host resources and trial-root filesystem space) support
+ordinary-token execution. Headroom queries touch neither images nor VM/CI state.
+Native preparation and creation recheck fixed reserves: at least 10 GiB physical
+availability, 6 GiB commit headroom, 8 GiB volume space and two logical CPUs beyond
+the guest. For larger guests, memory minima grow to guest RAM plus 6 GiB physical
+and 2 GiB commit. Missing counters refuse admission; cleanup stays available.
+A two-second watcher cancels only the isolated trial when available physical
+memory falls below 6 GiB, commit headroom below 2 GiB, volume space below 8 GiB,
+or counters become unavailable. Normal ownership-checked cleanup still runs.
+These checks do not reserve resources against other host users. Native
 trial/cleanup require explicit administrator startup, a separate protected
 `HCS-Spike` root, immutable image hash, journal/child/native ownership proof,
 and bounded resources. They never request elevation or use the installed broker.

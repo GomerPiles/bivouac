@@ -122,6 +122,8 @@ With the repository's Go toolchain available:
 go build -trimpath -o bin/hcs-spike/hcs-spike.exe ./cmd/hcs-spike
 bin/hcs-spike/hcs-spike.exe check
 bin/hcs-spike/hcs-spike.exe plan --config tools/windows/hcs-spike.example.json
+# With an existing independent lab root named by the config:
+bin/hcs-spike/hcs-spike.exe headroom --config <lab-config.json>
 go test ./internal/hcsspike ./cmd/hcs-spike
 ```
 
@@ -130,6 +132,20 @@ calling the HCS service, opening a VM, or reading the installed CI state.
 `plan` validates the bounded JSON input and prints the proposed HCS document;
 it neither opens the referenced paths nor proves that the image exists or boots.
 The example contains synthetic paths, a sample ID and a placeholder hash.
+`headroom` reads ordinary-token host counters and free space on the existing
+trial root's filesystem. Its fixed numeric report includes `ready`; a successful
+query can report `ready=false`. No image, VM, journal or production CI state is
+opened or changed. For a 4 GiB trial it requires at least 10 GiB available
+physical memory, 6 GiB commit headroom, 8 GiB free trial-volume space and two more
+logical CPUs than the guest uses. Larger trials require their configured RAM
+plus 6 GiB physical and 2 GiB commit headroom. Missing counters refuse admission.
+The CLI checks before journal/template work; native preparation and HCS creation
+recheck after staging. Cleanup does not depend on these checks. These are
+point-in-time checks, not an exclusive reservation against other host users.
+During a trial, a two-second watcher cancels only that trial if available physical
+memory falls below 6 GiB, commit headroom below 2 GiB, volume space below 8 GiB,
+or counters become unavailable. The trial's independent owned cleanup still runs;
+no production controller, guest or network is stopped or changed.
 Fake-backed tests exercise native-name collisions, create response loss, GPU
 failure, changed ownership/runtime, interrupted intent/deletion, cancellation,
 and the bounded guest protocol. These do not prove native behaviour.

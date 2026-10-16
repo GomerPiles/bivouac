@@ -26,8 +26,8 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(result)
 	}
-	if len(args) == 0 || (args[0] != "plan" && args[0] != "trial" && args[0] != "cleanup") {
-		return errors.New("usage: hcs-spike check | plan|trial|cleanup --config <file>")
+	if len(args) == 0 || (args[0] != "plan" && args[0] != "headroom" && args[0] != "trial" && args[0] != "cleanup") {
+		return errors.New("usage: hcs-spike check | plan|headroom|trial|cleanup --config <file>")
 	}
 	fs := flag.NewFlagSet("hcs-spike", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -39,10 +39,11 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	}
 	// Refuse before reading configuration or creating any file. Never prompt,
 	// invoke runas, install a service/task, or use the existing elevated broker.
-	if args[0] != "plan" && !windows.GetCurrentProcessToken().IsElevated() {
+	live := args[0] == "trial" || args[0] == "cleanup"
+	if live && !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("live HCS spike requires an explicitly elevated launch; no elevation was requested and no VM was touched")
 	}
-	if args[0] != "plan" {
+	if live {
 		absolute, err := filepath.Abs(*path)
 		if err != nil {
 			return err
@@ -68,6 +69,21 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		encoder := json.NewEncoder(out)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(plan)
+	}
+	if args[0] == "headroom" {
+		report, err := Headroom(c)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(report)
+	}
+	// Refuse before opening the journal or hashing the immutable template.
+	// Native preparation and dispatch recheck after potentially slow staging.
+	// Cleanup remains available regardless of host pressure.
+	if args[0] == "trial" {
+		if err = requireHeadroom(c); err != nil {
+			return err
+		}
 	}
 	if err = appsandbox.CheckProtectedFile(c.Root); err != nil {
 		return errors.New("create a separate administrator-protected HCS-Spike directory before a live trial")
@@ -101,7 +117,9 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	defer func() { _ = baseline.Close() }()
 	trialCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds+120)*time.Second)
 	defer cancel()
-	report, trialErr := trial(trialCtx, c, j, api, *bootOnly, *retainFailed)
+	report, trialErr := guardTrialResources(trialCtx, c, func(guarded context.Context) (Report, error) {
+		return trial(guarded, c, j, api, *bootOnly, *retainFailed)
+	})
 	if err = json.NewEncoder(out).Encode(report); err != nil {
 		return errors.Join(trialErr, fmt.Errorf("write spike report: %w", err))
 	}
