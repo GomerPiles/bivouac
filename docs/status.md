@@ -97,12 +97,13 @@ setup/OOBE still in progress, a generalized-to-OOBE image state, no agent/SSH
 service registration and a cached answer that reseals into Audit mode and runs
 sysprep. Its hash was unchanged after inspection. The cached answer is a likely
 provisioning gate, not yet a proven cause of the timeout. Child-only answer
-staging now targets the higher-priority embedded directory and refuses explicit
-offline answer pointers or existing contents. Its first live attempt refused
-the template's pre-existing empty directory before native create; read-only
-inspection confirmed that condition, then cleanup removed the child/journal.
-The corrected empty-directory path needs a live trial. Guest readiness, SSH and
-rendering still need a live pass.
+staging targets the higher-priority embedded directory, accepts an existing
+empty directory and refuses explicit offline answer pointers or existing contents.
+The latest live attempt failed applying directory permissions before native
+create; its stopped-child inspection and cleanup succeeded. DACL-only native
+protection now preserves owner/group and avoids requesting unrelated audit
+changes; ordinary-token regression coverage passes. This correction needs a live
+trial. Guest readiness, SSH and rendering still need a live pass.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow

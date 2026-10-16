@@ -609,11 +609,14 @@ password never enters configuration, journal, command arguments or diagnostics.
 Before native create dispatch, fixed elevated Storage code mounts only the new
 child and writes the same answer into an absent or empty
 `Windows\Panther\Unattend` directory with administrator/SYSTEM permissions.
+The native DACL-only update preserves owner/group and does not request audit
+changes.
 This outranks a cached template answer; nonempty directories, reparse paths and
 an explicit offline `SYSTEM\Setup\UnattendFile` pointer are refused. The
 pointer check uses the system offline-registry library read-only, without loading
 hives into the live registry. The child is detached before HCS starts. No baseline
-is mounted or modified by provisioning. A specialized image can omit setup assets. Removable-media discovery uses `Autounattend.xml`; the
+is mounted or modified by provisioning. A specialized image can omit setup
+assets. Removable-media discovery uses `Autounattend.xml`; the
 ordinary-token media test inspects its name in the ISO's Joliet directory.
 
 An optional hash-pinned standalone native C++ probe runs only inside the guest,

@@ -181,6 +181,9 @@ func makeSetupISO(ctx context.Context, c Config) error {
 	if err = runPrivateSetup(ctx, stageSetup, data); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			if code := exitErr.ExitCode(); code > 10000 && code <= 75535 {
+				return fmt.Errorf("offline child answer-directory protection failed (Win32 %d)", code-10000)
+			}
 			switch exitErr.ExitCode() {
 			case 10, 20, 30, 40, 50, 60, 61, 62, 63, 70:
 				return fmt.Errorf("offline child answer-file staging failed at step %d", exitErr.ExitCode())

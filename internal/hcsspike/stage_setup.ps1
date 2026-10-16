@@ -1,6 +1,6 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$image=$null;$partition=$null;$disk=$null;$phaseCode=10
+$image=$null;$partition=$null;$disk=$null;$phaseCode=10;$aclError=0
 function Assert-EmptyAnswerDirectory([string]$Path) {
  if(!(Test-Path -LiteralPath $Path)){return}
  $item=Get-Item -LiteralPath $Path -Force
@@ -25,6 +25,14 @@ public static class SpikeOfflineAnswer {
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint OROpenHive(string path,out IntPtr hive);
  [DllImport("offreg.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORCloseHive(IntPtr hive);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORGetValue(IntPtr hive,string key,string value,out uint type,byte[] data,ref uint size);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text,uint revision,out IntPtr descriptor,out uint size);
+ [DllImport("advapi32.dll",SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,out bool present,out IntPtr dacl,out bool defaulted);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint SetNamedSecurityInfo(string path,int kind,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl);
+ [DllImport("kernel32.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern IntPtr LocalFree(IntPtr memory);
+ public static uint ProtectDirectory(string path,string text) {
+  IntPtr descriptor;uint size;if(!ConvertStringSecurityDescriptorToSecurityDescriptor(text,1,out descriptor,out size))return (uint)Marshal.GetLastWin32Error();
+  try{bool present,defaulted;IntPtr dacl;if(!GetSecurityDescriptorDacl(descriptor,out present,out dacl,out defaulted))return (uint)Marshal.GetLastWin32Error();if(!present || dacl==IntPtr.Zero)return 87;return SetNamedSecurityInfo(path,1,0x80000004,IntPtr.Zero,IntPtr.Zero,dacl,IntPtr.Zero);}finally{LocalFree(descriptor);}
+ }
  public static bool NoExplicitAnswer(string path) {
   IntPtr hive;uint error=OROpenHive(path,out hive);if(error!=0)return false;
   try{uint type=0,size=0;error=ORGetValue(hive,"Setup","UnattendFile",out type,null,ref size);if(error==2)return true;if(error!=0 || type!=1 || size>2)return false;byte[] data=new byte[size];error=ORGetValue(hive,"Setup","UnattendFile",out type,data,ref size);return error==0 && Array.TrueForAll(data,b=>b==0);}finally{ORCloseHive(hive);}
@@ -58,9 +66,10 @@ public static class SpikeOfflineAnswer {
   $phaseCode=61
   if(!(Test-Path -LiteralPath $answerDirectory)){New-Item -ItemType Directory -Path $answerDirectory | Out-Null}
   $phaseCode=62
-  $acl=New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
-  Set-Acl -LiteralPath $answerDirectory -AclObject $acl
+  # Apply only the protected DACL; PowerShell Set-Acl can also touch audit/owner
+  # sections inherited from the guest image, which are outside this operation.
+  $aclError=[SpikeOfflineAnswer]::ProtectDirectory($answerDirectory,'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+  if($aclError -ne 0){throw 'Cannot protect child answer directory'}
   $phaseCode=63
   $file=Join-Path $answerDirectory 'unattend.xml'
   $content=[Text.Encoding]::UTF8.GetBytes($data.unattend)
@@ -72,4 +81,4 @@ public static class SpikeOfflineAnswer {
  $phaseCode=70
  if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit $phaseCode}
  exit 0
-} catch {exit $phaseCode}
+} catch {if($phaseCode -eq 62 -and $aclError -gt 0 -and $aclError -le 65535){exit (10000+[int]$aclError)};exit $phaseCode}

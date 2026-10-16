@@ -272,3 +272,40 @@ func TestOfflineAnswerDirectoryGuardDoesNotReplaceContents(t *testing.T) {
 		t.Fatal("existing answer changed")
 	}
 }
+
+func TestOfflineDirectoryProtectionChangesOnlyDACL(t *testing.T) {
+	_, source, found := strings.Cut(stageSetup, "Add-Type -TypeDefinition @\"\n")
+	if !found {
+		t.Fatal("offline API source missing")
+	}
+	source, _, found = strings.Cut(source, "\n\"@")
+	if !found {
+		t.Fatal("offline API source terminator missing")
+	}
+	dir := filepath.Join(t.TempDir(), "protected")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := json.Marshal(map[string]string{"path": dir, "sddl": "D:P(A;OICI;FA;;;" + tokenUser.User.Sid.String() + ")"})
+	script := "Add-Type -TypeDefinition @\"\n" + source + "\n\"@\n$data=[Console]::In.ReadToEnd() | ConvertFrom-Json;if([SpikeOfflineAnswer]::ProtectDirectory($data.path,$data.sddl) -ne 0){exit 1};if(!(Get-Acl -LiteralPath $data.path).AreAccessRulesProtected){exit 2};exit 0"
+	before, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := runPrivateSetup(ctx, script, input); err != nil {
+		t.Fatal("DACL-only protection failed")
+	}
+	after, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION)
+	if err != nil || before.String() != after.String() {
+		t.Fatal("DACL update changed owner/group")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sentinel"), []byte("synthetic"), 0600); err != nil {
+		t.Fatal("DACL lost intended access")
+	}
+}

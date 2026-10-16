@@ -37,9 +37,12 @@ answer that reseals into Audit mode and runs sysprep. Its hash remained unchange
 This is a likely provisioning gate; it does not establish the timeout's cause.
 Child-only staging now writes the trial answer into the higher-priority embedded
 answer directory. The first attempt refused a pre-existing empty directory
-before native create; read-only inspection and cleanup succeeded. Accepting that
-empty directory while refusing existing contents needs a live retry. Guest
-readiness, SSH and rendering remain unverified live.
+before native create; read-only inspection and cleanup succeeded. The next
+attempt passed that guard but failed setting directory permissions before native
+create; read-only inspection and cleanup succeeded. The permission update now
+uses a DACL-only native call that preserves owner/group and avoids unrelated
+audit changes. It needs a live retry. Guest readiness, SSH and rendering remain
+unverified live.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
