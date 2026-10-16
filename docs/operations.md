@@ -525,6 +525,45 @@ Fill reasons are `capacity`, `object_limit`, `upstream_status`,
 `cache SSH transport ended during requests` names a guest whose transport
 dropped mid-transfer. Keep the cache while investigating; it is evidence.
 
+### Cache validation fixture
+
+`tools/cache-validation` runs the official Actions cache code, pinned to a
+commit, in a guest. Credentials and action output stay there; it prints only
+fixed outcomes and numbers. It needs self-hosted runners, so this public
+repository has no workflow for it. Run one from a private repository on an
+isolated label, for example:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs: {mode: {required: true}, nonce: {required: true}}
+jobs:
+  validate:
+    strategy: {fail-fast: false, matrix: {os: [macOS, Windows, Linux]}}
+    runs-on: [self-hosted, '${{ matrix.os }}', bivouac-cache-validation]
+    timeout-minutes: 20
+    steps:
+      - uses: <owner>/bivouac/tools/cache-validation@<commit>
+        with: {mode: '${{ inputs.mode }}', nonce: '${{ inputs.nonce }}'}
+```
+
+Serve that label from a separate `BIVOUAC_HOME` with `release_proxy`,
+`store_uploads` and `max_object_mb` of at least 192, never from the normal home
+or a production label. Never run two homes against one native broker at once.
+
+- `save` uploads 24 and 192 MiB archives under a fresh nonce, covering a
+  single-request and a block upload. With `store_uploads`, the host must store
+  both. `restore` in a later job with that nonce must then hit locally twice
+  with no misses; without `store_uploads`, both restores fill upstream.
+- `mixed` overlaps restores with new uploads.
+- `limited` needs `max_object_mb` below 24. Saves and restores still pass, and
+  both saves are relayed without a copy.
+- `outage` checks release hits, then waits up to two minutes for the isolated
+  controller to stop. Saves, restores and releases must still pass directly.
+  Stop only the isolated controller, after confirming its process.
+- `fallback` expects caching disabled.
+- Every mode checks release downloads through fresh signed URLs.
+
 ## Cutover (after validation)
 
 Do not cut over while an assignment or recovery problem remains in
