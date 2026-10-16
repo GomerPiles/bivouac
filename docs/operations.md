@@ -13,7 +13,7 @@ New macOS clones receive job-start/completion hooks without baseline or workflow
 edits. GitHub's Set up runner and Complete runner logs include guest CPU/RAM/disk
 summaries; diagnostics retain a validated numeric `guest/performance.json`.
 Completion also prints archive/release cache hits, misses, bypasses, failures
-and delivered bytes when cache setup exists. Disabled caching emits no cache
+and delivered bytes, plus stored and skipped uploads, when cache setup exists. Disabled caching emits no cache
 line; an unavailable service reports an unavailable summary. Controller cache
 counters reset at manager restart, guest counters at capability replacement.
 These whole-system, sampled readings do not measure individual steps or disk IO.
@@ -453,6 +453,7 @@ Caching is disabled by default. On the experimental macOS setup:
 [cache]
 enabled = true
 release_proxy = true  # optional GitHub release interception; default false
+store_uploads = true  # optional local copy of each Actions save; default false
 guest_host = "192.168.64.1" # host gateway reachable from the owned guest
 max_gb = 4
 max_object_mb = 512
@@ -465,7 +466,7 @@ on another provider. Restart the daemon to load changes, using the recorded
 PID and replacement procedure above. Each fresh guest gets its own private
 adapter, TLS trust, and expiring capability. No baseline or workflow change
 is needed. GitHub remains the authority for Actions cache scope and keys;
-metadata and uploads use the normal upstream service.
+metadata uses the normal upstream service.
 
 The macOS adapter accelerates Actions v2 cache archives. With `release_proxy`,
 bootstrap installs temporary root trust in each disposable clone and gives its
@@ -478,7 +479,9 @@ stores may need provider setup. The proxy sees traffic on its three intercepted
 GitHub hosts, but caches no request carrying `Authorization` or cookies. Other
 public HTTPS hosts use opaque tunnels. Host and baseline trust remain unchanged.
 Newly uploaded Actions archives enter this read-through cache on
-their first restore. A service outage returns lease requests to upstream;
+their first restore. With `store_uploads`, the host relays each save to GitHub's
+storage and keeps what it sent, so the next restore is local. A save that does
+not fit, or any relay failure, falls back to a direct upload. A service outage returns lease requests to upstream;
 a failed fill redirects upstream. No upload/storage quota reduction is
 claimed. Logs report object class, hit/miss, size and a per-session object
 label without source URLs or credentials. Limits include in-flight reservations of each fill's declared

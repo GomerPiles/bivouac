@@ -23,8 +23,9 @@ type Counters struct {
 }
 
 type Summary struct {
-	Archives Counters `json:"archives"`
-	Releases Counters `json:"release_proxy"`
+	Archives Counters       `json:"archives"`
+	Releases Counters       `json:"release_proxy"`
+	Uploads  UploadCounters `json:"uploads"`
 }
 
 type cacheOutcome int
@@ -84,6 +85,8 @@ func (s *Service) LogSummary() {
 	snapshot := s.Snapshot()
 	logCounters(s.log, "controller_session", "archives", snapshot.Archives)
 	logCounters(s.log, "controller_session", "release_proxy", snapshot.Releases)
+	u := snapshot.Uploads
+	s.log.Info("cache upload summary", "scope", "controller_session", "stored", u.Stored, "stored_bytes", u.StoredBytes, "skipped", u.Skipped)
 	d := s.store.Diagnostics()
 	objects, used, reserved := s.store.Stats()
 	s.log.Info("cache store summary", "objects", objects, "stored_bytes", used, "reserved_bytes", reserved, "evictions", d.Evictions, "evicted_bytes", d.EvictedBytes, "invalidations", d.Invalidations, "startup_discarded_files", d.StartupDiscardedFiles)

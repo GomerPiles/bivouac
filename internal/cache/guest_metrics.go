@@ -71,6 +71,6 @@ func PrintGuestSummary(parent context.Context, out io.Writer, dir string) {
 		_, _ = fmt.Fprintln(out, "[bivouac cache] summary unavailable")
 		return
 	}
-	a, r := summary.Archives, summary.Releases
-	_, _ = fmt.Fprintf(out, "[bivouac cache] archives: hits=%d (%d bytes) misses=%d (%d bytes) bypasses=%d (%d bytes) failures=%d; release proxy: hits=%d (%d bytes) misses=%d (%d bytes) bypasses=%d (%d bytes) failures=%d\n", a.Hits, a.HitBytes, a.Misses, a.MissBytes, a.Bypasses, a.BypassBytes, a.Failures, r.Hits, r.HitBytes, r.Misses, r.MissBytes, r.Bypasses, r.BypassBytes, r.Failures)
+	a, r, u := summary.Archives, summary.Releases, summary.Uploads
+	_, _ = fmt.Fprintf(out, "[bivouac cache] archives: hits=%d (%d bytes) misses=%d (%d bytes) bypasses=%d (%d bytes) failures=%d; release proxy: hits=%d (%d bytes) misses=%d (%d bytes) bypasses=%d (%d bytes) failures=%d; uploads: stored=%d (%d bytes) skipped=%d\n", a.Hits, a.HitBytes, a.Misses, a.MissBytes, a.Bypasses, a.BypassBytes, a.Failures, r.Hits, r.HitBytes, r.Misses, r.MissBytes, r.Bypasses, r.BypassBytes, r.Failures, u.Stored, u.StoredBytes, u.Skipped)
 }

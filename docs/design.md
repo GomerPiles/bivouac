@@ -806,10 +806,10 @@ extracted on the host, and no host directory is shared with a guest.
 On macOS the service binds every interface by default, because the vmnet
 bridge may not exist until a guest runs; TLS and per-guest capabilities gate
 access. The macOS adapter is installed in each owned
-clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 cache download
-responses. GitHub still handles authentication, branch/ref matching, cache
-versions, metadata, and uploads. Bivouac stores downloaded archives, not a
-second cache-key database. Each new read validates its fresh signed URL with
+clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 download
+lookups and, with upload storage, cache creations. GitHub still handles
+authentication, branch/ref matching, cache versions and metadata. Bivouac
+stores archives, not a second cache-key database. Each new read validates its fresh signed URL with
 an upstream HEAD, including on a local hit; expired or denied capabilities
 cannot expose cached bytes. Object identity excludes URL query credentials.
 A lease request carries only that URL. HEAD on a lease answers from the
@@ -867,6 +867,27 @@ SAS. TLS identities rotate on daemon restart. Existing guests retain their
 upstream paths if their old cache endpoint disappears. This accelerates
 restores; it does not reduce GitHub cache uploads, storage, or metadata calls.
 
+`cache.store_uploads` (default off) keeps a copy of each Actions save, so the
+next restore does not download what was just uploaded. The preload replaces the
+creation response's signed upload URL with a host relay URL. The host sends
+each Put Blob, Put Block and Put Block List to Azure itself, appending only the
+operation's own parameters to the signed query, and stages the bytes it sent.
+When Azure accepts the commit, the staged blocks in committed order become the
+object that a restore's HEAD identifies by blob path, ETag and size. Only bytes
+the host sent and Azure accepted are stored, so a guest can place locally only
+what it can write upstream; a guest that can only read an entry cannot. The
+host never accepts guest bytes on any other path, which could otherwise poison
+an entry for later restores.
+
+Staging counts against cache capacity, and an upload that does not fit is
+relayed without a copy. Staged files use the fill prefix, so startup discards
+them; revocation and shutdown discard them too. Commits run after the response,
+belong to the service, which cancels and joins them, and may finish after the
+guest exits. A request the relay cannot carry, an unknown or revoked relay, or
+a lost host gets a 503 marker or a connection error. The storage SDK retries
+both, and the preload sends that upload's retries straight to Azure, so a relay
+failure falls back instead of failing the save.
+
 The store and HTTP service use pure Go and portable filesystem/network APIs.
 
 The service owns constant-space numeric request/byte counters for archive
@@ -879,6 +900,8 @@ fallback body bytes. HEAD, cache-service metadata and opaque tunnels are
 excluded, and concurrent coalesced reads count as hits. Proxy bypass totals
 include uncached forwarded GETs, not only release assets. These are delivered
 bytes, not unique stored bytes, total upstream traffic or a bandwidth benchmark.
+Upload storage counts stored saves and bytes, and saves relayed without a
+complete copy; none count as restore hits.
 
 The per-minute controller summary adds store totals: objects, committed and
 reserved bytes, capacity evictions and evicted bytes, invalidations, and
