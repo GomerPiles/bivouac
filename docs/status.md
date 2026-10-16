@@ -1,6 +1,6 @@
 # Status
 
-Bivouac runs real CI for a downstream project on a macOS host (Tart) and a
+Bivouac runs real CI for a downstream project on a macOS host and a
 Windows host (App Sandbox Windows guests and Crosvm Linux GPU guests). This
 page records what is validated live, what only tests cover, and the open
 gates. No provider is ready for untrusted (for example fork) pull requests.
@@ -12,31 +12,49 @@ The latest review fixes are covered by tests only, not yet validated live.
 builds for macOS arm64/amd64, Windows amd64, and Linux amd64 pass locally and
 in the hosted Linux/macOS/Windows workflow.
 
-## macOS: Tart
+## macOS
 
-Validated with real jobs:
+Bivouac runs macOS guests itself (Virtualization.framework through
+purego, its own guest agent). Validated on this
+runtime with real scale-set jobs from a baseline with the guest agent:
 
-- Scale-set demand and the REST JIT fallback (idle pool of one). Each job ran
-  in a fresh guest; a sentinel check proved no state carried over.
-- Drain, stop, and off/on mid-job and with queued work; controller SIGKILL
-  with adoption of the live guest; guest loss mid-job. VM capacity returns
-  before remote deregistration, and retained cleanup survives restart.
-- The runner executes in the Aqua session of a `--no-graphics` guest.
-  Windowed Metal rendering and app lifecycle, focus, and input tests pass.
-- Actions archive cache and the release proxy: cold and warm hits, and
-  fallback to upstream when the cache endpoint is stopped mid-job.
-- Credential-pattern scans of state, logs, and diagnostics found no matches.
-- Typical timings: clone 0.05 s, boot to guest agent 22–29 s, JIT to
-  listening 3–8 s, guest teardown 1.4–3.4 s.
+- Jobs run in the Aqua session of a fresh guest (sentinel check), back to
+  back, through assigned-job and sweep runners.
+- Release-proxy cache cold and warm, with guest resource and cache summaries
+  in the job log; diagnostics with `_diag` and the performance report; no credential patterns in state, logs, or diagnostics.
+- Drain, stop, and off mid-job; controller SIGKILL with adoption of the live
+  guest; guest loss (helper killed), whose runner cleanup retried until
+  GitHub released the busy runner.
+- The real-guest integration test (helper arguments, VM lock, cleanup
+  refusing the baseline).
+- Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
+  5–10 s, teardown 1.3–1.8 s (power-off).
+
+Passed on the earlier Tart CLI runtime but not yet repeated on this one:
+the REST JIT fallback (idle pool of one), off/on with queued work, retained
+cleanup across restart, the Actions archive cache with fallback when its
+endpoint stops mid-job, and windowed Metal, focus, and input tests.
+
+Tests only: the `vz` provider name and bivouac's own VM store with hashed
+agent socket paths; VM manifests, `vz import`, baseline rejection, and the
+machine options (validated by the framework in the signed CI test; nested
+virtualization is validated only on a host that supports it, and none has
+run it yet); a guest agent of another protocol version fails readiness at
+once; the daemon refuses to start from an executable without the
+virtualization entitlement; macOS CI signs a test binary and has the
+framework validate every helper device combination (skipped where the host
+cannot virtualize).
 
 Open:
 
+- Production cutover to a baseline with the guest agent installed.
+- Softnet launched by the VM helper (container pairs) and Linux guests on
+  this runtime.
 - Host reboot persistence of drain, stop, and off.
 - Repository-scoped registration, custom runner groups, GHES, pools larger
   than one, multiple providers, and simultaneous failures.
-- Resource and cache summaries from a real job (deployed, not yet observed).
 - Docker/Podman engine companions are implemented but not validated: they
-  need a Linux Tart baseline, Softnet privileges, public-only network checks
+  need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 - The Aqua session check, process-group launch, and cache bind to

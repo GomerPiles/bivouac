@@ -47,8 +47,8 @@ func newHarnessSweep(t *testing.T, mutate func(*config.Config), sweep bool) *har
 	cfg.Budget.ReadyTimeout.Duration = 2 * time.Second
 	p := cfg.Providers["macos"]
 	p.MaxInstances = 2
-	p.Tart.ForeignSlots = 0
-	p.Tart.CPU, p.Tart.MemoryGB = 0, 0
+	p.VZ.ForeignSlots = 0
+	p.VZ.CPU, p.VZ.MemoryGB = 0, 0
 	cfg.Providers["macos"] = p
 	if mutate != nil {
 		mutate(cfg)
@@ -182,7 +182,7 @@ func TestBudgetCapsConcurrency(t *testing.T) {
 func TestForeignGuestConsumesHostSlot(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) {
 		p := c.Providers["macos"]
-		p.Tart.HostVMLimit = 2
+		p.VZ.HostVMLimit = 2
 		c.Providers["macos"] = p
 	})
 	h.fp.AddForeign("tartelet-clone")

@@ -2,9 +2,9 @@
 
 Ephemeral GitHub Actions runners in disposable guests on personal machines.
 
-Bivouac manages existing virtualization engines (Tart on macOS; App Sandbox
-and Crosvm on Windows) so that each CI job runs in a fresh guest that is
-destroyed afterwards. Guests never see host files or long-lived credentials.
+Bivouac runs each CI job in a fresh guest that is destroyed afterwards: on
+macOS through Apple's Virtualization framework from Tart-format baselines; on
+Windows through App Sandbox and Crosvm. Guests never see host files or long-lived credentials.
 The manager needs one binary, one config file, local state/logs, and secrets in
 the OS credential store, alongside the selected VM engine and its prerequisites.
 Run it in the foreground with `bivouac run`. Starting it at login is optional,
@@ -15,18 +15,20 @@ CLI: `bivouac` (alias `biv`).
 
 - `on` / `off` / `drain` / `stop` / `status`
 - `run` (foreground daemon), `install` / `uninstall`
-- `doctor`, `config validate`, `secret set`, `tart list` / `cleanup`
+- `doctor`, `config validate`, `secret set`, `vz import` / `list` / `cleanup`
 
 ## Build
 
 ```bash
 go build -o bin/bivouac ./cmd/bivouac
+codesign --force --sign - --entitlements tools/macos/bivouac.entitlements bin/bivouac  # macOS
 ```
 
-Real-host validation of the Tart provider (Apple silicon, local baseline):
+Real-host validation of the macOS provider (Apple silicon, local baseline with
+the guest agent installed):
 
 ```bash
-BIVOUAC_TART_BASELINE=<vm> go test -tags integration -run TestRealGuest -v ./internal/provider/tart/
+BIVOUAC_VZ_BASELINE=<vm> BIVOUAC_EXE=$PWD/bin/bivouac go test -tags integration -run TestRealGuest -v ./internal/provider/vz/
 ```
 
 ## Docs

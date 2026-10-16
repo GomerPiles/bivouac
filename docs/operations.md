@@ -9,7 +9,7 @@ available space on the controller-state filesystem. The first CPU observation
 has no interval. Available macOS memory estimates free plus inactive pages;
 it is not Activity Monitor memory pressure. macOS has no Windows commit reading.
 
-New Tart clones receive job-start/completion hooks without baseline or workflow
+New macOS clones receive job-start/completion hooks without baseline or workflow
 edits. GitHub's Set up runner and Complete runner logs include guest CPU/RAM/disk
 summaries; diagnostics retain a validated numeric `guest/performance.json`.
 Completion also prints archive/release cache hits, misses, bypasses, failures
@@ -307,6 +307,7 @@ opts into login startup explicitly; omit `install` for foreground use.
 
 ```bash
 go build -o bin/bivouac ./cmd/bivouac
+codesign --force --sign - --entitlements tools/macos/bivouac.entitlements bin/bivouac
 cp bin/bivouac /usr/local/bin/bivouac      # or anywhere on PATH
 bivouac config example > "$(bivouac config path)"   # edit: url, app ids, baseline
 bivouac config validate
@@ -322,13 +323,55 @@ The LaunchAgent uses `ProcessType=Interactive` and
 executable path is fixed at installation time: rebuilding another copy
 does not update the running daemon.
 
-For an installed checkout, build a replacement with
-`go build -o bin/bivouac ./cmd/bivouac`, copy it to
+For an installed checkout, build and sign a replacement as above, copy it to
 `bin/bivouac.next`, drain active work, send TERM
 only to the PID in the state directory's `daemon.pid`, and wait for that
 PID file to disappear. Replace `bin/bivouac` with the staged binary, then
 run `bin/bivouac on`. Keep workflow dispatches paused during replacement.
 Never use a process-name search to stop or wait for the daemon.
+
+The daemon runs every VM through `bivouac vm run` from its own executable, so
+that copy must carry the `com.apple.security.virtualization` entitlement;
+the daemon refuses to start without it, and `doctor` checks it.
+
+**VM store.** Baselines and clones live in bivouac's VM store:
+`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
+`bivouac doctor` names it and checks the baseline's manifest. Import a
+stopped Tart-format VM, which clones it when it is on the same volume and
+writes the manifest:
+
+```bash
+bivouac vz import --runner-dir /Users/admin/actions-runner --sudo ~/.tart/vms/<vm> <baseline>
+```
+
+Pass `--sudo` only if the guest user has passwordless sudo (the release
+proxy needs it). The import records this binary's guest agent protocol, so
+import again after installing a new agent. A Linux engine baseline needs no
+`--runner-dir`.
+
+Bivouac does not see VMs in other tools' directories, so `foreign_slots`
+must reserve Apple's guest slots for any other manager.
+
+**macOS baseline.** Bivouac reaches the guest through its own agent, not
+Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
+baselines itself, prepare one with Tart before importing it:
+boot it, then install the darwin/arm64 `bivouac` binary as
+`/usr/local/bin/bivouac` (root:wheel, 0755) and
+[`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
+in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
+automatically; the agent runs only in that Aqua session. Shut the baseline
+down cleanly. To replace the agent binary, write a new file and `mv` it over
+the old one; overwriting the running binary in place corrupts it. Reinstall
+it only when its protocol version changes.
+
+**Moving from the Tart CLI runtime.** Drain to idle first: guests started by
+`tart run` are not adopted. Import the baseline, set `type = "vz"`, and
+rename `[providers.*.tart]` to `[providers.*.vz]` without `binary`,
+`extra_args`, or `runner_dir` (now in the manifest); config validation
+rejects the old names. Typed options in `[providers.*.vz.machine]` replace
+`extra_args`. `nested_virtualization = true` needs an M3 or newer Mac with
+macOS 15 and a Linux guest, such as the engine VM in
+`[providers.*.vz.containers.machine]`; the daemon refuses to start otherwise.
 
 Validation config (while Tartelet keeps production):
 
@@ -338,7 +381,7 @@ max_instances = 1
 max_pending_cleanup = 2
 [providers.macos]
 scaleset = "bivouac-macos-experimental"
-[providers.macos.tart]
+[providers.macos.vz]
 baseline = "ci-macos27"
 foreign_slots = 1     # Tartelet's VM keeps one of Apple's two macOS guest slots
 ```
@@ -404,7 +447,7 @@ single scale-set label, then `bivouac on`. Never revoke the shared App.
 
 ## Optional transparent caching
 
-Caching is disabled by default. On the experimental Tart setup:
+Caching is disabled by default. On the experimental macOS setup:
 
 ```toml
 [cache]
@@ -535,16 +578,16 @@ Do not restore the `tartelet` workflow labels or revoke the shared App.
 | `biv stop` | cancel now; guests destroyed; idle |
 | `biv off` | drain, then the daemon exits and stays off across reboots |
 | `biv status` | mode, phase, guests, pending runner cleanup, capacity, recent errors |
-| `biv tart list` | guests bivouac owns, orphans, and foreign guests |
-| `biv tart cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
+| `biv vz list` | guests bivouac owns, orphans, and foreign guests |
+| `biv vz cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
 | `biv doctor` | host, config, credential, engine, login item checks |
 
 Logs: `~/Library/Logs/bivouac/bivouac.log`, per-guest `<name>.launch.log`,
 and `diagnostics/<time>-<name>/` with `instance.json`, the runner log, and
 `_diag`. The daemon log and diagnostics are redacted at the sink. The launch
-log is not: `tart run` writes its own output there directly, unredacted and
-unbounded, because it must outlive the daemon. `--serial` is refused, so no
-guest console output reaches it.
+log is not: the VM helper (and Softnet) write host-side status there
+directly, unredacted and unbounded, because the helper must outlive the
+daemon. The guest console is never attached.
 
 ## Interrupted jobs and recovery
 
@@ -593,7 +636,7 @@ retires under `sweep_idle_timeout`.
 If a validation run needs operator cancellation, target its exact run ID:
 `gh run cancel <run-id> --repo <owner/repo>`. If normal cancellation hangs,
 `gh api repos/<owner>/<repo>/actions/runs/<run-id>/force-cancel --method POST`.
-Wait for `guest gone`, no owned VM in `bivouac tart list`, and no instance
+Wait for `guest gone`, no owned VM in `bivouac vz list`, and no instance
 record before proceeding. Never cancel an unrelated or production run.
 
 After SIGKILL, launchd restarts the controller and it adopts the live
@@ -614,9 +657,12 @@ Use a separate `BIVOUAC_HOME`, an isolated `bivouac-` test scale set or JIT
 label, and a one-job budget. Never change Tartelet, production labels, or the
 personal Docker/Podman/Lima configuration.
 
-Prepare a **local Linux/arm64 Tart baseline** through the image administrator's
-normal process, then shut it down and keep it immutable. It needs a working
-Linux Tart guest agent (`--run-rpc` on AF_VSOCK), a rootful Docker daemon at
+Prepare a **local Linux/arm64 Tart-format VM** through the image
+administrator's normal process, shut it down, and import it with
+`bivouac vz import`; keep the imported baseline immutable. It
+needs the linux/arm64 `bivouac` binary at `/usr/local/bin/bivouac` with
+[`bivouac-guest-agent.service`](../tools/linux/bivouac-guest-agent.service)
+enabled, a rootful Docker daemon at
 `/var/run/docker.sock` **or** a rootful Podman API service at
 `/run/podman/podman.sock`, and permission for guest exec to access that socket.
 Guest exec also needs root or noninteractive guest sudo to configure public DNS.
@@ -631,13 +677,14 @@ Build the Linux helper from the same source as the host binary using installed G
 ```sh
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o ./bivouac-linux-arm64 ./cmd/bivouac
 CGO_ENABLED=0 go build -trimpath -o ./bivouac ./cmd/bivouac
+codesign --force --sign - --entitlements tools/macos/bivouac.entitlements ./bivouac
 ```
 
 Keep the Linux binary at a stable host location and reference its absolute path.
 Add to the isolated provider configuration:
 
 ```toml
-[providers.macos.tart.containers]
+[providers.macos.vz.containers]
 engine = "docker"            # or "podman"
 baseline = "ci-linux-engine"
 cpu = 2
@@ -649,8 +696,7 @@ Explicitly size the macOS guest too; admission reserves the sum of both VMs.
 Include other managers' CPU/memory needs in host reservations. The engine adds
 no macOS licence slot, but does consume host CPU, memory, and disk space.
 No engine-specific arbitrary launch flags, socket overrides, or host mounts
-exist. The macOS `extra_args` may contain only input/audio/clipboard-disabling
-flags in this mode. Leave `bootstrap_share` empty and `cache.enabled = false`.
+exist. Leave `bootstrap_share` empty and `cache.enabled = false`.
 Do not change container topology or engine while any instance record remains.
 
 Host Softnet privileges are an owner-managed prerequisite, separate from guest
@@ -665,8 +711,8 @@ After prerequisites pass, validate only disposable, recorded pairs:
 
 1. Start one throwaway test job. Confirm both clone names and matching IDs/parent
    links exist in state and provider markers before issuing stop/delete operations.
-   Check both launch commands contain `--net-softnet` and an explicit block list
-   with `@host`, with no allow/expose/dir/disk options.
+   Check both launch commands contain `--softnet` and a `--softnet-block` list
+   with `@host`, with no `--share` or `--input`.
 2. From each guest and from a privileged container, verify public DNS/HTTPS works
    while host gateway services, host interface addresses, private LAN, peers,
    metadata/link-local addresses, and IPv6 destinations are unreachable. Use

@@ -88,7 +88,7 @@ type Budget struct {
 // Provider is one guest type on one virtualization engine. Each provider has
 // exactly one scale set (or JIT label set).
 type Provider struct {
-	// Type is the engine: "tart", experimental "appsandbox" or "crosvm".
+	// Type is the engine: "vz" (macOS Virtualization.framework), experimental "appsandbox" or "crosvm".
 	Type string `toml:"type"`
 	// ScaleSet is the scale set name, which is also the runs-on label.
 	ScaleSet string `toml:"scaleset"`
@@ -98,8 +98,8 @@ type Provider struct {
 	MaxInstances int `toml:"max_instances"`
 	// IdlePool is the JIT-mode number of registered runners kept waiting.
 	IdlePool int `toml:"idle_pool"`
-	// Tart holds engine-specific settings when Type is "tart".
-	Tart       *Tart       `toml:"tart"`
+	// VZ holds engine-specific settings when Type is "vz".
+	VZ         *VZ         `toml:"vz"`
 	AppSandbox *AppSandbox `toml:"appsandbox"`
 	Crosvm     *Crosvm     `toml:"crosvm"`
 }
@@ -141,8 +141,10 @@ type AppSandbox struct {
 	SSHKey        string `toml:"ssh_key"`
 }
 
-// Tart configures the Tart CLI provider.
-type Tart struct {
+// VZ configures the macOS provider. Guests are clones of a baseline in
+// bivouac's VM store, run by bivouac's own VM helper. What the image
+// provides (such as the runner directory) is in the baseline's manifest.
+type VZ struct {
 	// Containers optionally adds an isolated Linux engine clone to each job.
 	Containers *Containers `toml:"containers"`
 	// Baseline is the local VM each job is cloned from. Never started.
@@ -150,24 +152,58 @@ type Tart struct {
 	// CPU and MemoryGB size each clone; 0 keeps the baseline's values.
 	CPU      int `toml:"cpu"`
 	MemoryGB int `toml:"memory_gb"`
-	// ExtraArgs are appended to `tart run --no-graphics`, as an array.
-	ExtraArgs []string `toml:"extra_args"`
-	// RunnerDir is the preinstalled runner inside the guest.
-	RunnerDir string `toml:"runner_dir"`
-	// Binary is the tart executable; default "tart" on PATH.
-	Binary string `toml:"binary"`
+	// Machine holds typed options for how runner guests run.
+	Machine Machine `toml:"machine"`
 	// HostVMLimit is Apple's concurrent macOS guest ceiling per host.
 	HostVMLimit int `toml:"host_vm_limit"`
 	// ForeignSlots are guests another manager (Tartelet) may be running at
 	// the same time; bivouac also counts running VMs it does not own.
 	ForeignSlots int `toml:"foreign_slots"`
 	// BootstrapShare is an optional host directory shared read-only into the
-	// guest for bootstrap files. Empty means no share.
+	// guest (as /Volumes/My Shared Files/bivouac). Empty means no share.
 	BootstrapShare string `toml:"bootstrap_share"`
 }
 
-// Containers is deliberately limited to Tart Linux guests. No host daemon,
-// arbitrary socket, launch flags, or host mounts are configurable.
+// Machine is how a guest runs. Zero values keep the baseline manifest's or
+// the framework's defaults. There is deliberately no raw option
+// passthrough: each option is typed and validated, here and against the
+// baseline's OS and the host when a guest is created.
+type Machine struct {
+	// Display overrides the baseline's display size (and pixel density);
+	// macOS guests only.
+	Display Display `toml:"display"`
+	// DiskSync is "full" (the default: guest flushes reach the host disk),
+	// "fsync", or "none" (flushes are ignored, which is faster and safe only
+	// because guests are deleted after one job).
+	DiskSync string `toml:"disk_sync"`
+	// NestedVirtualization lets the guest run VMs of its own (such as
+	// /dev/kvm for containers). Apple's framework offers it to Linux guests
+	// on an M3 or newer chip with macOS 15 or later.
+	NestedVirtualization bool `toml:"nested_virtualization"`
+}
+
+// Display is a guest display size in pixels, with an optional density.
+type Display struct {
+	Width  int `toml:"width"`
+	Height int `toml:"height"`
+	PPI    int `toml:"ppi"`
+}
+
+func (m Machine) validate() error {
+	d := m.Display
+	if (d.Width == 0) != (d.Height == 0) || d.Width < 0 || d.Height < 0 || d.Width > 16384 || d.Height > 16384 || d.PPI < 0 || d.PPI > 1000 {
+		return errors.New("machine.display needs width and height in 1..16384 and an optional ppi in 1..1000")
+	}
+	switch m.DiskSync {
+	case "", "full", "fsync", "none":
+		return nil
+	}
+	return errors.New("machine.disk_sync must be full, fsync, or none")
+}
+
+// Containers is deliberately limited to Linux guests from a local
+// Tart-format baseline. No host daemon, arbitrary socket, launch options, or
+// host mounts are configurable.
 type Containers struct {
 	Engine   string `toml:"engine"` // docker or podman
 	Baseline string `toml:"baseline"`
@@ -175,6 +211,8 @@ type Containers struct {
 	MemoryGB int    `toml:"memory_gb"`
 	// Helper is a Linux/arm64 bivouac binary built alongside the host binary.
 	Helper string `toml:"helper"`
+	// Machine holds typed options for the engine VM; it has no display.
+	Machine Machine `toml:"machine"`
 }
 
 // Duration is a TOML string such as "30m".
@@ -231,7 +269,7 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	if c.Cache.Listen == "" {
-		// Tart's vmnet bridge may not exist until a guest runs, so the default
+		// The vmnet bridge may not exist until a guest runs, so the default
 		// binds every interface; TLS and per-guest capabilities gate access.
 		c.Cache.Listen = "0.0.0.0:0"
 		if isWindowsHostCache {
@@ -272,15 +310,9 @@ func (c *Config) applyDefaults() {
 		c.Budget.SweepIdleTimeout.Duration = 90 * time.Second
 	}
 	for name, p := range c.Providers {
-		if p.Type == "tart" && p.Tart != nil {
-			if p.Tart.RunnerDir == "" {
-				p.Tart.RunnerDir = "/Users/admin/actions-runner"
-			}
-			if p.Tart.Binary == "" {
-				p.Tart.Binary = "tart"
-			}
-			if p.Tart.HostVMLimit == 0 {
-				p.Tart.HostVMLimit = 2
+		if p.Type == "vz" && p.VZ != nil {
+			if p.VZ.HostVMLimit == 0 {
+				p.VZ.HostVMLimit = 2
 			}
 		}
 		c.Providers[name] = p
@@ -381,7 +413,7 @@ func (c *Config) Validate() error {
 		}
 		switch p.Type {
 		case "crosvm":
-			if p.Crosvm == nil || p.Tart != nil || p.AppSandbox != nil {
+			if p.Crosvm == nil || p.VZ != nil || p.AppSandbox != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only crosvm settings are required", name))
 				continue
 			}
@@ -406,7 +438,7 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
 		case "appsandbox":
-			if p.AppSandbox == nil || p.Tart != nil || p.Crosvm != nil {
+			if p.AppSandbox == nil || p.VZ != nil || p.Crosvm != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only [providers.%s.appsandbox] is required", name, name))
 				continue
 			}
@@ -429,61 +461,53 @@ func (c *Config) Validate() error {
 			if c.Cache.Enabled && !c.Cache.loopback() {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
-		case "tart":
+		case "vz":
 			if p.Crosvm != nil {
-				errs = append(errs, fmt.Errorf("provider %q: crosvm settings do not belong to tart", name))
+				errs = append(errs, fmt.Errorf("provider %q: crosvm settings do not belong to vz", name))
 			}
 			if p.AppSandbox != nil {
-				errs = append(errs, fmt.Errorf("provider %q: appsandbox settings do not belong to tart", name))
+				errs = append(errs, fmt.Errorf("provider %q: appsandbox settings do not belong to vz", name))
 			}
-			if p.Tart == nil {
-				errs = append(errs, fmt.Errorf("provider %q: [providers.%s.tart] is required", name, name))
+			if p.VZ == nil {
+				errs = append(errs, fmt.Errorf("provider %q: [providers.%s.vz] is required", name, name))
 				continue
 			}
-			if p.Tart.Baseline == "" {
-				errs = append(errs, fmt.Errorf("provider %q: tart.baseline is required", name))
+			if p.VZ.Baseline == "" {
+				errs = append(errs, fmt.Errorf("provider %q: vz.baseline is required", name))
 			}
-			if strings.HasPrefix(p.Tart.Baseline, NamePrefix) {
-				errs = append(errs, fmt.Errorf("provider %q: tart.baseline may not start with %q", name, NamePrefix))
+			if strings.HasPrefix(p.VZ.Baseline, NamePrefix) {
+				errs = append(errs, fmt.Errorf("provider %q: vz.baseline may not start with %q", name, NamePrefix))
 			}
-			for _, a := range p.Tart.ExtraArgs {
-				if strings.ContainsAny(a, " \t\n") {
-					errs = append(errs, fmt.Errorf("provider %q: tart.extra_args entries are single arguments, not shell strings: %q", name, a))
-				}
-				// The launch log is neither redacted nor bounded, so guest
-				// console output must not reach it. Start refuses it too.
-				if a == "--serial" || strings.HasPrefix(a, "--serial=") {
-					errs = append(errs, fmt.Errorf("provider %q: tart.extra_args may not include --serial", name))
-				}
-			}
-			if p.Tart.HostVMLimit < 1 || p.Tart.ForeignSlots < 0 || p.Tart.ForeignSlots >= p.Tart.HostVMLimit {
+			if p.VZ.HostVMLimit < 1 || p.VZ.ForeignSlots < 0 || p.VZ.ForeignSlots >= p.VZ.HostVMLimit {
 				errs = append(errs, fmt.Errorf("provider %q: need 0 <= foreign_slots < host_vm_limit", name))
 			}
-			if p.Tart.CPU < 0 || p.Tart.CPU > 1024 || p.Tart.MemoryGB < 0 || p.Tart.MemoryGB > 1024 {
-				errs = append(errs, fmt.Errorf("provider %q: tart cpu and memory_gb must be 0 (keep the baseline's) or 1..1024", name))
+			if p.VZ.CPU < 0 || p.VZ.CPU > 1024 || p.VZ.MemoryGB < 0 || p.VZ.MemoryGB > 1024 {
+				errs = append(errs, fmt.Errorf("provider %q: vz cpu and memory_gb must be 0 (keep the baseline's) or 1..1024", name))
 			}
-			if e := p.Tart.Containers; e != nil {
+			if err := p.VZ.Machine.validate(); err != nil {
+				errs = append(errs, fmt.Errorf("provider %q: vz %w", name, err))
+			}
+			if e := p.VZ.Containers; e != nil {
+				if err := e.Machine.validate(); err != nil {
+					errs = append(errs, fmt.Errorf("provider %q: containers %w", name, err))
+				}
+				if e.Machine.Display != (Display{}) {
+					errs = append(errs, fmt.Errorf("provider %q: the container engine VM has no display", name))
+				}
 				if e.Engine != "docker" && e.Engine != "podman" {
 					errs = append(errs, fmt.Errorf("provider %q: containers.engine must be docker or podman", name))
 				}
-				if !nameRE.MatchString(e.Baseline) || strings.HasPrefix(e.Baseline, NamePrefix) || e.Baseline == p.Tart.Baseline {
+				if !nameRE.MatchString(e.Baseline) || strings.HasPrefix(e.Baseline, NamePrefix) || e.Baseline == p.VZ.Baseline {
 					errs = append(errs, fmt.Errorf("provider %q: containers.baseline must be a distinct local Linux baseline name without the bivouac- prefix", name))
 				}
-				if e.CPU < 1 || e.MemoryGB < 1 || p.Tart.CPU < 1 || p.Tart.MemoryGB < 1 || e.CPU > 1024 || e.MemoryGB > 1024 || p.Tart.CPU > 1024 || p.Tart.MemoryGB > 1024 {
+				if e.CPU < 1 || e.MemoryGB < 1 || p.VZ.CPU < 1 || p.VZ.MemoryGB < 1 || e.CPU > 1024 || e.MemoryGB > 1024 || p.VZ.CPU > 1024 || p.VZ.MemoryGB > 1024 {
 					errs = append(errs, fmt.Errorf("provider %q: container pairs require explicit CPU and memory in 1..1024 for both guests", name))
 				}
 				if !strings.HasPrefix(e.Helper, "/") || strings.ContainsAny(e.Helper, "\x00\r\n") {
 					errs = append(errs, fmt.Errorf("provider %q: containers.helper must be an absolute Linux/arm64 binary path", name))
 				}
-				if c.Cache.Enabled || p.Tart.BootstrapShare != "" {
+				if c.Cache.Enabled || p.VZ.BootstrapShare != "" {
 					errs = append(errs, fmt.Errorf("provider %q: isolated containers prohibit the host cache and bootstrap shares", name))
-				}
-				for _, a := range p.Tart.ExtraArgs {
-					switch a {
-					case "--no-audio", "--no-clipboard", "--no-keyboard", "--no-pointer", "--no-trackpad":
-					default:
-						errs = append(errs, fmt.Errorf("provider %q: isolated containers prohibit tart extra argument %q", name, a))
-					}
 				}
 			}
 		case "":
@@ -521,20 +545,20 @@ func (c *Config) validateAcrossProviders(names []string) []error {
 			seen[key] = name
 		}
 	}
-	// Apple's macOS guest limit belongs to the host, so every Tart provider
+	// Apple's macOS guest limit belongs to the host, so every vz provider
 	// must describe it identically.
 	first := ""
 	for _, name := range names {
-		t := c.Providers[name].Tart
-		if c.Providers[name].Type != "tart" || t == nil {
+		t := c.Providers[name].VZ
+		if c.Providers[name].Type != "vz" || t == nil {
 			continue
 		}
 		if first == "" {
 			first = name
 			continue
 		}
-		if f := c.Providers[first].Tart; f.HostVMLimit != t.HostVMLimit || f.ForeignSlots != t.ForeignSlots {
-			errs = append(errs, fmt.Errorf("providers %q and %q: tart host_vm_limit and foreign_slots describe the host and must match", first, name))
+		if f := c.Providers[first].VZ; f.HostVMLimit != t.HostVMLimit || f.ForeignSlots != t.ForeignSlots {
+			errs = append(errs, fmt.Errorf("providers %q and %q: vz host_vm_limit and foreign_slots describe the host and must match", first, name))
 		}
 	}
 	return errs
@@ -576,20 +600,24 @@ ready_timeout = "3m"
 sweep_idle_timeout = "90s"   # a sweep runner that finds no queued job retires after this
 
 [providers.macos]
-type = "tart"
+type = "vz"
 scaleset = "bivouac-macos-experimental"
 labels = ["self-hosted", "macOS", "ARM64", "bivouac-experimental"]  # jit demand only
 max_instances = 1
 idle_pool = 1               # jit demand only; kept warm while on
 
-[providers.macos.tart]
+[providers.macos.vz]
 baseline = "ci-macos"
 cpu = 6
 memory_gb = 8
-extra_args = ["--no-audio", "--no-clipboard"]
-runner_dir = "/Users/admin/actions-runner"
 host_vm_limit = 2
 foreign_slots = 1            # leave one macOS guest slot for Tartelet during validation
+
+# Optional typed machine options; omitted values keep the baseline's.
+# [providers.macos.vz.machine]
+# display = { width = 1920, height = 1080, ppi = 144 }
+# disk_sync = "none"         # skip host flushes; guests are deleted after one job
+# nested_virtualization = true  # Linux guests on M3 or newer; also [providers.macos.vz.containers.machine]
 `
 
 func (c Cache) loopback() bool {
