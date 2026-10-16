@@ -43,7 +43,7 @@ public static class SpikeConsole {
  $step=22
  Write-SpikeStep 22
  $probe=Join-Path $base 'render.exe'
- [IO.File]::WriteAllBytes($probe,[Convert]::FromBase64String($data.probe))
+ Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox\hcs-render-probe.exe') -Destination $probe
  if((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ine $data.sha256){exit 14}
  $step=23
  Write-SpikeStep 23

@@ -5,6 +5,7 @@ package hcsspike
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/binary"
 	"encoding/json"
@@ -22,6 +23,14 @@ var guestValidate string
 // Keep the remote command below cmd.exe's limit, independently of script/probe
 // growth. Both the embedded script and its data are sent as JSON on stdin.
 const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-SpikeStep([int]$s){[Console]::Error.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(($env:SystemRoot+'\AppSandbox\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};function Read-SpikeBytes([int]$n){$b=New-Object byte[] $n;$o=0;while($o -lt $n){$r=$i.Read($b,$o,[Math]::Min(4096,$n-$o));if($r -le 0){throw 'frame'};$o+=$r};return ,$b};try{Write-SpikeStep 1;$i=[Console]::OpenStandardInput();$n=[BitConverter]::ToUInt32((Read-SpikeBytes 4),0);if(!$n -or $n -gt 100000000){exit 18};Write-SpikeStep 4;$b=Read-SpikeBytes $n;Write-SpikeStep 2;$p=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;Write-SpikeStep 3;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
+
+// Public validation assets arrive on setup media (or are preinstalled in a
+// specialized image). SSH carries only a fixed entry command and metadata.
+const guestValidateEntry = `param($data);$f=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-validate.ps1';if((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ine $data.script_sha256){exit 14};& $f $data`
+
+func desktopScriptInput(c Config) ([]byte, error) {
+	return guestScriptInput(guestValidateEntry, map[string]any{"name": c.name(), "user": c.GuestUser, "sha256": c.RenderProbe.SHA256, "script_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(guestValidate))), "require_setup": len(c.SetupAssets) != 0})
+}
 
 func desktopValidationCommand() string {
 	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(guestValidateBootstrap)
@@ -121,11 +130,11 @@ func checkSSHExecution(ctx context.Context, client *ssh.Client, report *Report) 
 
 func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderResult, error) {
 	var r renderResult
-	probe, err := readPinned(*c.RenderProbe)
+	_, err := readPinned(*c.RenderProbe)
 	if err != nil {
 		return r, err
 	}
-	data, err := guestScriptInput(guestValidate, map[string]any{"name": c.name(), "user": c.GuestUser, "probe": probe, "sha256": c.RenderProbe.SHA256, "require_setup": len(c.SetupAssets) != 0})
+	data, err := desktopScriptInput(c)
 	if err != nil {
 		return r, err
 	}

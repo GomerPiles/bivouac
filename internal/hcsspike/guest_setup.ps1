@@ -10,6 +10,10 @@ foreach($file in @('appsandbox-agent.exe','appsandbox-input.exe','appsandbox-dis
 foreach($file in @('AppSandboxVDD.dll','AppSandboxVDD.inf','AppSandboxVDD.cat','devcon.exe')) {
  Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $drivers $file) -Force
 }
+foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1','hcs-spike-validate.ps1'))) {
+ $source=Join-Path $PSScriptRoot $entry[0]
+ if(Test-Path -LiteralPath $source -PathType Leaf){Copy-Item -LiteralPath $source -Destination (Join-Path $base $entry[1]) -Force}
+}
 # Install only into this disposable guest. Use fixed argument arrays.
 if(!@(Get-PnpDevice -PresentOnly | Where-Object InstanceId -like 'ROOT\APPSANDBOXVDD\*').Count) {
  & (Join-Path $drivers 'devcon.exe') @('install',(Join-Path $drivers 'AppSandboxVDD.inf'),'Root\AppSandboxVDD') *> $null

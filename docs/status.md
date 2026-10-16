@@ -94,23 +94,23 @@ paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
 The full offline trial with 2 CPUs and 4 GiB RAM validates child-only answer
 staging, detach-before-start, native running, GPU assignment, guest-agent
 initialization, reported display-driver readiness and ephemeral authenticated
-SSH. Fixed command execution and small framed-stdin round trips pass live.
-Read-only inspection confirms setup/OOBE complete, the intended autologon account,
-agent/SSH services and the setup-complete marker. The full desktop request times
-out at five minutes. Its latest numeric checkpoint is 1: the launcher started
-but did not finish reading the large input frame. Console readiness and native
-rendering were not reached or verified by that request.
-The VM is confirmed absent. The added stopped-clone inspection failed on hidden
-`ProgramData` metadata; its finally path detached the mount, while conservative
-failure handling retained the owned child/journal for matching cleanup. The
-metadata lookup issue reproduces without elevation and is corrected with Force.
-A corrected retry will first verify detachment and clean that recorded child.
-The new child-only transport uses a four-byte little-endian byte length followed
-by UTF-8 JSON, read in at most 4096-byte chunks. It avoids both EOF dependence
-and a huge console text line. Large-payload and oversized/truncated-frame fixtures
-pass without elevation. This transfer change and corrected inspection still
-need a live trial. The immutable independent template, production CI and installed
-provider remain unchanged; guest services/display drivers remain dependencies.
+SSH. Fixed command execution and small length-prefixed stdin round trips pass
+live. Inspection confirms setup/OOBE complete, the intended account, agent/SSH
+services and the setup-complete marker. Large validation payloads still stall
+after their header is received (checkpoint 4), before the native probe is staged
+or run. The underlying bulk-transfer limitation is not resolved.
+Corrected hidden-folder inspection and matching cleanup pass live. Both the
+previously retained child and the latest trial child/journal are removed; the
+VMs are confirmed absent and only the trial lock remains.
+Public validation assets now use the setup ISO: the pinned native probe and
+fixed validation script are copied only into each disposable guest. SSH carries
+a sub-1-KiB entry/metadata frame. The guest verifies the script against the host
+build's embedded hash and the probe against its configured pin before execution.
+A specialized image must preinstall these same files. Media-directory and small
+payload regressions pass. This delivery path still needs a live trial; console
+readiness, hardware rendering/presentation and pixel readback remain unverified.
+Production CI and the installed provider remain unchanged. The experiment still
+requires the App Sandbox guest service and signed display-driver components.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow

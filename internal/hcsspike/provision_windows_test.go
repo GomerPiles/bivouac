@@ -87,6 +87,11 @@ func TestISOBuilderUsesMemoryAnswerFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(assets, "SETUP.PS1"), []byte("exit 0"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	for name, content := range map[string][]byte{"HCSRENDER.EXE": []byte("synthetic public probe"), "HCSVALIDATE.PS1": []byte(guestValidate)} {
+		if err := os.WriteFile(filepath.Join(assets, name), content, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	dest := filepath.Join(dir, "setup.iso")
 	input, _ := json.Marshal(map[string]string{"assets": assets, "destination": dest, "unattend": "<unattend />"})
 	sys, err := windows.GetSystemDirectory()
@@ -110,8 +115,13 @@ func TestISOBuilderUsesMemoryAnswerFile(t *testing.T) {
 	if !slices.Contains(jolietRootNames(t, data), "Autounattend.xml") {
 		t.Fatalf("Windows removable-media answer filename missing: %q", jolietRootNames(t, data))
 	}
+	for _, name := range []string{"HCSRENDER.EXE", "HCSVALIDATE.PS1"} {
+		if !slices.Contains(jolietRootNames(t, data), name) {
+			t.Fatal("public validation asset missing from media")
+		}
+	}
 	entries, err := os.ReadDir(assets)
-	if err != nil || len(entries) != 1 {
+	if err != nil || len(entries) != 3 {
 		t.Fatal("answer file was written into host staging")
 	}
 }
@@ -425,5 +435,29 @@ func TestDesktopLengthFrameRejectsOversizedAndTruncatedPayloads(t *testing.T) {
 		if !errors.As(err, &exit) || exit.ExitCode() != 18 {
 			t.Fatal("invalid frame was not rejected before script execution")
 		}
+	}
+}
+
+func TestDesktopRequestCarriesOnlySmallMetadataAndFixedEntry(t *testing.T) {
+	c := exampleConfig()
+	c.RenderProbe = &PinnedFile{Source: `C:\SyntheticPrivateResource\render.exe`, SHA256: c.BaselineSHA256}
+	c.SetupAssets = setupFixture(c)
+	input, err := desktopScriptInput(c)
+	if err != nil || len(input) > 1024 {
+		t.Fatal("desktop metadata frame grew beyond the small transfer bound")
+	}
+	if bytes.Contains(input, []byte(c.RenderProbe.Source)) || bytes.Contains(input, []byte(`"probe":`)) {
+		t.Fatal("host resource or binary appeared in SSH metadata")
+	}
+	var payload struct {
+		Script string         `json:"script"`
+		Data   map[string]any `json:"data"`
+	}
+	if json.Unmarshal(input[4:], &payload) != nil || payload.Script != guestValidateEntry {
+		t.Fatal("fixed entry payload missing")
+	}
+	hash, ok := payload.Data["script_sha256"].(string)
+	if !ok || len(hash) != 64 || len(payload.Data) != 5 || payload.Data["sha256"] != c.RenderProbe.SHA256 {
+		t.Fatal("guest resource integrity pins missing")
 	}
 }

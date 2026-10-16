@@ -160,6 +160,21 @@ func makeSetupISO(ctx context.Context, c Config) error {
 			return err
 		}
 	}
+	if c.RenderProbe != nil {
+		probe, err := readPinned(*c.RenderProbe)
+		if err != nil {
+			return err
+		}
+		if len(probe) > 128<<20-total {
+			return errors.New("setup assets exceed 128 MiB")
+		}
+		if err := os.WriteFile(filepath.Join(folder, "HCSRENDER.EXE"), probe, 0600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(folder, "HCSVALIDATE.PS1"), []byte(guestValidate), 0600); err != nil {
+			return err
+		}
+	}
 	if err := os.WriteFile(filepath.Join(folder, "SETUP.PS1"), []byte(guestSetup), 0600); err != nil {
 		return err
 	}

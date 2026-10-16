@@ -29,27 +29,21 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
 The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
 answer staging, protected permissions, detach-before-start, native running/GPU
 assignment, guest-agent initialization, reported display-driver readiness and
-ephemeral authenticated SSH. Fixed command and small framed-stdin checks pass
-live. The full desktop request times out at its five-minute bound; checkpoint 1
-confirms the launcher began but did not finish reading the large input frame.
-Console readiness and rendering were not reached or verified by that request.
-Previous read-only inspection confirmed setup/OOBE complete, the intended
-account, agent/SSH services and the setup-complete marker.
+ephemeral authenticated SSH. Fixed command and small length-prefixed input
+checks pass live. A large validation payload still stalls at checkpoint 4,
+after its length header but before payload receipt completes. The probe was not
+staged or run. Setup/OOBE, the intended autologon account, service registration
+and the setup-complete marker are confirmed. Corrected hidden-folder inspection
+and matching cleanup pass; the retained and latest trial children/journals are
+removed and native absence is confirmed.
 
-The VM is confirmed absent. The latest stopped-clone inspection failed when
-reading hidden ProgramData metadata without Force. The finally path detached
-the mount, and the owned child/journal remain for matching cleanup. This metadata
-lookup failure reproduces without elevation; the corrected retry first verifies
-detachment and cleans that retained child before creating a new one.
-
-The small launcher now reads a four-byte little-endian length and exactly that
-many UTF-8 JSON bytes, in chunks of at most 4096 bytes. It no longer waits for EOF
-or a huge console text line. A large ordinary-token regression keeps stdin open;
-oversized and truncated frames are rejected. Separate command/input checks keep
-their 30-second bounds and desktop validation its five-minute bound within the
-guest budget. The new transfer and corrected offline inspection need live
-validation. The timeout's precise transport cause and hardware rendering remain
-unverified.
+Public validation files now travel on the disposable setup ISO: `HCSRENDER.EXE`
+and `HCSVALIDATE.PS1` are copied to the fixed guest AppSandbox directory during
+setup. SSH sends only a small fixed entry command and metadata, under 1 KiB.
+The entry checks the script hash against this host build's embedded source;
+the script checks the native probe's configured hash before running it. This
+media delivery needs a live trial. Bulk SSH transfer remains unresolved; console
+readiness, hardware rendering/presentation and pixel readback are unverified.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -61,6 +55,8 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   CPU, memory and duration are bounded. Optional `setup_assets` attach one
   disposable resources ISO for generalized-template initialization. Windows
   IMAPI builds it from pinned public guest assets plus an in-memory answer file.
+  An optional pinned native probe and the fixed validation script are public
+  files on that same media, rather than binary/code payloads over SSH.
   A random local guest password exists only in memory and the protected disposable
   ISO/guest disk, never config, journal, command arguments or logs. Its parent
   directory is Administrators/SYSTEM-only before the owned VM access grant.
@@ -88,7 +84,8 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   pinned native probe and runs it in an interactive guest scheduled task. It
   accepts only bounded fixed booleans/numbers, never arbitrary guest diagnostics.
   A small encoded launcher avoids the SSH shell command-length limit; trusted
-  embedded code and instance data are separate fields of the length-prefixed stdin JSON payload.
+  fixed entry code and metadata are separate fields of the small length-prefixed
+  stdin JSON payload. The larger fixed script and probe arrive on setup media.
 - A separate protected journal, child marker and exact HCS owner/runtime proof.
   An existing native name is never replaced. Creation is never replayed after
   response loss. Cleanup runs independently of caller cancellation, confirms
@@ -153,7 +150,10 @@ operator agreement on those resources.
 
 1. Use a **separate clean, unenrolled Windows image**. A specialized image must
    have the App Sandbox guest service, signed indirect display driver, local
-   autologin and OpenSSH available offline. A generalized template instead needs
+   autologin and OpenSSH available offline. For rendering, preinstall the pinned
+   probe as `Windows\AppSandbox\hcs-render-probe.exe` and this build's exact
+   `guest_validate.ps1` as `Windows\AppSandbox\hcs-spike-validate.ps1`. A generalized
+   template instead needs
    `setup_assets` as in `hcs-spike-guest.example.json`: the agent, display/input
    helpers, VDD DLL/INF/CAT and devcon, plus an offline OpenSSH MSI when the image
    lacks sshd. Every source must be administrator-protected and SHA-256 pinned.
