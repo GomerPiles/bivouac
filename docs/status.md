@@ -94,22 +94,25 @@ paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
 The full offline trial with 2 CPUs and 4 GiB RAM validates child-only answer
 staging, detach-before-start, native running, GPU assignment, guest-agent
 initialization, reported display-driver readiness and ephemeral authenticated
-SSH. Read-only inspection confirms setup/OOBE complete, the intended autologon
-account, registered agent/SSH services and the setup-complete marker. The desktop
-validation request timed out without a fixed step or render report. Inspection
-detached the stopped child and cleanup confirmed native absence and removed its
-disk/journal. Only the lock remains.
+SSH. Fixed command execution and framed-stdin round trips also pass live.
+Read-only inspection confirms setup/OOBE complete, the intended autologon account,
+registered agent/SSH services and the setup-complete marker. Full desktop
+validation still times out at its five-minute bound without a render report;
+this is now isolated from basic SSH execution/input. Inspection detached the
+stopped child and cleanup confirmed native absence and removed its disk/journal.
+Only the lock remains.
 The independent template's cached Audit/sysprep answer is overridden only inside
 the new child; its pinned hash was unchanged by read-only inspection. Short
 specialization commands and the agent-service readiness wait are live validated.
-The desktop launcher stays below the shell command limit. Its payload is now
-newline-framed so it need not wait for stdin EOF; a large ordinary-token fixture
-executes through cmd.exe while stdin remains open. A timed-out request closes
-its owned SSH client. New separate 30-second command and framed-stdin checks
-report fixed booleans before the desktop request, which has its own five-minute
-bound inside the guest budget. The timeout's cause is not established. These
-transport diagnostics need live validation; console readiness, hardware
-rendering/presentation and pixel readback remain unverified.
+The small desktop launcher uses newline-framed JSON and does not depend on stdin
+EOF. A large ordinary-token fixture executes through cmd.exe with stdin held
+open. Each command/stdin diagnostic has a 30-second bound; the desktop request
+has its own five-minute bound, inside the guest budget. A timeout closes the
+owned SSH client without replay. New numeric progress checkpoints cross the
+stderr sink through an allowlist and are also written inside the disposable
+guest after frame parsing. Stopped-clone inspection can read only fixed checkpoint
+and native-probe report fields. These diagnostics need a live retry; the stall's
+cause, console readiness and hardware rendering/presentation remain unverified.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow

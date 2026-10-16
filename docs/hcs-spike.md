@@ -29,25 +29,26 @@ readiness, graphics/input, networking/isolation and lifecycle validation.
 The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
 answer staging, protected permissions, detach-before-start, native running/GPU
 assignment, guest-agent initialization, reported display-driver readiness and
-ephemeral authenticated SSH. Its desktop validation request timed out without a
-fixed step or render report. Read-only inspection after confirmed native absence
-found setup/OOBE complete, the expected autologon account, registered agent/SSH
-services and the setup-complete marker. Inspection detached the child and
-matching cleanup removed its disk/journal.
+ephemeral authenticated SSH. Separate fixed command and framed-stdin round trips
+pass live. Full desktop validation still times out at its own five-minute bound,
+without a render report. Read-only inspection after confirmed native absence
+finds setup/OOBE complete, the intended autologon account, agent/SSH services and
+the setup-complete marker. Inspection detaches the child and matching cleanup
+removes its disk/journal.
 
 The independent template's cached Audit/sysprep answer is overridden only inside
 the disposable child; its pinned hash was unchanged by read-only inspection.
 The short specialization path and service-readiness marker are live validated.
-The small desktop launcher avoids the Windows command shell limit. Its JSON
-payload now ends with a newline; execution begins on that frame without waiting
-for stdin EOF. An ordinary-token regression passes a larger-than-probe payload
-through cmd.exe while stdin stays open. Two separate 30-second checks distinguish
-fixed SSH command execution from framed-stdin delivery before desktop validation,
-which has its own five-minute bound within the overall guest budget. A timeout
-closes the owned SSH client, and no command is replayed. Only fixed booleans,
-numeric stages and sanitized errors are retained. The timeout's cause remains
-unproven; these transport diagnostics need a live retry. Desktop readiness,
-hardware rendering/presentation and pixel readback remain unverified.
+The small desktop launcher consumes newline-framed JSON without depending on
+stdin EOF; a large ordinary-token regression executes with stdin held open.
+Basic transport checks are limited to 30 seconds each, while desktop validation
+has five minutes inside the overall guest budget. A timeout closes the owned
+SSH client, and no command is replayed. Only allowlisted numeric progress phases
+cross the stderr sink. After frame parsing, fixed phases are also recorded in
+the disposable guest so a stopped-clone inspection can distinguish workflow
+progress from SSH output/exit handling. Any offline native-probe report must be
+bounded and re-encoded as fixed booleans/numbers only. These new checkpoints
+need a live retry; the stall's cause and hardware rendering remain unverified.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -221,6 +222,29 @@ After detaching the inspected clone, use the matching `cleanup` command; it
 revalidates ownership and native absence before removing the child. Routine
 trials still clean up automatically, including on failure. Offline diagnostics
 must emit only bounded flags/codes, never raw setup logs or answer-file contents.
+
+## Desktop validation checkpoints
+
+`guest_validation_step` retains only an allowlisted number from the SSH stderr
+sink. After parsing the payload, the same number is written to a fixed file in
+the disposable guest for explicit stopped-clone inspection. A checkpoint marks
+entry into a stage, not its completion.
+
+| Step | Stage entered |
+| --- | --- |
+| 1 | Wait for the input frame |
+| 2 | Parse the received frame |
+| 3 | Invoke the embedded validation script |
+| 17 | Verify the intended guest identity |
+| 19 | Compile the fixed console API bindings |
+| 20 | Wait for stable setup/console readiness |
+| 21 | Create and protect the private probe directory |
+| 22 | Write and verify the pinned native probe |
+| 23 | Register the interactive guest task |
+| 24 | Start the task and wait for its bounded report |
+| 25 | Read and return fixed report fields |
+
+Never copy raw guest stderr, setup logs or answer files into diagnostics.
 
 ## References
 

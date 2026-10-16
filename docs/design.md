@@ -630,7 +630,10 @@ Execution does not depend on stdin EOF. Separate bounded fixed command/stdin
 round trips distinguish authentication from remote command execution before a
 five-minute desktop request; all fit inside the guest budget. A timeout closes
 the owned SSH client instead of replaying a command. Fixed numeric failure
-stages replace raw guest errors. The setup marker is written only after the
+stages replace raw guest errors. The stderr sink drains arbitrary text and
+retains only allowlisted phase numbers; after parsing the input frame, progress
+is also recorded inside the disposable guest for stopped-clone inspection.
+Offline probe reports are re-encoded as bounded fixed booleans/numbers. The setup marker is written only after the
 agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI
 without adding cgo to the Go host.
 Readiness requires setup completion, the intended console user's Explorer and
@@ -660,8 +663,8 @@ operator-approved read-only inspection. It reports `native_absent` and
 inspection. Normal `cleanup` rechecks proofs/absence and removes retained files.
 Child-only staging, offline HCS running state, GPU assignment and explicit
 native/storage cleanup are validated. Setup/OOBE completion, the guest agent,
-reported display-driver readiness and ephemeral authenticated SSH are also live
-validated. Console readiness, rendering, process-loss recovery and
+reported display-driver readiness, ephemeral authenticated SSH, fixed command
+execution and framed-stdin delivery are also live validated. Console readiness, rendering, process-loss recovery and
 networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template

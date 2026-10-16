@@ -234,6 +234,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 			return report, err
 		}
 		observed, renderErr := validateDesktop(sshCtx, client, c)
+		report.GuestValidationStep = observed.ValidationStep
 		report.GuestReady = observed.GuestReady
 		report.DesktopReady = observed.DesktopReady
 		report.HardwareD3D11 = observed.HardwareD3D11
