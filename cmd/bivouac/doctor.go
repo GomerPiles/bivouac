@@ -171,6 +171,9 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	} else {
 		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
 	}
+	if err := vm.Store(e.layout.VMs).CheckSocketPath(); err != nil {
+		add("FAIL", "vm store "+name, err.Error())
+	}
 	if m, err := vz.CheckBaseline(e.layout.VMs, t.Baseline, "darwin"); err != nil {
 		add("FAIL", "baseline "+name, err.Error())
 	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {

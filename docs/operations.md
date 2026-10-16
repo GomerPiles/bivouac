@@ -336,7 +336,8 @@ the daemon refuses to start without it, and `doctor` checks it.
 
 **VM store.** Baselines and clones live in bivouac's VM store:
 `~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
-`bivouac doctor` names it and checks the baseline's manifest. Import a
+`bivouac doctor` names it and checks the baseline's manifest and that the
+store path is short enough for guest agent sockets (103 bytes on macOS). Import a
 stopped Tart-format VM, which clones it when it is on the same volume and
 writes the manifest:
 
