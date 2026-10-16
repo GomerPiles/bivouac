@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"golang.org/x/sys/windows"
 	"io"
 	"os"
@@ -459,5 +460,60 @@ func TestDesktopRequestCarriesOnlySmallMetadataAndFixedEntry(t *testing.T) {
 	hash, ok := payload.Data["script_sha256"].(string)
 	if !ok || len(hash) != 64 || len(payload.Data) != 5 || payload.Data["sha256"] != c.RenderProbe.SHA256 {
 		t.Fatal("guest resource integrity pins missing")
+	}
+}
+
+// Exercise the real nested launcher and the report producer under Windows
+// PowerShell; marshaling a Go struct alone cannot verify guest stdout framing.
+func TestDesktopReportProducerThroughFramedLauncher(t *testing.T) {
+	start := strings.Index(guestValidate, "  $report=[ordered]@{guest_ready=")
+	if start < 0 {
+		t.Fatal("report producer missing")
+	}
+	end := strings.Index(guestValidate[start:], " } finally {Unregister-ScheduledTask")
+	if end < 0 {
+		t.Fatal("report producer boundary missing")
+	}
+	producer := guestValidate[start : start+end]
+	script := `param($data);$ProgressPreference='SilentlyContinue';$observed=ConvertFrom-Json '{"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0,"vendor_id":4098,"device_id":29631,"adapter_count":5,"hardware_adapter_count":4,"default_vendor_id":4098,"default_device_id":29631}';$gpuStatus=[ordered]@{valid=$true;display_count=4;virtual_count=1;problem_code=0};` + producer + ";exit 0"
+	input, err := guestScriptInput(script, map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(sys, "cmd.exe"), "/d", "/s", "/c", desktopValidationCommand())
+	cmd.Stdin = bytes.NewReader(input)
+	var out boundedOutput
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		t.Fatal("synthetic report launcher failed")
+	}
+	r, err := validateRenderReport(out.data)
+	if err != nil {
+		t.Fatalf("synthetic report rejected: %v", err)
+	}
+	if !r.GPUDeviceDiagnosticsValid || r.VirtualRenderDeviceCount != 1 || r.VirtualRenderProblemCode != 0 || r.VendorID != 4098 || r.DeviceID != 29631 {
+		t.Fatal("synthetic report changed")
+	}
+}
+
+func TestMalformedRenderReportDiagnosticsContainOnlyNumbers(t *testing.T) {
+	for _, input := range []string{"", "private-output", `{"guest_ready":"private-output"}`, `{} private-output`, `{} {}`} {
+		_, err := validateRenderReport([]byte(input))
+		if err == nil {
+			t.Fatal("malformed output accepted")
+		}
+		var size int
+		var offset int64
+		n, scanErr := fmt.Sscanf(err.Error(), "invalid bounded guest rendering report (bytes=%d, offset=%d)", &size, &offset)
+		if scanErr != nil || n != 2 || size != len(input) || offset < 0 || offset > int64(len(input)) || strings.Contains(err.Error(), "private-output") {
+			t.Fatal("parse diagnostics lost bounds or exposed guest output")
+		}
 	}
 }

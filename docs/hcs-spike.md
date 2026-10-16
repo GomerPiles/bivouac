@@ -40,15 +40,15 @@ setup. SSH sends only a small fixed entry command and metadata, under 1 KiB.
 The entry checks the script hash against this host build's embedded source;
 the script checks the native probe's configured hash before running it. This
 path passes live, including the intended active console user's Explorer,
-Default input desktop and interactive native-probe execution. The probe stops
-at adapter validation: explicit selection finds no acceptable hardware adapter
-among four DXGI candidates (stage 3, DXGI_ERROR_NOT_FOUND). Presentation and pixel
-readback remain unverified. The selected host driver package matches the host
-GPU and driver version. The bounded read-only readiness check confirms one
-GPU-PV device with problem Code 43 after 136 driver files were copied. The
-destination lacked `System32`; configuration now requires
-`C:\Windows\System32\HostDriverStore\FileRepository`, matching Windows GPU-PV
-and the upstream implementation. The corrected destination awaits a live trial.
+Default input desktop and interactive native-probe execution. Driver destinations
+require `C:\Windows\System32\HostDriverStore\FileRepository`, matching Windows
+GPU-PV and the upstream implementation. With this path, the pinned native probe's
+saved report confirms hardware D3D11 on the host GPU, presentation and both GPU
+and composited-desktop pixel checks (stage 7, HRESULT 0). Read-only stopped-clone
+inspection verifies the report and probe hash. The returned SSH report was
+rejected as malformed, so complete automated success remains pending. Explicit
+flushed console JSON output and numeric-only parse diagnostics pass a synthetic
+fixture through the real framed Windows PowerShell launcher and await a live trial.
 No raw device identities, names or driver paths enter reports.
 
 The VM, disposable child and journal are removed; native absence is confirmed.

@@ -104,15 +104,16 @@ frame sent over SSH. The guest verifies the script against the host build's
 embedded hash and the probe against its configured pin before execution. This
 path passes live: setup readiness, the intended active console user's Explorer,
 the Default input desktop and interactive native-probe execution are confirmed.
-The explicit-selection probe enumerates four DXGI adapters but finds no
-acceptable hardware candidate (stage 3, DXGI_ERROR_NOT_FOUND); default selection
-is no longer the only explanation. The selected driver package matches the host
-GPU and driver version. Hardware rendering, presentation and pixel readback
-remain unverified. The bounded read-only readiness check confirms one GPU-PV
-device with problem Code 43 after 136 driver files were copied. The driver
-destination lacked `System32`; validation, examples and protocol fixtures now
-require the documented `C:\Windows\System32\HostDriverStore\FileRepository`
-tree. This corrected destination awaits live validation.
+Driver destinations require the documented
+`C:\Windows\System32\HostDriverStore\FileRepository` tree. With the corrected
+path, the pinned native probe's saved report confirms hardware D3D11 on the
+host GPU, successful presentation and both GPU and composited-desktop pixel
+checks (stage 7, HRESULT 0). Read-only inspection verifies the report and probe
+hash. The SSH report was rejected as malformed, so the complete automated
+success path is not yet validated. The guest now writes and flushes JSON through
+the console directly; parse failures report only byte counts and numeric offsets.
+A synthetic successful report passes through the real framed launcher under
+Windows PowerShell. These reporting changes await a live trial.
 Corrected hidden-folder inspection and matching cleanup finish successfully;
 the VM, child and journal are removed and only the trial lock remains. Some
 files observed live were absent in the stopped clone after forced termination,
@@ -132,14 +133,14 @@ and removed its journal/disposable child. It used an independent immutable
 template copy with 1 CPU, 2 GiB RAM and no NIC.
 The default properties query and retaining the created handle through verified
 termination are live validated. Production CI/configuration was unchanged.
-Hardware rendering/presentation, pixel readback, input, process-loss
-cleanup/recovery and networking/isolation remain unverified.
+Input, process-loss cleanup/recovery and networking/isolation remain unverified.
 Ordinary-token headroom reporting and native admission checks refuse missing or
 insufficient physical/commit memory, trial-volume space and CPU capacity. Checks
 run before staging and HCS creation. A two-second resource watcher cancels only
 the isolated trial if the live reserve is lost; cleanup remains independent.
-Boundary, pre-dispatch refusal and watcher cancellation tests pass without a VM. Live guarded rendering
-validation is pending sufficient host headroom and explicit UAC consent.
+Boundary, pre-dispatch refusal and watcher cancellation tests pass without a VM.
+Guarded live trials complete with sufficient headroom; reserve-loss cancellation
+has not been exercised against a live guest.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

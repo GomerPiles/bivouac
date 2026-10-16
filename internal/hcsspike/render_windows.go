@@ -69,8 +69,26 @@ func validateRenderReport(b []byte) (renderResult, error) {
 	var r renderResult
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
-	if d.Decode(&r) != nil || d.Decode(new(any)) != io.EOF {
-		return r, errors.New("invalid bounded guest rendering report")
+	decodeErr := d.Decode(&r)
+	if decodeErr == nil {
+		decodeErr = d.Decode(new(any))
+		if errors.Is(decodeErr, io.EOF) {
+			decodeErr = nil
+		} else if decodeErr == nil {
+			decodeErr = errors.New("multiple reports")
+		}
+	}
+	if decodeErr != nil {
+		offset := d.InputOffset()
+		var syntax *json.SyntaxError
+		var wrongType *json.UnmarshalTypeError
+		if errors.As(decodeErr, &syntax) {
+			offset = syntax.Offset
+		} else if errors.As(decodeErr, &wrongType) {
+			offset = wrongType.Offset
+		}
+		// Guest-controlled text and decoder error details never reach the sink.
+		return r, fmt.Errorf("invalid bounded guest rendering report (bytes=%d, offset=%d)", len(b), offset)
 	}
 	if r.DisplayDeviceCount > 32 || r.VirtualRenderDeviceCount > r.DisplayDeviceCount || r.VirtualRenderProblemCode > 255 {
 		return r, errors.New("invalid bounded guest GPU device counters")

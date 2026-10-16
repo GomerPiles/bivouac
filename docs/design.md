@@ -682,16 +682,16 @@ reported display-driver readiness, ephemeral authenticated SSH, fixed command
 execution and small framed-stdin delivery are also live validated. The large
 bulk transfer still stalls after receiving its length header. Media delivery
 of the public validation assets with small SSH metadata, setup/console readiness,
-Default input desktop and interactive native-probe execution pass live. The
-explicit-selection probe reaches DXGI enumeration but finds no acceptable
-hardware adapter among four candidates (stage 3, DXGI_ERROR_NOT_FOUND). Hardware
-rendering/presentation and pixel readback remain unverified. The bounded read-only
-GPU-PV readiness check reports one device with problem Code 43 after 136 files
-were copied; guest copy completion alone is not driver readiness. Driver
-destinations must include `System32` in the documented guest
-`C:\Windows\System32\HostDriverStore\FileRepository` tree; the corrected path
-awaits live validation. Forced termination can leave the stopped disk without files
-already observed live; read-only inspection does not override a completed live
+Default input desktop and interactive native-probe execution pass live. Driver
+destinations require `C:\Windows\System32\HostDriverStore\FileRepository`.
+With that path, the pinned native probe's saved report confirms hardware D3D11,
+presentation and GPU/desktop pixel readback (stage 7, HRESULT 0); read-only
+inspection verifies the report and probe hash. The SSH report was malformed,
+so complete automated success remains pending. The guest now writes and flushes
+JSON directly to the console; strict parse failures expose only byte counts and
+numeric offsets. A synthetic report passes through the real framed launcher,
+but these reporting changes await live validation. Forced termination can leave
+the stopped disk without files already observed live; read-only inspection does not override a completed live
 check. Process-loss recovery and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
