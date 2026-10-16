@@ -128,6 +128,7 @@ private releases, and GHES; tools with their own trust stores need setup.
 
 Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
+SSH revocation tests cover accepted guest sockets still awaiting forwarding.
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,
 invalidation and upstream change.

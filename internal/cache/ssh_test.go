@@ -42,6 +42,11 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 // SSH connection, as deleting a guest before revocation does.
 func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
 	t.Helper()
+	return sshFixture(t, nil)
+}
+
+func sshFixture(t *testing.T, beforeForward func()) (SSHBinding, func()) {
+	t.Helper()
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +112,8 @@ func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
 					return
 				}
 				defer func() { _ = conn.Close() }()
+				forwardCtx, cancelForwards := context.WithCancel(context.Background())
+				defer cancelForwards()
 				go func() {
 					for ch := range channels {
 						_ = ch.Reject(ssh.Prohibited, "no commands or general forwarding")
@@ -142,8 +149,16 @@ func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
 							if err != nil {
 								return
 							}
+							// The guest owns accepted sockets even before their SSH
+							// channels open. SSH shutdown must close them independently
+							// of a delayed or blocked forwarding goroutine.
+							stopClose := context.AfterFunc(forwardCtx, func() { _ = incoming.Close() })
 							go func() {
+								defer stopClose()
 								defer func() { _ = incoming.Close() }()
+								if beforeForward != nil {
+									beforeForward()
+								}
 								payload := ssh.Marshal(struct {
 									Address    string
 									Port       uint32
@@ -294,6 +309,40 @@ func TestSSHRevocationClosesActiveAndQueuedChannels(t *testing.T) {
 		} else if errors.As(err, &timeout) && timeout.Timeout() {
 			t.Fatal("queued guest channel survived revocation")
 		}
+	}
+}
+
+func TestSSHRevocationClosesChannelsAwaitingForward(t *testing.T) {
+	accepted, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	binding, _ := sshFixture(t, func() {
+		close(accepted)
+		<-release // Revoke after TCP accept but before SSH channel creation.
+	})
+	backend := httptest.NewTLSServer(http.NotFoundHandler())
+	defer backend.Close()
+	s, _, _ := testService(t, backend)
+	b, _ := sshCacheClient(t, s, "guest", binding)
+	endpoint, err := url.Parse(b.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := net.DialTimeout("tcp", endpoint.Host, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = socket.Close() }()
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture did not accept guest socket")
+	}
+	s.Revoke("guest")
+	_ = socket.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var data [1]byte
+	var timeout net.Error
+	if _, err = socket.Read(data[:]); err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("guest socket awaiting SSH forwarding survived revocation")
 	}
 }
 
