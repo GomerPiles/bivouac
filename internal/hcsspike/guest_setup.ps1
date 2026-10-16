@@ -22,5 +22,8 @@ if (!(Get-Service sshd -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPa
 if(Get-Service sshd -ErrorAction SilentlyContinue) {Set-Service sshd -StartupType Automatic;Start-Service sshd}
 if(Get-Service AppSandboxAgent -ErrorAction SilentlyContinue){Set-Service AppSandboxAgent -StartupType Automatic}
 & (Join-Path $base 'appsandbox-agent.exe') @('--install') *> $null
-if((Get-Service AppSandboxAgent).Status -ne 'Running'){exit 1}
+$agent=Get-Service AppSandboxAgent
+$agent.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
+$agent.Refresh()
+if($agent.Status -ne 'Running'){exit 1}
 Set-Content -LiteralPath (Join-Path $base 'hcs-spike-setup-complete.json') -Value '{"ready":true}' -Encoding UTF8

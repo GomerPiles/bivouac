@@ -351,3 +351,33 @@ func TestUnattendCommandsRespectWindowsSchemaLengths(t *testing.T) {
 		t.Fatal("expected setup commands missing")
 	}
 }
+
+func TestDesktopLauncherThroughCmdPreservesLargeStdinPayload(t *testing.T) {
+	command := desktopValidationCommand()
+	if len(utf16.Encode([]rune(command))) > 2048 {
+		t.Fatal("desktop launcher risks the Windows shell command limit")
+	}
+	value := `synthetic <&'" $() ; | > data`
+	script := "param($data)\n#" + strings.Repeat("padding", 1600) + "\n[Console]::Out.Write($data.value);exit 0"
+	input, _ := json.Marshal(map[string]any{"script": script, "data": map[string]string{"value": value}})
+	if len(input) < 8191 {
+		t.Fatal("fixture must exercise a payload larger than the shell limit")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(ctx, filepath.Join(sys, "cmd.exe"), "/d", "/s", "/c", command)
+	cmd.Stdin = bytes.NewReader(input)
+	var out boundedOutput
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		t.Fatal("small launcher failed through cmd.exe")
+	}
+	if string(out.data) != value {
+		t.Fatal("stdin data was changed or interpreted as code")
+	}
+}

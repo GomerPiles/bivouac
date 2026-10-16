@@ -92,22 +92,23 @@ native guest probe checks setup/console readiness, hardware D3D11, presentation
 and GPU/desktop pixel readback through fixed authenticated SSH code. These new
 paths pass race tests, vet, lint and an ordinary-token IMAPI media fixture.
 The full offline trial with 2 CPUs and 4 GiB RAM validates child-only answer
-staging, protected directory permissions, detach-before-start, native running
-and GPU assignment. After ten minutes the agent was still unreachable. Read-only
-inspection of the stopped child found the embedded answer, image state advanced
-to specialized-to-OOBE, but setup/OOBE still in progress, no agent/SSH service
-registration and no setup-complete marker. Bounded setup errors include
-`0x80004005`, `0x80220005` and `0x00000490`; these do not identify the rejected
-setting. The child was detached and cleanup confirmed native absence and removed
-its disk/journal. Only the lock remains.
-The independent template has a cached Audit/sysprep answer and retains its pinned
-hash after read-only inspection. Staging overrides it only in the new child,
-accepts an empty embedded directory, and refuses existing contents or explicit
-offline answer pointers. A source audit found an 814-character specialization
-command where Windows permits 259. That defect is corrected with a short fixed
-path to a script staged in the child; XML length regression checks pass. This
-correction still needs a live trial. Guest readiness, SSH and rendering remain
-unverified.
+staging, detach-before-start, native running, GPU assignment, guest-agent
+initialization, reported display-driver readiness and ephemeral authenticated
+SSH. Read-only inspection after failure confirms setup/OOBE complete, the
+intended autologon account and registered agent/SSH services. The fixed desktop
+command failed before returning a render report; the setup-complete marker was
+absent. The stopped child was detached and cleanup confirmed native absence and
+removed its disk/journal. Only the lock remains.
+The independent template's cached Audit/sysprep answer is overridden only inside
+the new child. Its pinned hash was unchanged by read-only inspection. Short
+specialization commands within the Windows schema limit are now live validated.
+The desktop SSH command was 9,954 characters, exceeding the default command
+shell limit. It now uses a small fixed launcher with the embedded script and
+instance data on stdin; an ordinary-token fixture passes a larger payload
+through cmd.exe without changing data into code. Guest setup now waits for the
+agent service to reach Running before writing its marker. These corrections and
+bounded numeric failure stages need a live retry. Console readiness, hardware
+rendering/presentation and pixel readback remain unverified.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
 Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow
@@ -120,8 +121,8 @@ and removed its journal/disposable child. It used an independent immutable
 template copy with 1 CPU, 2 GiB RAM and no NIC; only the trial lock file remains.
 The default properties query and retaining the created handle through verified
 termination are live validated. Production CI/configuration was unchanged.
-Windows setup/guest readiness, SSH, hardware rendering, desktop/input,
-process-loss cleanup/recovery and networking/isolation remain unverified.
+Console/desktop readiness, hardware rendering, input, process-loss
+cleanup/recovery and networking/isolation remain unverified.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

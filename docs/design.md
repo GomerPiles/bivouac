@@ -623,8 +623,11 @@ assets. Removable-media discovery uses `Autounattend.xml`; the
 ordinary-token media test inspects its name in the ISO's Joliet directory.
 
 An optional hash-pinned standalone native C++ probe runs only inside the guest,
-through a fixed SSH bootstrap and an interactive guest scheduled task. Native
-C++ supplies the Windows Direct3D COM ABI without adding cgo to the Go host.
+through a small fixed SSH bootstrap and an interactive guest scheduled task.
+The command stays below the Windows default shell limit: trusted embedded code
+and instance data arrive in separate fields of stdin JSON. Fixed numeric failure
+stages replace raw guest errors. The setup marker is written only after the
+agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI without adding cgo to the Go host.
 Readiness requires setup completion, the intended console user's Explorer and
 Default input desktop. The probe requires hardware D3D11 (software adapters are
 rejected), successful windowed presentation, and matching red/green pixels in
@@ -651,9 +654,10 @@ operator-approved read-only inspection. It reports `native_absent` and
 `storage_retained`; an ambiguous create never confirms absence or permits such
 inspection. Normal `cleanup` rechecks proofs/absence and removes retained files.
 Child-only staging, offline HCS running state, GPU assignment and explicit
-native/storage cleanup are validated. The guest reaches specialized-to-OOBE but
-has not completed setup; guest readiness, rendering, SSH, process-loss recovery
-and networking/isolation remain unverified.
+native/storage cleanup are validated. Setup/OOBE completion, the guest agent,
+reported display-driver readiness and ephemeral authenticated SSH are also live
+validated. Console readiness, rendering, process-loss recovery and
+networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

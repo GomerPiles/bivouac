@@ -26,25 +26,26 @@ trial. Removing the host application/daemon is feasible at the native VM layer;
 replacing the complete CI provider still requires image provisioning, guest
 readiness, graphics/input, networking/isolation and lifecycle validation.
 
-The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only answer
-staging, its protected DACL and detach-before-start. Native running/GPU assignment
-passed, but the agent did not become reachable within ten minutes. Read-only
-inspection after confirmed native absence found the embedded answer and an
-image state advanced to specialized-to-OOBE; setup/OOBE were still in progress,
-with no agent/SSH service registration or setup-complete marker. Bounded setup
-error codes are `0x80004005`, `0x80220005` and `0x00000490`; they do not identify
-the failed setting. Inspection detached the child and matching cleanup removed
-its disk/journal.
+The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
+answer staging, protected permissions, detach-before-start, native running/GPU
+assignment, guest-agent initialization, reported display-driver readiness and
+ephemeral authenticated SSH. Its fixed desktop command failed without a render
+report. Read-only inspection after confirmed native absence found setup/OOBE
+complete, the expected autologon account and registered agent/SSH services, but
+no setup-complete marker. Inspection detached the child and matching cleanup
+removed its disk/journal.
 
 The independent template's cached Audit/sysprep answer is overridden only inside
-the disposable child. Its pinned hash was unchanged by read-only inspection.
-A source audit found that the encoded specialization command was 814 characters,
-exceeding the documented 259-character `RunSynchronousCommand/Path` limit. It now
-uses a short fixed script path; the script is staged beside the answer inside
-the protected child directory. A regression checks actual emitted command-field
-lengths. This is a concrete schema defect, not a proven explanation of all setup
-errors. The correction still needs a live trial. Guest readiness, SSH and
-rendering remain unverified live.
+the disposable child; its pinned hash was unchanged by read-only inspection.
+The short specialization script path is live validated. The previous desktop
+SSH command was 9,954 characters, exceeding the default Windows command shell
+limit. It now invokes a small fixed launcher; the embedded script and instance
+data travel through stdin JSON. A regression sends a larger payload through
+cmd.exe and verifies that data remains literal. Guest setup waits for the agent
+service to reach Running before marking completion. Fixed numeric error stages
+identify readiness/console, probe transfer and task-launch failures without raw
+guest diagnostics. These corrections need a live retry. Desktop readiness,
+hardware rendering/presentation and pixel readback remain unverified.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -82,6 +83,8 @@ the ordinary-token ISO fixture verifies its Joliet directory entry.
   fixed SSH code waits for setup and the intended console user, transfers the
   pinned native probe and runs it in an interactive guest scheduled task. It
   accepts only bounded fixed booleans/numbers, never arbitrary guest diagnostics.
+  A small encoded launcher avoids the SSH shell command-length limit; trusted
+  embedded code and instance data are separate fields of the stdin JSON payload.
 - A separate protected journal, child marker and exact HCS owner/runtime proof.
   An existing native name is never replaced. Creation is never replayed after
   response loss. Cleanup runs independently of caller cancellation, confirms
@@ -250,3 +253,7 @@ Specialization uses a fixed script path to respect the documented
 [`RunSynchronousCommand/Path` limit](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-deployment-runsynchronous-runsynchronouscommand-path).
 First-logon commands are separately checked against their
 [`CommandLine` limit](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-firstlogoncommands-synchronouscommand-commandline).
+
+Windows OpenSSH initially uses [cmd.exe as its default shell](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-server-configuration).
+The small SSH launcher stays below its [command-line limit](https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/command-line-string-limitation)
+without changing the guest or host shell configuration.

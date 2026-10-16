@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"golang.org/x/crypto/ssh"
@@ -15,6 +16,14 @@ import (
 
 //go:embed guest_validate.ps1
 var guestValidate string
+
+// Keep the remote command below cmd.exe's limit, independently of script/probe
+// growth. Both the embedded script and its data are sent as JSON on stdin.
+const guestValidateBootstrap = `$ErrorActionPreference='Stop';try{$p=[Console]::In.ReadToEnd()|ConvertFrom-Json;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
+
+func desktopValidationCommand() string {
+	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(guestValidateBootstrap)
+}
 
 type renderResult struct {
 	GuestReady    bool   `json:"guest_ready"`
@@ -54,7 +63,7 @@ func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderR
 	if err != nil {
 		return r, err
 	}
-	data, err := json.Marshal(map[string]any{"name": c.name(), "user": c.GuestUser, "probe": probe, "sha256": c.RenderProbe.SHA256, "require_setup": len(c.SetupAssets) != 0})
+	data, err := json.Marshal(map[string]any{"script": guestValidate, "data": map[string]any{"name": c.name(), "user": c.GuestUser, "probe": probe, "sha256": c.RenderProbe.SHA256, "require_setup": len(c.SetupAssets) != 0}})
 	if err != nil {
 		return r, err
 	}
@@ -69,9 +78,16 @@ func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderR
 	session.Stdin = bytes.NewReader(data)
 	session.Stdout = &out
 	session.Stderr = io.Discard
-	// Fixed code only. Name, account and executable bytes arrive as JSON data.
-	err = session.Run("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(guestValidate))
+	// The fixed launcher receives the embedded code and instance data on stdin.
+	err = session.Run(desktopValidationCommand())
 	if err != nil {
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) {
+			switch code := exit.ExitStatus(); code {
+			case 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25:
+				return r, fmt.Errorf("fixed guest desktop validation failed at step %d", code)
+			}
+		}
 		return r, errors.New("fixed guest desktop validation failed")
 	}
 	return validateRenderReport(out.data)
