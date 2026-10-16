@@ -21,7 +21,7 @@ import (
 var guestValidate string
 
 // Keep the remote command below cmd.exe's limit, independently of script/probe
-// growth. Both the embedded script and its data are sent as JSON on stdin.
+// growth. A fixed entry script and metadata are sent as small JSON on stdin.
 const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-SpikeStep([int]$s){[Console]::Error.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(($env:SystemRoot+'\AppSandbox\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};function Read-SpikeBytes([int]$n){$b=New-Object byte[] $n;$o=0;while($o -lt $n){$r=$i.Read($b,$o,[Math]::Min(4096,$n-$o));if($r -le 0){throw 'frame'};$o+=$r};return ,$b};try{Write-SpikeStep 1;$i=[Console]::OpenStandardInput();$n=[BitConverter]::ToUInt32((Read-SpikeBytes 4),0);if(!$n -or $n -gt 100000000){exit 18};Write-SpikeStep 4;$b=Read-SpikeBytes $n;Write-SpikeStep 2;$p=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;Write-SpikeStep 3;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
 
 // Public validation assets arrive on setup media (or are preinstalled in a
@@ -37,16 +37,20 @@ func desktopValidationCommand() string {
 }
 
 type renderResult struct {
-	ValidationStep uint32 `json:"-"`
-	GuestReady     bool   `json:"guest_ready"`
-	DesktopReady   bool   `json:"desktop_ready"`
-	HardwareD3D11  bool   `json:"hardware_d3d11"`
-	Presented      bool   `json:"presented"`
-	PixelReadback  bool   `json:"pixel_readback"`
-	Stage          uint32 `json:"stage"`
-	HRESULT        uint32 `json:"hresult"`
-	VendorID       uint32 `json:"vendor_id"`
-	DeviceID       uint32 `json:"device_id"`
+	ValidationStep       uint32 `json:"-"`
+	GuestReady           bool   `json:"guest_ready"`
+	DesktopReady         bool   `json:"desktop_ready"`
+	HardwareD3D11        bool   `json:"hardware_d3d11"`
+	Presented            bool   `json:"presented"`
+	PixelReadback        bool   `json:"pixel_readback"`
+	Stage                uint32 `json:"stage"`
+	HRESULT              uint32 `json:"hresult"`
+	VendorID             uint32 `json:"vendor_id"`
+	DeviceID             uint32 `json:"device_id"`
+	AdapterCount         uint32 `json:"adapter_count"`
+	HardwareAdapterCount uint32 `json:"hardware_adapter_count"`
+	DefaultVendorID      uint32 `json:"default_vendor_id"`
+	DefaultDeviceID      uint32 `json:"default_device_id"`
 }
 type boundedOutput struct{ data []byte }
 
@@ -64,7 +68,7 @@ func validateRenderReport(b []byte) (renderResult, error) {
 	if d.Decode(&r) != nil || d.Decode(new(any)) != io.EOF {
 		return r, errors.New("invalid bounded guest rendering report")
 	}
-	if !r.GuestReady || !r.DesktopReady || !r.HardwareD3D11 || !r.Presented || !r.PixelReadback || r.Stage != 7 || r.HRESULT != 0 || r.VendorID == 0 || (r.VendorID == 0x1414 && r.DeviceID == 0x8c) {
+	if r.AdapterCount == 0 || r.AdapterCount > 32 || r.HardwareAdapterCount == 0 || r.HardwareAdapterCount > r.AdapterCount || !r.GuestReady || !r.DesktopReady || !r.HardwareD3D11 || !r.Presented || !r.PixelReadback || r.Stage != 7 || r.HRESULT != 0 || r.VendorID == 0 || (r.VendorID == 0x1414 && r.DeviceID == 0x8c) {
 		return r, errors.New("guest rendering checks did not all pass")
 	}
 	return r, nil

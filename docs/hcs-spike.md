@@ -30,20 +30,26 @@ The full guest trial with 2 CPUs, 4 GiB RAM and no NIC validates child-only
 answer staging, protected permissions, detach-before-start, native running/GPU
 assignment, guest-agent initialization, reported display-driver readiness and
 ephemeral authenticated SSH. Fixed command and small length-prefixed input
-checks pass live. A large validation payload still stalls at checkpoint 4,
-after its length header but before payload receipt completes. The probe was not
-staged or run. Setup/OOBE, the intended autologon account, service registration
-and the setup-complete marker are confirmed. Corrected hidden-folder inspection
-and matching cleanup pass; the retained and latest trial children/journals are
-removed and native absence is confirmed.
+checks pass live. Setup/OOBE, the intended autologon account, service readiness
+and the setup-complete marker are confirmed. A large SSH validation payload
+stalls after its length header; the bulk-transfer limitation remains unresolved.
 
-Public validation files now travel on the disposable setup ISO: `HCSRENDER.EXE`
+Public validation files travel on the disposable setup ISO: `HCSRENDER.EXE`
 and `HCSVALIDATE.PS1` are copied to the fixed guest AppSandbox directory during
 setup. SSH sends only a small fixed entry command and metadata, under 1 KiB.
 The entry checks the script hash against this host build's embedded source;
 the script checks the native probe's configured hash before running it. This
-media delivery needs a live trial. Bulk SSH transfer remains unresolved; console
-readiness, hardware rendering/presentation and pixel readback are unverified.
+path passes live, including the intended active console user's Explorer,
+Default input desktop and interactive native-probe execution. The probe stops
+at adapter validation (stage 3, HRESULT 0) before hardware rendering is accepted;
+presentation and pixel readback remain unverified. The revised probe explicitly
+enumerates/selects hardware and reports adapter counts and numeric IDs; that
+selection change still needs a live trial.
+
+The VM, disposable child and journal are removed; native absence is confirmed.
+Read-only inspection completed, but some files observed live were absent after
+forced termination. Treat the live bounded report as authoritative for completed
+checks, rather than inferring that setup had not run from stopped-disk omissions.
 
 Setup media uses the documented removable-media filename `Autounattend.xml`;
 the ordinary-token ISO fixture verifies its Joliet directory entry.
@@ -205,8 +211,9 @@ authenticated, and cleanup completed. With `render_probe`, success also requires
 `guest_ready`, `desktop_ready`, `hardware_d3d11`, `presented` and `pixel_readback`.
 The native probe is compiled from `tools/windows/hcs-render-probe.cpp` with a
 Windows C++ compiler and linked against d3d11, dxgi, user32 and gdi32. It checks
-two colors in both the render target and the composited desktop, rejects WARP
-and other software adapters, and leaves only bounded boolean/numeric results.
+two colors in both the render target and the composited desktop, enumerates at
+most 32 adapters, explicitly selects hardware and rejects WARP/software adapters.
+Only bounded booleans, adapter counts, numeric IDs and HRESULTs are returned.
 No keyboard/mouse input or cross-reboot/crash recovery is covered. Agent/SSH
 success alone does **not** establish hardware rendering or presentation. Neither trial establishes focus/input, fresh-state reset,
 host/private-peer isolation, or production readiness. Those require subsequent

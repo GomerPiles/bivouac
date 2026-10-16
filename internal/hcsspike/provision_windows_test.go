@@ -126,12 +126,12 @@ func TestISOBuilderUsesMemoryAnswerFile(t *testing.T) {
 	}
 }
 func TestRenderReportRejectsPartialAndSoftwareResults(t *testing.T) {
-	good := renderResult{GuestReady: true, DesktopReady: true, HardwareD3D11: true, Presented: true, PixelReadback: true, Stage: 7, VendorID: 0x1002, DeviceID: 1}
+	good := renderResult{GuestReady: true, DesktopReady: true, HardwareD3D11: true, Presented: true, PixelReadback: true, Stage: 7, AdapterCount: 2, HardwareAdapterCount: 1, VendorID: 0x1002, DeviceID: 1}
 	data, _ := json.Marshal(good)
 	if _, err := validateRenderReport(data); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*renderResult){func(r *renderResult) { r.GuestReady = false }, func(r *renderResult) { r.DesktopReady = false }, func(r *renderResult) { r.PixelReadback = false }, func(r *renderResult) { r.Presented = false }, func(r *renderResult) { r.HardwareD3D11 = false }, func(r *renderResult) { r.HRESULT = 1 }, func(r *renderResult) { r.Stage = 6 }, func(r *renderResult) { r.VendorID = 0x1414; r.DeviceID = 0x8c }} {
+	for _, mutate := range []func(*renderResult){func(r *renderResult) { r.GuestReady = false }, func(r *renderResult) { r.DesktopReady = false }, func(r *renderResult) { r.PixelReadback = false }, func(r *renderResult) { r.Presented = false }, func(r *renderResult) { r.HardwareD3D11 = false }, func(r *renderResult) { r.HRESULT = 1 }, func(r *renderResult) { r.AdapterCount = 33 }, func(r *renderResult) { r.HardwareAdapterCount = 0 }, func(r *renderResult) { r.HardwareAdapterCount = 3 }, func(r *renderResult) { r.Stage = 6 }, func(r *renderResult) { r.VendorID = 0x1414; r.DeviceID = 0x8c }} {
 		bad := good
 		mutate(&bad)
 		data, _ := json.Marshal(bad)

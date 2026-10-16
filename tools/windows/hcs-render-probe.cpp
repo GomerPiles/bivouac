@@ -4,7 +4,7 @@
 #define _UNICODE
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgi.h>
+#include <dxgi1_2.h>
 #include <cstdio>
 #include <cwchar>
 
@@ -16,7 +16,7 @@ template<class T> struct Owned {
 };
 struct Result {
  bool desktop=false, hardware=false, presented=false, pixels=false;
- unsigned stage=0, vendor=0, device=0;
+ unsigned stage=0, vendor=0, device=0, adapters=0, hardwareAdapters=0, defaultVendor=0, defaultDevice=0;
  HRESULT hr=S_OK;
 };
 static LRESULT CALLBACK WindowProc(HWND w,UINT m,WPARAM a,LPARAM b) {
@@ -45,18 +45,28 @@ static void run(Result& r) {
  Owned<IDXGISwapChain> swap;Owned<ID3D11Device> device;Owned<ID3D11DeviceContext> context;
  D3D_FEATURE_LEVEL level={};const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_0};
  r.stage=3;
- r.hr=D3D11CreateDeviceAndSwapChain(nullptr,D3D_DRIVER_TYPE_HARDWARE,nullptr,0,levels,1,D3D11_SDK_VERSION,&desc,swap.out(),device.out(),&level,context.out());
- if (FAILED(r.hr)) return;
- Owned<IDXGIDevice> dxgi;Owned<IDXGIAdapter> adapter;DXGI_ADAPTER_DESC ad={};
- r.hr=device->QueryInterface(__uuidof(IDXGIDevice),reinterpret_cast<void**>(dxgi.out()));if(FAILED(r.hr))return;
- r.hr=dxgi->GetAdapter(adapter.out());if(FAILED(r.hr))return;
- r.hr=adapter->GetDesc(&ad);if(FAILED(r.hr))return;
- // Microsoft Basic Render Driver is WARP. Never accept it as hardware.
- if (ad.VendorId==0x1414 && ad.DeviceId==0x008c) return;
- Owned<IDXGIAdapter1> adapter1;DXGI_ADAPTER_DESC1 ad1={};
- r.hr=adapter->QueryInterface(__uuidof(IDXGIAdapter1),reinterpret_cast<void**>(adapter1.out()));if(FAILED(r.hr))return;
- r.hr=adapter1->GetDesc1(&ad1);if(FAILED(r.hr) || (ad1.Flags&DXGI_ADAPTER_FLAG_SOFTWARE))return;
- r.vendor=ad.VendorId;r.device=ad.DeviceId;r.hardware=true;
+ // The display-only adapter can be the default even with a render GPU present.
+ // Enumerate bounded DXGI 1.1 adapters and explicitly select physical hardware.
+ Owned<IDXGIFactory1> factory;Owned<IDXGIAdapter1> selected;
+ r.hr=CreateDXGIFactory1(__uuidof(IDXGIFactory1),reinterpret_cast<void**>(factory.out()));if(FAILED(r.hr))return;
+ bool complete=false;
+ for(unsigned index=0;index<32;index++) {
+  Owned<IDXGIAdapter1> candidate;DXGI_ADAPTER_DESC1 ad={};
+  r.hr=factory->EnumAdapters1(index,candidate.out());
+  if(r.hr==DXGI_ERROR_NOT_FOUND){complete=true;break;}
+  if(FAILED(r.hr))return;
+  r.hr=candidate->GetDesc1(&ad);if(FAILED(r.hr))return;
+  r.adapters++;
+  if(index==0){r.defaultVendor=ad.VendorId;r.defaultDevice=ad.DeviceId;}
+  if((ad.Flags&DXGI_ADAPTER_FLAG_SOFTWARE) || (ad.VendorId==0x1414 && ad.DeviceId==0x008c))continue;
+  r.hardwareAdapters++;
+  if(!selected.p){selected.p=candidate.p;selected.p->AddRef();r.vendor=ad.VendorId;r.device=ad.DeviceId;}
+ }
+ if(!complete){r.hr=E_FAIL;return;}
+ if(!selected.p){r.hr=DXGI_ERROR_NOT_FOUND;return;}
+ r.hr=D3D11CreateDeviceAndSwapChain(selected.p,D3D_DRIVER_TYPE_UNKNOWN,nullptr,0,levels,1,D3D11_SDK_VERSION,&desc,swap.out(),device.out(),&level,context.out());
+ if(FAILED(r.hr))return;
+ r.hardware=true;
  Owned<ID3D11Texture2D> back,staging;Owned<ID3D11RenderTargetView> view;
  r.stage=4;
  r.hr=swap->GetBuffer(0,__uuidof(ID3D11Texture2D),reinterpret_cast<void**>(back.out()));if(FAILED(r.hr))return;
@@ -92,8 +102,8 @@ static void run(Result& r) {
 }
 int main() {
  Result r;run(r);
- char json[512];
- int count=std::snprintf(json,sizeof(json),"{\"desktop_ready\":%s,\"hardware_d3d11\":%s,\"presented\":%s,\"pixel_readback\":%s,\"stage\":%u,\"hresult\":%u,\"vendor_id\":%u,\"device_id\":%u}",r.desktop?"true":"false",r.hardware?"true":"false",r.presented?"true":"false",r.pixels?"true":"false",r.stage,static_cast<unsigned>(r.hr),r.vendor,r.device);
+ char json[768];
+ int count=std::snprintf(json,sizeof(json),"{\"desktop_ready\":%s,\"hardware_d3d11\":%s,\"presented\":%s,\"pixel_readback\":%s,\"stage\":%u,\"hresult\":%u,\"vendor_id\":%u,\"device_id\":%u,\"adapter_count\":%u,\"hardware_adapter_count\":%u,\"default_vendor_id\":%u,\"default_device_id\":%u}",r.desktop?"true":"false",r.hardware?"true":"false",r.presented?"true":"false",r.pixels?"true":"false",r.stage,static_cast<unsigned>(r.hr),r.vendor,r.device,r.adapters,r.hardwareAdapters,r.defaultVendor,r.defaultDevice);
  HANDLE file=CreateFileW(L"C:\\ProgramData\\BivouacHcsSpike\\render.json",GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
  if(file==INVALID_HANDLE_VALUE)return 2;
  DWORD written=0;bool saved=WriteFile(file,json,count,&written,nullptr)&&written==static_cast<DWORD>(count);FlushFileBuffers(file);CloseHandle(file);

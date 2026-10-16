@@ -643,8 +643,8 @@ Offline probe reports are re-encoded as bounded fixed booleans/numbers. The setu
 agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI
 without adding cgo to the Go host.
 Readiness requires setup completion, the intended console user's Explorer and
-Default input desktop. The probe requires hardware D3D11 (software adapters are
-rejected), successful windowed presentation, and matching red/green pixels in
+Default input desktop. The probe enumerates at most 32 DXGI adapters and
+explicitly selects hardware for D3D11 (software adapters are rejected), successful windowed presentation, and matching red/green pixels in
 both a staging texture and the composited desktop. Only fixed booleans/numbers
 cross back to the host; SSH code is fixed and all instance data arrives on stdin.
 
@@ -672,8 +672,13 @@ native/storage cleanup are validated. Setup/OOBE completion, the guest agent,
 reported display-driver readiness, ephemeral authenticated SSH, fixed command
 execution and small framed-stdin delivery are also live validated. The large
 bulk transfer still stalls after receiving its length header. Media delivery
-of the public validation assets with small SSH metadata needs a live trial. Console readiness, rendering, process-loss recovery
-and networking/isolation remain unverified.
+of the public validation assets with small SSH metadata, setup/console readiness,
+Default input desktop and interactive native-probe execution pass live. The
+probe stops at adapter validation (stage 3, HRESULT 0) without accepting hardware.
+Explicit hardware selection, rendering/presentation and pixel readback still
+need validation. Forced termination can leave the stopped disk without files
+already observed live; read-only inspection does not override a completed live
+check. Process-loss recovery and networking/isolation remain unverified.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

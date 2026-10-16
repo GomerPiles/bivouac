@@ -99,16 +99,21 @@ live. Inspection confirms setup/OOBE complete, the intended account, agent/SSH
 services and the setup-complete marker. Large validation payloads still stall
 after their header is received (checkpoint 4), before the native probe is staged
 or run. The underlying bulk-transfer limitation is not resolved.
-Corrected hidden-folder inspection and matching cleanup pass live. Both the
-previously retained child and the latest trial child/journal are removed; the
-VMs are confirmed absent and only the trial lock remains.
-Public validation assets now use the setup ISO: the pinned native probe and
-fixed validation script are copied only into each disposable guest. SSH carries
-a sub-1-KiB entry/metadata frame. The guest verifies the script against the host
-build's embedded hash and the probe against its configured pin before execution.
-A specialized image must preinstall these same files. Media-directory and small
-payload regressions pass. This delivery path still needs a live trial; console
-readiness, hardware rendering/presentation and pixel readback remain unverified.
+Public validation assets use the setup ISO, with only a sub-1-KiB entry/metadata
+frame sent over SSH. The guest verifies the script against the host build's
+embedded hash and the probe against its configured pin before execution. This
+path passes live: setup readiness, the intended active console user's Explorer,
+the Default input desktop and interactive native-probe execution are confirmed.
+The probe stops at adapter validation (stage 3, HRESULT 0) without accepting
+hardware D3D11. Presentation and pixel readback remain unverified. The revised
+probe enumerates bounded DXGI adapters and explicitly selects hardware rather
+than the display default; numeric adapter counts/IDs will distinguish absence
+from selection failure. This selection change still needs live validation.
+Corrected hidden-folder inspection and matching cleanup finish successfully;
+the VM, child and journal are removed and only the trial lock remains. Some
+files observed live were absent in the stopped clone after forced termination,
+so that inspection is not authoritative for the final live guest state. A
+specialized image must preinstall the same pinned probe and validation script.
 Production CI and the installed provider remain unchanged. The experiment still
 requires the App Sandbox guest service and signed display-driver components.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.

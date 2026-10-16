@@ -242,6 +242,12 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		report.PixelReadback = observed.PixelReadback
 		report.RenderStage = observed.Stage
 		report.RenderHRESULT = observed.HRESULT
+		report.RenderVendorID = observed.VendorID
+		report.RenderDeviceID = observed.DeviceID
+		report.RenderAdapterCount = observed.AdapterCount
+		report.RenderHardwareAdapterCount = observed.HardwareAdapterCount
+		report.RenderDefaultVendorID = observed.DefaultVendorID
+		report.RenderDefaultDeviceID = observed.DefaultDeviceID
 		return report, renderErr
 	}
 	return report, nil

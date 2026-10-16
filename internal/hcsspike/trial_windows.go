@@ -46,24 +46,30 @@ type backend interface {
 // interactive probe checks hardware D3D11, presentation and two-color GPU/desktop
 // pixel readback; it does not test keyboard/mouse input.
 type Report struct {
-	NativeAbsent        bool   `json:"native_absent"`
-	StorageRetained     bool   `json:"storage_retained"`
-	GuestReady          bool   `json:"guest_ready"`
-	DesktopReady        bool   `json:"desktop_ready"`
-	HardwareD3D11       bool   `json:"hardware_d3d11"`
-	Presented           bool   `json:"presented"`
-	PixelReadback       bool   `json:"pixel_readback"`
-	GuestValidationStep uint32 `json:"guest_validation_step,omitempty"`
-	RenderStage         uint32 `json:"render_stage,omitempty"`
-	RenderHRESULT       uint32 `json:"render_hresult,omitempty"`
-	NativeStarted       bool   `json:"native_started"`
-	AgentConnected      bool   `json:"agent_connected"`
-	GPUAssigned         bool   `json:"gpu_assigned"`
-	DisplayReady        bool   `json:"display_ready"`
-	SSHAuthenticated    bool   `json:"ssh_authenticated"`
-	SSHCommandReady     bool   `json:"ssh_command_ready"`
-	SSHStdinReady       bool   `json:"ssh_stdin_ready"`
-	Cleaned             bool   `json:"cleaned"`
+	NativeAbsent               bool   `json:"native_absent"`
+	StorageRetained            bool   `json:"storage_retained"`
+	GuestReady                 bool   `json:"guest_ready"`
+	DesktopReady               bool   `json:"desktop_ready"`
+	HardwareD3D11              bool   `json:"hardware_d3d11"`
+	Presented                  bool   `json:"presented"`
+	PixelReadback              bool   `json:"pixel_readback"`
+	GuestValidationStep        uint32 `json:"guest_validation_step,omitempty"`
+	RenderStage                uint32 `json:"render_stage,omitempty"`
+	RenderHRESULT              uint32 `json:"render_hresult,omitempty"`
+	RenderVendorID             uint32 `json:"render_vendor_id,omitempty"`
+	RenderDeviceID             uint32 `json:"render_device_id,omitempty"`
+	RenderAdapterCount         uint32 `json:"render_adapter_count,omitempty"`
+	RenderHardwareAdapterCount uint32 `json:"render_hardware_adapter_count,omitempty"`
+	RenderDefaultVendorID      uint32 `json:"render_default_vendor_id,omitempty"`
+	RenderDefaultDeviceID      uint32 `json:"render_default_device_id,omitempty"`
+	NativeStarted              bool   `json:"native_started"`
+	AgentConnected             bool   `json:"agent_connected"`
+	GPUAssigned                bool   `json:"gpu_assigned"`
+	DisplayReady               bool   `json:"display_ready"`
+	SSHAuthenticated           bool   `json:"ssh_authenticated"`
+	SSHCommandReady            bool   `json:"ssh_command_ready"`
+	SSHStdinReady              bool   `json:"ssh_stdin_ready"`
+	Cleaned                    bool   `json:"cleaned"`
 }
 
 type record struct {
