@@ -332,13 +332,31 @@ Never use a process-name search to stop or wait for the daemon.
 
 The daemon runs every VM through `bivouac vm run` from its own executable, so
 that copy must carry the `com.apple.security.virtualization` entitlement;
-the daemon refuses to start without it, and `doctor` checks it. Tart is
-needed only to build and edit baselines.
+the daemon refuses to start without it, and `doctor` checks it.
+
+**VM store.** Baselines and clones live in bivouac's VM store:
+`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
+`bivouac doctor` names it and checks the baseline's manifest. Import a
+stopped Tart-format VM, which clones it when it is on the same volume and
+writes the manifest:
+
+```bash
+bivouac vz import --runner-dir /Users/admin/actions-runner --sudo ~/.tart/vms/<vm> <baseline>
+```
+
+Pass `--sudo` only if the guest user has passwordless sudo (the release
+proxy needs it). The import records this binary's guest agent protocol, so
+import again after installing a new agent. A Linux engine baseline needs no
+`--runner-dir`.
+
+Bivouac does not see VMs in other tools' directories, so `foreign_slots`
+must reserve Apple's guest slots for any other manager.
 
 **macOS baseline.** Bivouac reaches the guest through its own agent, not
-Tart's (which exits on hosts that are not Tart). Boot the baseline with Tart,
-then install the darwin/arm64 `bivouac` binary as `/usr/local/bin/bivouac`
-(root:wheel, 0755) and
+Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
+baselines itself, prepare one with Tart before importing it:
+boot it, then install the darwin/arm64 `bivouac` binary as
+`/usr/local/bin/bivouac` (root:wheel, 0755) and
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
 in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
 automatically; the agent runs only in that Aqua session. Shut the baseline
@@ -347,8 +365,13 @@ the old one; overwriting the running binary in place corrupts it. Reinstall
 it only when its protocol version changes.
 
 **Moving from the Tart CLI runtime.** Drain to idle first: guests started by
-`tart run` have no agent socket and are not adopted. Remove `binary` and
-`extra_args` from `[providers.*.tart]`; config validation rejects them.
+`tart run` are not adopted. Import the baseline, set `type = "vz"`, and
+rename `[providers.*.tart]` to `[providers.*.vz]` without `binary`,
+`extra_args`, or `runner_dir` (now in the manifest); config validation
+rejects the old names. Typed options in `[providers.*.vz.machine]` replace
+`extra_args`. `nested_virtualization = true` needs an M3 or newer Mac with
+macOS 15 and a Linux guest, such as the engine VM in
+`[providers.*.vz.containers.machine]`; the daemon refuses to start otherwise.
 
 Validation config (while Tartelet keeps production):
 
@@ -358,7 +381,7 @@ max_instances = 1
 max_pending_cleanup = 2
 [providers.macos]
 scaleset = "bivouac-macos-experimental"
-[providers.macos.tart]
+[providers.macos.vz]
 baseline = "ci-macos27"
 foreign_slots = 1     # Tartelet's VM keeps one of Apple's two macOS guest slots
 ```
@@ -457,8 +480,8 @@ public HTTPS hosts use opaque tunnels. Host and baseline trust remain unchanged.
 Newly uploaded Actions archives enter this read-through cache on
 their first restore. A service outage returns lease requests to upstream;
 a failed fill redirects upstream. No upload/storage quota reduction is
-claimed. Logs report object class, hit/miss, and size without source URLs
-or credentials. Limits include in-flight reservations of each fill's declared
+claimed. Logs report object class, hit/miss, size and a per-session object
+label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
 size; eviction never touches instance state. Corrupt and incomplete objects are discarded.
 
 Defaults are 20 GiB total and 2048 MiB per object; `max_gb` and `max_object_mb`
@@ -480,6 +503,24 @@ Actions acceleration alone, leave `enabled = true` and set `release_proxy = fals
 Fresh guests then receive no proxy root or settings. Cache objects are expendable; the cache
 directory can be removed while off. Keep the ownership state directory
 intact. Production cutover and Tartelet remain independent of cache setup.
+
+### Investigating unexpected misses
+
+A GitHub cache-key hit can still be a local miss: GitHub found the archive and
+bivouac downloaded its bytes. Archive `bypasses` with `failures` mean a failed
+local fill was redirected to GitHub. Release downloads appear under
+`release proxy`.
+
+In controller logs, follow the miss's `object` label (valid for one manager
+session) through `cache object discarded` (`reason=capacity` or `invalid`),
+`cache object validation failed`, `cache fill unavailable`,
+`release cache bypass` and `cache response incomplete`. `cache store opened`
+shows what survived a restart; `cache store summary` totals losses each minute.
+Fill reasons are `capacity`, `object_limit`, `upstream_status`,
+`upstream_identity`, `upstream_body`, `upstream_transport`, `length_mismatch`,
+`timeout`, `canceled`, and `store_*` for local filesystem failures.
+`cache SSH transport ended during requests` names a guest whose transport
+dropped mid-transfer. Keep the cache while investigating; it is evidence.
 
 ## Cutover (after validation)
 
@@ -537,8 +578,8 @@ Do not restore the `tartelet` workflow labels or revoke the shared App.
 | `biv stop` | cancel now; guests destroyed; idle |
 | `biv off` | drain, then the daemon exits and stays off across reboots |
 | `biv status` | mode, phase, guests, pending runner cleanup, capacity, recent errors |
-| `biv tart list` | guests bivouac owns, orphans, and foreign guests |
-| `biv tart cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
+| `biv vz list` | guests bivouac owns, orphans, and foreign guests |
+| `biv vz cleanup` | delete orphans carrying bivouac's marker (daemon stopped) |
 | `biv doctor` | host, config, credential, engine, login item checks |
 
 Logs: `~/Library/Logs/bivouac/bivouac.log`, per-guest `<name>.launch.log`,
@@ -595,7 +636,7 @@ retires under `sweep_idle_timeout`.
 If a validation run needs operator cancellation, target its exact run ID:
 `gh run cancel <run-id> --repo <owner/repo>`. If normal cancellation hangs,
 `gh api repos/<owner>/<repo>/actions/runs/<run-id>/force-cancel --method POST`.
-Wait for `guest gone`, no owned VM in `bivouac tart list`, and no instance
+Wait for `guest gone`, no owned VM in `bivouac vz list`, and no instance
 record before proceeding. Never cancel an unrelated or production run.
 
 After SIGKILL, launchd restarts the controller and it adopts the live
@@ -616,8 +657,9 @@ Use a separate `BIVOUAC_HOME`, an isolated `bivouac-` test scale set or JIT
 label, and a one-job budget. Never change Tartelet, production labels, or the
 personal Docker/Podman/Lima configuration.
 
-Prepare a **local Linux/arm64 Tart-format baseline** through the image
-administrator's normal process, then shut it down and keep it immutable. It
+Prepare a **local Linux/arm64 Tart-format VM** through the image
+administrator's normal process, shut it down, and import it with
+`bivouac vz import`; keep the imported baseline immutable. It
 needs the linux/arm64 `bivouac` binary at `/usr/local/bin/bivouac` with
 [`bivouac-guest-agent.service`](../tools/linux/bivouac-guest-agent.service)
 enabled, a rootful Docker daemon at
@@ -642,7 +684,7 @@ Keep the Linux binary at a stable host location and reference its absolute path.
 Add to the isolated provider configuration:
 
 ```toml
-[providers.macos.tart.containers]
+[providers.macos.vz.containers]
 engine = "docker"            # or "podman"
 baseline = "ci-linux-engine"
 cpu = 2

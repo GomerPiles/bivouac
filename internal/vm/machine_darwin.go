@@ -20,6 +20,23 @@ const (
 	stateStopping = 7
 )
 
+// withDefaults fills unset fields from def, then from 1024x768 at 72 ppi.
+func (d Display) withDefaults(def Display) Display {
+	if d.Width == 0 {
+		d.Width, d.Height = def.Width, def.Height
+	}
+	if d.Width == 0 {
+		d.Width, d.Height = 1024, 768
+	}
+	if d.PPI == 0 {
+		d.PPI = def.PPI
+	}
+	if d.PPI == 0 {
+		d.PPI = 72
+	}
+	return d
+}
+
 // machineOptions select devices beyond the VM directory's own config.
 type machineOptions struct {
 	// share is a host directory exposed read-only as "bivouac" under the
@@ -30,6 +47,12 @@ type machineOptions struct {
 	networkFD int
 	// input attaches a keyboard and pointing devices.
 	input bool
+	// display is the macOS graphics display, defaults applied.
+	display Display
+	// diskSync is a VZDiskImageSynchronizationMode.
+	diskSync int
+	// nested enables nested virtualization (Linux guests only).
+	nested bool
 }
 
 // machine is one VZVirtualMachine on its own serial queue.
@@ -39,7 +62,7 @@ type machine struct {
 	vm    objc.ID
 }
 
-func newMachine(f *framework, dir string, c Config, opts machineOptions) (*machine, error) {
+func newMachine(f *framework, dir string, c Manifest, opts machineOptions) (*machine, error) {
 	m := &machine{f: f, queue: f.queueCreate("dev.bivouac.vm", 0)}
 	if m.queue == 0 {
 		return nil, errors.New("create dispatch queue")
@@ -64,29 +87,32 @@ func newMachine(f *framework, dir string, c Config, opts machineOptions) (*machi
 	return m, nil
 }
 
-func buildConfiguration(f *framework, dir string, c Config, opts machineOptions) (objc.ID, error) {
+func buildConfiguration(f *framework, dir string, c Manifest, opts machineOptions) (objc.ID, error) {
 	config, err := f.make("VZVirtualMachineConfiguration", "")
 	if err != nil {
 		return 0, err
 	}
-	f.send(config, "setCPUCount:", uint64(c.CPUCount)) //nolint:gosec // validate requires a positive count.
-	f.send(config, "setMemorySize:", c.MemorySize)
+	f.send(config, "setCPUCount:", uint64(c.CPU)) //nolint:gosec // validate requires a positive count.
+	f.send(config, "setMemorySize:", c.MemoryMiB<<20)
 
 	caching := 0 // VZDiskImageCachingModeAutomatic
 	if c.OS == "darwin" {
-		if err := macPlatform(f, config, dir, c); err != nil {
+		if err := macPlatform(f, config, dir, c, opts.display); err != nil {
 			return 0, err
 		}
 	} else {
-		if err := linuxPlatform(f, config, dir); err != nil {
+		if err := linuxPlatform(f, config, dir, opts.nested); err != nil {
 			return 0, err
 		}
 		caching = 2 // VZDiskImageCachingModeCached avoids Linux file system corruption
 	}
 
-	// VZDiskImageSynchronizationModeFull (1): guest flushes reach the host disk.
+	sync := opts.diskSync
+	if sync == 0 {
+		sync = syncFull
+	}
 	disk, err := f.makeErr("VZDiskImageStorageDeviceAttachment", "initWithURL:readOnly:cachingMode:synchronizationMode:error:",
-		f.url(filepath.Join(dir, DiskFile)), false, caching, 1)
+		f.url(filepath.Join(dir, DiskFile)), false, caching, sync)
 	if err != nil {
 		return 0, err
 	}
@@ -100,7 +126,7 @@ func buildConfiguration(f *framework, dir string, c Config, opts machineOptions)
 	if err != nil {
 		return 0, err
 	}
-	mac, err := f.make("VZMACAddress", "initWithString:", f.str(c.MACAddress))
+	mac, err := f.make("VZMACAddress", "initWithString:", f.str(c.MAC))
 	if err != nil {
 		return 0, err
 	}
@@ -186,15 +212,15 @@ func buildConfiguration(f *framework, dir string, c Config, opts machineOptions)
 
 // macPlatform keeps the graphics device even without a window, so the guest
 // has a display and Metal for windowed tests.
-func macPlatform(f *framework, config objc.ID, dir string, c Config) error {
-	model, err := f.make("VZMacHardwareModel", "initWithDataRepresentation:", f.data(c.HardwareModel))
+func macPlatform(f *framework, config objc.ID, dir string, c Manifest, d Display) error {
+	model, err := f.make("VZMacHardwareModel", "initWithDataRepresentation:", f.data(c.MacOS.HardwareModel))
 	if err != nil {
 		return err
 	}
 	if !objc.Send[bool](model, f.sel("isSupported")) {
 		return errors.New("this host cannot run the baseline's macOS hardware model")
 	}
-	id, err := f.make("VZMacMachineIdentifier", "initWithDataRepresentation:", f.data(c.ECID))
+	id, err := f.make("VZMacMachineIdentifier", "initWithDataRepresentation:", f.data(c.MacOS.MachineID))
 	if err != nil {
 		return err
 	}
@@ -215,11 +241,7 @@ func macPlatform(f *framework, config objc.ID, dir string, c Config) error {
 		return err
 	}
 	f.send(config, "setBootLoader:", boot)
-	width, height := c.Display.Width, c.Display.Height
-	if width <= 0 || height <= 0 {
-		width, height = 1024, 768
-	}
-	display, err := f.make("VZMacGraphicsDisplayConfiguration", "initWithWidthInPixels:heightInPixels:pixelsPerInch:", width, height, 72)
+	display, err := f.make("VZMacGraphicsDisplayConfiguration", "initWithWidthInPixels:heightInPixels:pixelsPerInch:", d.Width, d.Height, d.PPI)
 	if err != nil {
 		return err
 	}
@@ -232,7 +254,7 @@ func macPlatform(f *framework, config objc.ID, dir string, c Config) error {
 	return nil
 }
 
-func linuxPlatform(f *framework, config objc.ID, dir string) error {
+func linuxPlatform(f *framework, config objc.ID, dir string, nested bool) error {
 	store, err := f.make("VZEFIVariableStore", "initWithURL:", f.url(filepath.Join(dir, NVRAMFile)))
 	if err != nil {
 		return err
@@ -247,8 +269,34 @@ func linuxPlatform(f *framework, config objc.ID, dir string) error {
 	if err != nil {
 		return err
 	}
+	if nested {
+		if !f.nestedSupported() {
+			return ErrNestedUnsupported
+		}
+		f.send(platform, "setNestedVirtualizationEnabled:", true)
+	}
 	f.send(config, "setPlatform:", platform)
 	return nil
+}
+
+// nestedSupported reports whether this host's framework can nest: macOS 15
+// or later on an M3 or newer chip, unless disabled by policy.
+func (f *framework) nestedSupported() bool {
+	class := f.class("VZGenericPlatformConfiguration")
+	if class == 0 || !objc.Send[bool](class, f.sel("respondsToSelector:"), f.sel("isNestedVirtualizationSupported")) {
+		return false
+	}
+	return objc.Send[bool](class, f.sel("isNestedVirtualizationSupported"))
+}
+
+// NestedVirtualizationSupported reports whether this Mac can give Linux
+// guests nested virtualization.
+func NestedVirtualizationSupported() (bool, error) {
+	f, err := openFramework()
+	if err != nil {
+		return false, err
+	}
+	return f.nestedSupported(), nil
 }
 
 // completion waits for an NSError-only completion handler.

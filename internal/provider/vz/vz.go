@@ -1,8 +1,8 @@
-// Package tart is the macOS provider: disposable guests cloned from a local
+// Package vz is the macOS provider: disposable guests cloned from a local
 // Tart-format baseline, run headless by bivouac's own Virtualization.framework
 // helper, and driven through bivouac's guest agent so the runner lives in the
-// guest's Aqua session. Tart itself is needed only to build baselines.
-package tart
+// guest's Aqua session. Tart may build baselines; bivouac runs them.
+package vz
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,16 +35,16 @@ var guestScript []byte
 // guestPath is where the bootstrap script lives inside each clone.
 const guestPath = "/tmp/bivouac-guest"
 
-// markerFile is written beside the VM's config.json after a clone. Tart
-// ignores extra files in a VM directory and deletes them with the VM.
+// markerFile is written beside the VM's config.json after a clone and is
+// deleted with the VM directory.
 const markerFile = "bivouac.json"
 
 // Provider implements provider.Provider on Tart-format VM directories.
 type Provider struct {
 	name           string
-	cfg            config.Tart
+	cfg            config.VZ
 	controllerID   string
-	home           string // Tart home holding vms/
+	store          vm.Store // baselines and clones
 	rt             Runtime
 	cache          *cache.Service
 	records        *state.Store
@@ -57,43 +58,67 @@ type Provider struct {
 // SetCache attaches an optional portable cache service before this provider runs.
 func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
 
-// Home is the Tart home holding baselines and clones: TART_HOME, or ~/.tart.
-// Clones stay beside their baseline so clonefile shares its blocks.
-func Home() (string, error) {
-	if home := os.Getenv("TART_HOME"); home != "" {
-		return home, nil
-	}
-	h, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(h, ".tart"), nil
-}
-
-// New returns the provider. rt may be nil for the real VM runtime.
-func New(name string, cfg config.Tart, controllerID string, rt Runtime) (*Provider, error) {
-	home, err := Home()
-	if err != nil {
-		return nil, err
+// New returns the provider for VMs in store (paths.Layout.VMs). rt may be
+// nil for the real VM runtime.
+func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime) (*Provider, error) {
+	if !filepath.IsAbs(store) {
+		return nil, fmt.Errorf("VM store %q is not absolute", store)
 	}
 	if rt == nil {
-		l, err := newLocal(home)
+		l, err := newLocal(store)
 		if err != nil {
 			return nil, err
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, home: home, rt: rt, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the executable that
 // launches VM helpers lacks the virtualization entitlement. The daemon calls
 // it at startup, so an unsigned build never accepts a job.
 func (p *Provider) CheckRuntime(ctx context.Context) error {
-	if l, ok := p.rt.(*local); ok {
-		return l.check(ctx)
+	l, ok := p.rt.(*local)
+	if !ok {
+		return nil
+	}
+	if err := l.check(ctx); err != nil {
+		return err
+	}
+	return CheckNested(p.cfg)
+}
+
+// CheckNested fails when the config asks for nested virtualization on a
+// host whose framework cannot provide it.
+func CheckNested(cfg config.VZ) error {
+	if !cfg.Machine.NestedVirtualization && (cfg.Containers == nil || !cfg.Containers.Machine.NestedVirtualization) {
+		return nil
+	}
+	ok, err := vm.NestedVirtualizationSupported()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return vm.ErrNestedUnsupported
 	}
 	return nil
+}
+
+// MachineOptions maps typed config to the helper's options.
+func MachineOptions(m config.Machine) vm.MachineOptions {
+	return vm.MachineOptions{
+		Display:  vm.Display{Width: m.Display.Width, Height: m.Display.Height, PPI: m.Display.PPI},
+		DiskSync: m.DiskSync,
+		Nested:   m.NestedVirtualization,
+	}
+}
+
+// engineMachine is the container engine VM's machine options.
+func (p *Provider) engineMachine() vm.MachineOptions {
+	if p.cfg.Containers == nil {
+		return vm.MachineOptions{}
+	}
+	return MachineOptions(p.cfg.Containers.Machine)
 }
 
 // Name implements provider.Provider.
@@ -105,7 +130,7 @@ func (p *Provider) Capabilities() provider.Capabilities {
 	return provider.Capabilities{GPU: provider.GPUParavirtualized, DesktopSession: true, DisplayTransport: "none", HostLimit: p.cfg.HostVMLimit}
 }
 
-func (p *Provider) vmDir(name string) string { return filepath.Join(p.home, "vms", name) }
+func (p *Provider) vmDir(name string) string { return p.store.Dir(name) }
 
 func (p *Provider) checkName(name string) error {
 	if !strings.HasPrefix(name, config.NamePrefix) {
@@ -169,14 +194,21 @@ func (p *Provider) guest(ctx context.Context, name string, argv []string, stdin 
 }
 
 // Create implements provider.Provider.
-func (p *Provider) createVM(ctx context.Context, spec provider.Spec) error {
+func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS string, machine vm.MachineOptions) error {
 	if err := p.checkName(spec.Name); err != nil {
 		return err
 	}
 	if spec.Baseline == "" || strings.HasPrefix(spec.Baseline, config.NamePrefix) {
 		return fmt.Errorf("refusing baseline %q", spec.Baseline)
 	}
-	if err := p.rt.Clone(ctx, spec.Baseline, spec.Name); err != nil {
+	m, err := CheckBaseline(string(p.store), spec.Baseline, wantOS)
+	if err != nil {
+		return err
+	}
+	if err := machine.CheckGuest(m); err != nil {
+		return fmt.Errorf("baseline %q: %w", spec.Baseline, err)
+	}
+	if err := p.rt.Clone(ctx, spec.Baseline, spec.Name, vm.CloneOptions{CPU: spec.CPU, MemoryMiB: spec.MemoryMB}); err != nil {
 		return err
 	}
 	meta, err := json.Marshal(spec.Meta)
@@ -186,24 +218,75 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec) error {
 	if err := os.WriteFile(filepath.Join(p.vmDir(spec.Name), markerFile), meta, 0o600); err != nil {
 		return fmt.Errorf("write marker: %w", err)
 	}
-	if spec.CPU > 0 || spec.MemoryMB > 0 {
-		return p.rt.Resize(ctx, spec.Name, spec.CPU, spec.MemoryMB)
+	return nil
+}
+
+// CheckBaseline refuses a baseline in store that bivouac cannot drive: one
+// without a manifest, of another OS (darwin for runners, linux for container
+// engines), without a runner directory, or with a guest agent of another
+// protocol version.
+func CheckBaseline(store, name, wantOS string) (vm.Manifest, error) {
+	m, err := vm.ReadManifest(vm.Store(store).Dir(name))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return m, fmt.Errorf("baseline %q has no bivouac manifest in %s; import it with `bivouac vz import`", name, store)
+	case err != nil:
+		return m, fmt.Errorf("baseline %q: %w", name, err)
+	case m.OS != wantOS:
+		return m, fmt.Errorf("baseline %q is a %s VM, not %s", name, m.OS, wantOS)
+	case m.Guest.AgentVersion != guestagent.Version:
+		return m, fmt.Errorf("baseline %q has guest agent protocol %d, this bivouac needs %d; install the matching agent and import it again", name, m.Guest.AgentVersion, guestagent.Version)
+	case wantOS == "darwin" && m.Guest.RunnerDir == "":
+		return m, fmt.Errorf("baseline %q records no runner directory; import it with --runner-dir", name)
+	}
+	return m, nil
+}
+
+// guestContract is name's guest contract, from the manifest its clone
+// carries.
+func (p *Provider) guestContract(name string) (vm.Guest, error) {
+	m, err := vm.ReadManifest(p.vmDir(name))
+	if err != nil {
+		return vm.Guest{}, fmt.Errorf("guest %q manifest: %w", name, err)
+	}
+	return m.Guest, nil
+}
+
+// checkReleaseProxy refuses the release proxy for a guest whose image does
+// not record passwordless sudo, which installing its trust needs; the
+// caller then runs the job without the cache.
+func (p *Provider) checkReleaseProxy(name string) error {
+	guest, err := p.guestContract(name)
+	if err != nil {
+		return err
+	}
+	if !guest.Sudo {
+		return errors.New("the release proxy needs passwordless sudo, which the baseline does not record")
 	}
 	return nil
 }
 
-// runnerLaunch attaches input devices and the optional bootstrap share; the
-// guest console is never attached.
+// runnerDir is the runner directory name's image records.
+func (p *Provider) runnerDir(name string) (string, error) {
+	g, err := p.guestContract(name)
+	if err == nil && g.RunnerDir == "" {
+		err = fmt.Errorf("guest %q records no runner directory", name)
+	}
+	return g.RunnerDir, err
+}
+
+// runnerLaunch attaches input devices, the optional bootstrap share, and
+// the configured machine options; the guest console is never attached.
 func (p *Provider) runnerLaunch() Launch {
-	return Launch{Share: p.cfg.BootstrapShare, Input: true}
+	return Launch{Share: p.cfg.BootstrapShare, Input: true, Machine: MachineOptions(p.cfg.Machine)}
 }
 
 // LaunchArgs is the exact argument array the VM helper receives for a
 // runner guest named name, or nil for a substituted runtime.
-func (p *Provider) LaunchArgs(name string) []string {
+func (p *Provider) LaunchArgs(name string) ([]string, error) {
 	l, ok := p.rt.(*local)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	launch := p.runnerLaunch()
 	if p.cfg.Containers != nil {
@@ -214,7 +297,9 @@ func (p *Provider) LaunchArgs(name string) []string {
 
 func (p *Provider) describe(name string, launch Launch) string {
 	if l, ok := p.rt.(*local); ok {
-		return strings.Join(l.helperArgs(name, launch), " ")
+		if args, err := l.helperArgs(name, launch); err == nil {
+			return strings.Join(args, " ")
+		}
 	}
 	return "vm run " + name
 }
@@ -357,7 +442,11 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	out, err := p.guest(ctx, name, []string{guestPath, "start", p.cfg.RunnerDir}, bytes.NewReader(jit), statusOutputLimit)
+	dir, err := p.runnerDir(name)
+	if err != nil {
+		return err
+	}
+	out, err := p.guest(ctx, name, []string{guestPath, "start", dir}, bytes.NewReader(jit), statusOutputLimit)
 	if err != nil {
 		return err
 	}
@@ -374,6 +463,15 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 	bootstrap, err := p.cache.Issue(name)
 	if err != nil {
 		return err
+	}
+	var settings cache.Bootstrap
+	if err = json.Unmarshal(bootstrap, &settings); err != nil {
+		return errors.New("invalid cache bootstrap")
+	}
+	if settings.ReleaseProxy {
+		if err := p.checkReleaseProxy(name); err != nil {
+			return err
+		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -399,10 +497,6 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 		if _, err := p.output(ctx, name, []string{"chmod", file.mode, file.path}, nil); err != nil {
 			return err
 		}
-	}
-	var settings cache.Bootstrap
-	if err = json.Unmarshal(bootstrap, &settings); err != nil {
-		return errors.New("invalid cache bootstrap")
 	}
 	if settings.ReleaseProxy {
 		if _, err = p.output(ctx, name, []string{"/usr/bin/install", "-m", "0600", "/dev/null", "/tmp/bivouac-cache-ca.pem"}, nil); err != nil {
@@ -432,7 +526,11 @@ func (p *Provider) StopRunner(ctx context.Context, name string) error {
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	_, err := p.output(ctx, name, []string{guestPath, "stop", p.cfg.RunnerDir}, nil)
+	dir, err := p.runnerDir(name)
+	if err != nil {
+		return err
+	}
+	_, err = p.output(ctx, name, []string{guestPath, "stop", dir}, nil)
 	return err
 }
 

@@ -15,7 +15,7 @@ CLI: `bivouac` (alias `biv`).
 
 - `on` / `off` / `drain` / `stop` / `status`
 - `run` (foreground daemon), `install` / `uninstall`
-- `doctor`, `config validate`, `secret set`, `tart list` / `cleanup`
+- `doctor`, `config validate`, `secret set`, `vz import` / `list` / `cleanup`
 
 ## Build
 
@@ -28,7 +28,7 @@ Real-host validation of the macOS provider (Apple silicon, local baseline with
 the guest agent installed):
 
 ```bash
-BIVOUAC_TART_BASELINE=<vm> BIVOUAC_EXE=$PWD/bin/bivouac go test -tags integration -run TestRealGuest -v ./internal/provider/tart/
+BIVOUAC_VZ_BASELINE=<vm> BIVOUAC_EXE=$PWD/bin/bivouac go test -tags integration -run TestRealGuest -v ./internal/provider/vz/
 ```
 
 ## Docs

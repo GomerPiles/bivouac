@@ -1,5 +1,5 @@
 #!/bin/sh
-# bivouac guest bootstrap. Copied into each clone at boot through the Tart
+# bivouac guest bootstrap. Copied into each clone at boot through the bivouac
 # guest agent, which runs inside the logged-in desktop session, so the runner
 # it starts can open windows and take focus. The JIT config arrives on stdin.
 set -u
@@ -56,7 +56,7 @@ HOOK
     unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH CONTAINER_CONNECTION
   fi
   # The whole subshell must drop the agent's stdin/stdout/stderr, or the
-  # `tart exec` session stays open until the runner exits.
+  # agent command stays open until the runner exits.
   (
     export ACTIONS_RUNNER_HOOK_JOB_STARTED="$dir/job-started.sh"
     if [ -x "$dir/job-completed.sh" ]; then

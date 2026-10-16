@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"context"
@@ -19,11 +19,11 @@ import (
 const guestDirectory = "/tmp/bivouac"
 const guestHelper = "/tmp/bivouac-helper"
 
-// RunGuest is the private Tart telemetry adapter. The existing shell bootstrap
+// RunGuest is the private macOS guest telemetry adapter. The existing shell bootstrap
 // still owns job identity and lifecycle. Only the listener wrapper owns sampling.
 func RunGuest(ctx context.Context, operation, runner string, out io.Writer) error {
 	if runtime.GOOS != "darwin" {
-		return errors.New("tart guest adapter requires macOS")
+		return errors.New("the guest adapter requires macOS")
 	}
 	return runGuest(ctx, operation, guestDirectory, runner, out)
 }
@@ -65,7 +65,7 @@ func runGuest(ctx context.Context, operation, directory, runner string, out io.W
 		defer stop()
 		return listener.Wait()
 	default:
-		return errors.New("unknown fixed Tart guest operation")
+		return errors.New("unknown fixed guest operation")
 	}
 }
 

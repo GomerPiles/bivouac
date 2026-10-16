@@ -1,9 +1,8 @@
-package tart
+package vz
 
 import (
 	"context"
 	"debug/elf"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
@@ -123,16 +122,8 @@ func (p *Provider) preflightEngine(ctx context.Context) error {
 		return nil
 	}
 	for _, b := range []struct{ name, os string }{{p.cfg.Baseline, "darwin"}, {p.cfg.Containers.Baseline, "linux"}} {
-		data, err := os.ReadFile(p.vmDir(b.name) + "/config.json")
-		if err != nil {
-			return errors.New("container pairs require existing local macOS and Linux baselines")
-		}
-		var c struct {
-			OS   string `json:"os"`
-			Arch string `json:"arch"`
-		}
-		if json.Unmarshal(data, &c) != nil || c.OS != b.os || c.Arch != "arm64" {
-			return errors.New("baseline OS/architecture mismatch")
+		if _, err := CheckBaseline(string(p.store), b.name, b.os); err != nil {
+			return err
 		}
 	}
 	f, err := elf.Open(p.cfg.Containers.Helper)

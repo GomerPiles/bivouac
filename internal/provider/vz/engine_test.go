@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"context"
@@ -34,12 +34,6 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 			t.Fatal(err)
 		}
 	}
-	for _, b := range []struct{ name, os string }{{"base", "darwin"}, {"linux-base", "linux"}} {
-		data, _ := json.Marshal(map[string]string{"os": b.os, "arch": "arm64"})
-		if err := os.WriteFile(filepath.Join(p.vmDir(b.name), "config.json"), data, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	// Minimal ELF header for architecture preflight; never executed.
 	h := make([]byte, 64)
 	copy(h, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 3})
@@ -51,7 +45,7 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 	if err := os.WriteFile(helper, h, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper}
+	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper, Machine: config.Machine{NestedVirtualization: true}}
 	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
 		policy, err := NetworkPolicy()
 		return vm.SoftnetOptions{Binary: "/opt/softnet", Block: policy}, err
@@ -68,21 +62,30 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 	if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
 		t.Fatal(err)
 	}
+	engineNested := false
 	for _, c := range r.calls {
-		if c[0] != "run" {
+		if c[0] != "Start" {
 			continue
 		}
 		a := strings.Join(c, " ")
-		if !strings.Contains(a, "--net-softnet-block=") || !strings.Contains(a, "@host") || strings.Contains(a, "--dir") || strings.Contains(a, "--allow") {
+		if strings.HasSuffix(a, "-engine") && strings.Contains(a, " nested ") {
+			engineNested = true
+		} else if strings.Contains(a, "nested") {
+			t.Fatalf("nesting reached the macOS runner: %v", c)
+		}
+		if !strings.Contains(a, "softnet-block=") || !strings.Contains(a, "@host") || strings.Contains(a, "share=") || strings.Contains(a, "input") {
 			t.Fatalf("unsafe launch %v", c)
 		}
+	}
+	if !engineNested {
+		t.Fatal("the engine VM did not get nested virtualization")
 	}
 	owned, foreign, err := p.List(ctx)
 	if err != nil || len(owned) != 1 || len(foreign) != 0 {
 		t.Fatalf("logical pair list: %v %v %v", owned, foreign, err)
 	}
 	// A new provider process has only records/metadata, not saved process handles.
-	restarted, err := New(p.name, p.cfg, p.controllerID, argvRuntime{r})
+	restarted, err := New(p.name, p.cfg, p.controllerID, string(p.store), callRuntime{r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +137,7 @@ func TestPairRejectsMissingRecordAndForeignMetadata(t *testing.T) {
 				}
 			}
 			for _, c := range r.calls {
-				if c[0] == "stop" || c[0] == "delete" || c[0] == "run" || c[0] == "exec" {
+				if c[0] == "Stop" || c[0] == "Delete" || c[0] == "Start" || c[0] == "Exec" {
 					t.Fatalf("touched unowned pair %v", c)
 				}
 			}
@@ -161,7 +164,7 @@ type deleteFailure struct {
 }
 
 func (r deleteFailure) Run(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
-	if args[0] == "delete" && args[1] == r.name {
+	if args[0] == "Delete" && args[1] == r.name {
 		return errors.New("delete failed")
 	}
 	return r.recorder.Run(ctx, args, in, out)
@@ -173,7 +176,7 @@ func TestPartialPairDeleteRetainsReservation(t *testing.T) {
 	if err := p.Create(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
-	p.rt = argvRuntime{deleteFailure{r, spec.Name + "-engine"}}
+	p.rt = callRuntime{deleteFailure{r, spec.Name + "-engine"}}
 	if err := p.Delete(ctx, spec.Name); err == nil {
 		t.Fatal("delete failure hidden")
 	}
@@ -181,7 +184,7 @@ func TestPartialPairDeleteRetainsReservation(t *testing.T) {
 	if err != nil || !st.Exists {
 		t.Fatalf("companion deletion not reserved: %+v %v", st, err)
 	}
-	p.rt = argvRuntime{r}
+	p.rt = callRuntime{r}
 	if err = p.Delete(ctx, spec.Name); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +200,7 @@ func TestRelayProofAndTopologyDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, _ := NetworkPolicy()
-	plan := RelayPlan{StatePath: p.records.Path(), Home: p.home, Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
+	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
 	if err := plan.verify(); err != nil {
 		t.Fatal(err)
 	}

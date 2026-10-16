@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"context"
@@ -17,9 +17,8 @@ import (
 
 // Runtime is the VM layer under the provider. Tests substitute a recorder.
 type Runtime interface {
-	Clone(ctx context.Context, baseline, name string) error
-	// Resize sets CPU count and memory (MiB) of a stopped VM; 0 keeps a value.
-	Resize(ctx context.Context, name string, cpu, memoryMB int) error
+	// Clone copies baseline to name with its own MAC, CPU, and memory.
+	Clone(ctx context.Context, baseline, name string, opts vm.CloneOptions) error
 	// Start launches the VM helper, whose host-side status goes to sink.
 	Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error)
 	// Exec runs argv through the guest agent. A stdout write error stops
@@ -34,26 +33,27 @@ type Runtime interface {
 	List(ctx context.Context) ([]vm.Entry, error)
 }
 
-// Launch selects devices for one VM.
+// Launch selects devices and machine options for one VM.
 type Launch struct {
 	Share   string // read-only host directory, or empty
 	Input   bool   // keyboard and pointing devices
 	Softnet *vm.SoftnetOptions
+	Machine vm.MachineOptions
 }
 
-// local is the real Runtime: VM directories under a Tart home, each VM run
+// local is the real Runtime: VM directories in bivouac's store, each VM run
 // by a `bivouac vm run` helper from the signed bivouac executable.
 type local struct {
-	home vm.Home
-	exe  string
+	store vm.Store
+	exe   string
 }
 
-func newLocal(home string) (*local, error) {
+func newLocal(store string) (*local, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
-	return &local{home: vm.Home(home), exe: exe}, nil
+	return &local{store: vm.Store(store), exe: exe}, nil
 }
 
 // check reports whether this executable can run VM helpers.
@@ -64,29 +64,30 @@ func (l *local) check(ctx context.Context) error {
 	return nil
 }
 
-func (l *local) Clone(_ context.Context, baseline, name string) error {
-	return l.home.Clone(baseline, name)
-}
-
-func (l *local) Resize(_ context.Context, name string, cpu, memoryMB int) error {
-	return l.home.Resize(name, cpu, memoryMB)
+func (l *local) Clone(_ context.Context, baseline, name string, opts vm.CloneOptions) error {
+	return l.store.Clone(baseline, name, opts)
 }
 
 // helperArgs is the exact argument array the helper receives.
-func (l *local) helperArgs(name string, launch Launch) []string {
-	opts := vm.RunOptions{Dir: l.home.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, Softnet: launch.Softnet}
-	return append([]string{"vm", "run"}, opts.Args()...)
+func (l *local) helperArgs(name string, launch Launch) ([]string, error) {
+	socket, err := l.store.SocketPath(name)
+	if err != nil {
+		return nil, err
+	}
+	opts := vm.RunOptions{Dir: l.store.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, AgentSocket: socket, Softnet: launch.Softnet, Machine: launch.Machine}
+	return append([]string{"vm", "run"}, opts.Args()...), nil
 }
 
 func (l *local) Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error) {
-	if _, err := l.home.SocketPath(name); err != nil {
+	args, err := l.helperArgs(name, launch)
+	if err != nil {
 		return nil, err
 	}
-	return (CLI{Binary: l.exe}).startInput(ctx, l.helperArgs(name, launch), nil, sink)
+	return (CLI{Binary: l.exe}).startInput(ctx, args, nil, sink)
 }
 
 func (l *local) dial(name string) (guestagent.Dialer, error) {
-	path, err := l.home.SocketPath(name)
+	path, err := l.store.SocketPath(name)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +113,7 @@ func (l *local) Duplex(ctx context.Context, name string, argv []string) (net.Con
 // Stop signals the VM's helper, proven by its lock and its arguments:
 // SIGTERM powers the VM off; SIGKILL after timeout ends a helper that hangs.
 func (l *local) Stop(ctx context.Context, name string, timeout time.Duration) error {
-	dir := l.home.Dir(name)
+	dir := l.store.Dir(name)
 	pid, err := vm.HelperPID(dir)
 	if err != nil || pid == 0 {
 		return err
@@ -152,10 +153,10 @@ func (l *local) waitStopped(ctx context.Context, dir string, timeout time.Durati
 }
 
 func (l *local) Delete(_ context.Context, name string) error {
-	return l.home.Delete(name)
+	return l.store.Delete(name)
 }
 
-func (l *local) List(context.Context) ([]vm.Entry, error) { return l.home.List() }
+func (l *local) List(context.Context) ([]vm.Entry, error) { return l.store.List() }
 
 // absent reports whether a runtime error means the VM does not exist.
 func absent(err error) bool {

@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,19 @@ import (
 // A real SSH handshake and forwarded-tcpip channels, with no shell/exec or
 // general direct forwarding. Keys are synthetic and exist only in t.TempDir.
 func cacheSSHFixture(t *testing.T) SSHBinding {
+	t.Helper()
+	binding, _ := droppableSSHFixture(t)
+	return binding
+}
+
+// droppableSSHFixture also returns a function that closes every guest-side
+// SSH connection, as deleting a guest before revocation does.
+func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
+	t.Helper()
+	return sshFixture(t, nil)
+}
+
+func sshFixture(t *testing.T, beforeForward func()) (SSHBinding, func()) {
 	t.Helper()
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -71,13 +85,16 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 	}
 	var mu sync.Mutex
 	var connections []net.Conn
-	t.Cleanup(func() {
-		_ = listener.Close()
+	drop := func() {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range connections {
 			_ = c.Close()
 		}
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		drop()
 	})
 	go func() {
 		for {
@@ -95,6 +112,8 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 					return
 				}
 				defer func() { _ = conn.Close() }()
+				forwardCtx, cancelForwards := context.WithCancel(context.Background())
+				defer cancelForwards()
 				go func() {
 					for ch := range channels {
 						_ = ch.Reject(ssh.Prohibited, "no commands or general forwarding")
@@ -130,8 +149,16 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 							if err != nil {
 								return
 							}
+							// The guest owns accepted sockets even before their SSH
+							// channels open. SSH shutdown must close them independently
+							// of a delayed or blocked forwarding goroutine.
+							stopClose := context.AfterFunc(forwardCtx, func() { _ = incoming.Close() })
 							go func() {
+								defer stopClose()
 								defer func() { _ = incoming.Close() }()
+								if beforeForward != nil {
+									beforeForward()
+								}
 								payload := ssh.Marshal(struct {
 									Address    string
 									Port       uint32
@@ -168,7 +195,7 @@ func cacheSSHFixture(t *testing.T) SSHBinding {
 	if err = os.WriteFile(b.KnownHosts, []byte(knownhosts.Line([]string{b.Address}, host.PublicKey())+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return b
+	return b, drop
 }
 
 func sshCacheClient(t *testing.T, s *Service, name string, binding SSHBinding) (Bootstrap, *http.Client) {
@@ -285,6 +312,40 @@ func TestSSHRevocationClosesActiveAndQueuedChannels(t *testing.T) {
 	}
 }
 
+func TestSSHRevocationClosesChannelsAwaitingForward(t *testing.T) {
+	accepted, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	binding, _ := sshFixture(t, func() {
+		close(accepted)
+		<-release // Revoke after TCP accept but before SSH channel creation.
+	})
+	backend := httptest.NewTLSServer(http.NotFoundHandler())
+	defer backend.Close()
+	s, _, _ := testService(t, backend)
+	b, _ := sshCacheClient(t, s, "guest", binding)
+	endpoint, err := url.Parse(b.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := net.DialTimeout("tcp", endpoint.Host, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = socket.Close() }()
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture did not accept guest socket")
+	}
+	s.Revoke("guest")
+	_ = socket.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var data [1]byte
+	var timeout net.Error
+	if _, err = socket.Read(data[:]); err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("guest socket awaiting SSH forwarding survived revocation")
+	}
+}
+
 func TestSSHReleaseCacheAndDirectFallback(t *testing.T) {
 	var gets atomic.Int32
 	s, _, _ := proxyFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -363,4 +424,69 @@ func TestSSHReleaseCacheAndDirectFallback(t *testing.T) {
 	if err != nil || string(data) != "direct" {
 		t.Fatal("guest proxy did not fall back after SSH/cache loss")
 	}
+}
+
+func TestSSHTransportLossIsReportedOnlyDuringRequests(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"same"`)
+		w.Header().Set("Content-Length", "7")
+		if r.Method == http.MethodGet {
+			started <- struct{}{}
+			<-release
+		}
+	}))
+	defer backend.Close()
+	defer close(release)
+	s, _, _ := testService(t, backend)
+	var logs syncBuffer
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	for _, busy := range []bool{false, true} {
+		binding, drop := droppableSSHFixture(t)
+		b, client := sshCacheClient(t, s, "guest-name", binding)
+		if busy {
+			lease := makeLease(t, b, client, backend.URL+"/archive?sig=synthetic-secret")
+			go func() {
+				if response, err := client.Get(lease); err == nil {
+					_ = response.Body.Close()
+				}
+			}()
+			<-started
+		}
+		drop()
+		if !busy {
+			time.Sleep(300 * time.Millisecond) // Give an unwanted report time to appear.
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for busy && !strings.Contains(logs.String(), "transport ended") && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		reported := strings.Contains(logs.String(), "transport ended")
+		if reported != busy {
+			t.Fatalf("busy=%v reported=%v", busy, reported)
+		}
+	}
+	text := logs.String()
+	if !strings.Contains(text, "guest=guest-name") || !strings.Contains(text, "active_requests=1") || strings.Contains(text, "synthetic-secret") {
+		t.Fatal("transport loss diagnostic", text)
+	}
+}
+
+// syncBuffer collects logs written by transport goroutines.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

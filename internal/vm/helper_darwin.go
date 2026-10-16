@@ -21,10 +21,10 @@ import (
 const connectTimeout = 5 * time.Second
 
 // RunHelper is `bivouac vm run`: it holds dir's lock, boots the VM, proxies
-// AgentSocket connections to the guest agent's vsock port, and exits when
-// the guest stops. SIGTERM or SIGINT powers the VM off at once, as `tart
-// stop` does: guests are disposable, so a guest shutdown only delays
-// teardown (a macOS guest ignores the request). Killing the helper powers
+// agent socket connections to the guest agent's vsock port, and exits when
+// the guest stops. SIGTERM or SIGINT powers the VM off at once: guests are
+// disposable, so a guest shutdown only delays teardown (a macOS guest
+// ignores the request). Killing the helper powers
 // the VM off too, because the framework ends a VM whose owning process exits.
 //
 // Output is host-side status only; the guest console is never attached.
@@ -39,19 +39,26 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err != nil {
 		return err
 	}
-	socket := filepath.Join(opts.Dir, AgentSocket)
-	if len(socket) > maxSocketPath {
-		return fmt.Errorf("guest agent socket path exceeds %d bytes", maxSocketPath)
+	socket := opts.AgentSocket
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		return err
 	}
 	lock, err := Acquire(opts.Dir)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = lock.Release() }()
-	// Read the configuration only through the lock: reopening config.json
-	// would release it.
-	c, err := lock.Config()
+	// Read the manifest only through the lock: reopening it would release
+	// the lock.
+	c, err := lock.Manifest()
 	if err != nil {
+		return err
+	}
+	diskSync, err := diskSyncMode(opts.Machine.DiskSync)
+	if err != nil {
+		return err
+	}
+	if err := opts.Machine.CheckGuest(c); err != nil {
 		return err
 	}
 
@@ -60,10 +67,10 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	defer signal.Stop(signals)
 
-	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input}
+	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested}
 	var sn *softnet
 	if opts.Softnet != nil {
-		sn, err = startSoftnet(*opts.Softnet, c.MACAddress, log)
+		sn, err = startSoftnet(*opts.Softnet, c.MAC, log)
 		if err != nil {
 			return err
 		}
@@ -77,9 +84,10 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	if err := m.start(); err != nil {
 		return err
 	}
-	logf("started %s guest with %d CPUs and %d MiB", c.OS, c.CPUCount, c.MemorySize>>20)
+	logf("started %s guest with %d CPUs and %d MiB", c.OS, c.CPU, c.MemoryMiB)
 
-	// Holding the lock proves any existing socket file is stale.
+	// Holding the lock proves any existing socket file is stale: the socket
+	// is named after this VM alone.
 	_ = os.Remove(socket)
 	listener, err := listenPrivate(socket)
 	if err != nil {
@@ -164,7 +172,8 @@ func (m *machine) proxy(host net.Conn, port uint32) {
 }
 
 // softnet is the privileged packet filter process between the guest and
-// vmnet, connected over a datagram socket pair as Tart connects it.
+// vmnet, connected over a datagram socket pair with Softnet's end as its
+// stdin, the interface Softnet defines.
 type softnet struct {
 	cmd  *exec.Cmd
 	vmFD int

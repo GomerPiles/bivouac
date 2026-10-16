@@ -1,4 +1,4 @@
-package tart
+package vz
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ func (p *Provider) pairStatus(ctx context.Context, name string) (provider.Status
 // recorded both names. Any failure retains the record for ownership-checked retry.
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if p.cfg.Containers == nil {
-		return p.createVM(ctx, spec)
+		return p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine))
 	}
 	i, err := p.pairRecord(spec.Name)
 	if err != nil {
@@ -76,14 +76,14 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		}
 	}
 	spec.Meta.EngineName = i.EngineName
-	if err = p.createVM(ctx, spec); err != nil {
+	if err = p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine)); err != nil {
 		return err
 	}
 	meta := spec.Meta
 	meta.EngineName = ""
 	meta.ParentName = spec.Name
 	e := p.cfg.Containers
-	return p.createVM(ctx, provider.Spec{Name: i.EngineName, Baseline: e.Baseline, CPU: e.CPU, MemoryMB: e.MemoryGB * 1024, Meta: meta})
+	return p.createVM(ctx, provider.Spec{Name: i.EngineName, Baseline: e.Baseline, CPU: e.CPU, MemoryMB: e.MemoryGB * 1024, Meta: meta}, "linux", p.engineMachine())
 }
 
 func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error {
@@ -116,10 +116,10 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 		}
 	}
 	// Isolated guests get Softnet, no input devices, and no shares.
-	if err = p.startVM(ctx, name+"-engine", Launch{Softnet: &softnet}, log); err != nil {
+	if err = p.startVM(ctx, name+"-engine", Launch{Softnet: &softnet, Machine: p.engineMachine()}, log); err != nil {
 		return err
 	}
-	return p.startVM(ctx, name, Launch{Softnet: &softnet}, log)
+	return p.startVM(ctx, name, Launch{Softnet: &softnet, Machine: MachineOptions(p.cfg.Machine)}, log)
 }
 
 func (p *Provider) WaitReady(ctx context.Context, name string) error {
@@ -189,7 +189,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	plan := RelayPlan{StatePath: p.records.Path(), Home: p.home, Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
+	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
 	start := p.startRelay
 	if start == nil {
 		start = startDetachedRelay

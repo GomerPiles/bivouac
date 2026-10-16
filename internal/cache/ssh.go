@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -24,8 +25,20 @@ import (
 type SSHBinding struct{ Address, User, KeyFile, KnownHosts string }
 
 type sshTransport struct {
-	client *ssh.Client
-	server *http.Server
+	client  *ssh.Client
+	server  *http.Server
+	closing atomic.Bool
+	// Requests in progress. A guest deleted before revocation ends its
+	// transport while idle; only an ending with work in flight is reported.
+	active atomic.Int64
+}
+
+func (t *sshTransport) serve(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.active.Add(1)
+		defer t.active.Add(-1)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SSH channels do not implement net.Conn deadlines. HTTP CONNECT hijacking
@@ -106,6 +119,7 @@ func (l *limitedListener) Close() error {
 }
 
 func (t *sshTransport) Close() error {
+	t.closing.Store(true)
 	return errors.Join(t.client.Close(), t.server.Close())
 }
 
@@ -196,8 +210,9 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 		_ = client.Close()
 		return nil, err
 	}
-	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: serveTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
-	transport := &sshTransport{client: client, server: server}
+	transport := &sshTransport{client: client}
+	server := &http.Server{Handler: transport.serve(s), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: serveTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
+	transport.server = server
 	var issued Bootstrap
 	if json.Unmarshal(bootstrap, &issued) != nil {
 		_ = transport.Close()
@@ -212,6 +227,17 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	}
 	s.transports[name] = transport
 	s.mu.Unlock()
+	go func() {
+		err := client.Wait()
+		if active := transport.active.Load(); active > 0 && !transport.closing.Load() {
+			reason, _ := failureDetails(err)
+			if reason == "unavailable" {
+				reason = "ssh_closed"
+			}
+			s.log.Warn("cache SSH transport ended during requests", "guest", name, "reason", reason, "active_requests", active)
+		}
+		_ = server.Close()
+	}()
 	go func() {
 		bounded := &limitedListener{Listener: listener, slots: make(chan struct{}, 64), done: make(chan struct{})}
 		_ = server.Serve(tls.NewListener(deadlineListener{bounded}, &tls.Config{Certificates: []tls.Certificate{s.certificate}, MinVersion: tls.VersionTLS12}))
