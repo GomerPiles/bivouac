@@ -74,9 +74,10 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, procs: map[string]Process{}}, nil
 }
 
-// CheckRuntime fails when this host cannot run guests: the executable that
-// launches VM helpers lacks the virtualization entitlement. The daemon calls
-// it at startup, so an unsigned build never accepts a job.
+// CheckRuntime fails when this host cannot run guests: the VM store path is
+// too long for guest agent sockets, or the executable that launches VM
+// helpers lacks the virtualization entitlement. The daemon calls it at
+// startup, so such a host never accepts a job.
 func (p *Provider) CheckRuntime(ctx context.Context) error {
 	l, ok := p.rt.(*local)
 	if !ok {

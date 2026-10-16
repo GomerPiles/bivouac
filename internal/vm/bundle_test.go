@@ -127,6 +127,9 @@ func TestNamesStayInsideTheStore(t *testing.T) {
 	if _, err := Store(strings.Repeat("h", 90)).SocketPath("x"); err == nil {
 		t.Fatal("accepted an agent socket path longer than sun_path")
 	}
+	if Store(strings.Repeat("h", 90)).CheckSocketPath() == nil || Store("/Users/someone/Library/Application Support/bivouac/vms").CheckSocketPath() != nil {
+		t.Fatal("store socket check disagrees with SocketPath")
+	}
 	// The socket path length does not depend on the VM name.
 	store := Store("/Users/someone/Library/Application Support/bivouac/vms")
 	short, err := store.SocketPath("x")

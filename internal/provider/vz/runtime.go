@@ -56,8 +56,11 @@ func newLocal(store string) (*local, error) {
 	return &local{store: vm.Store(store), exe: exe}, nil
 }
 
-// check reports whether this executable can run VM helpers.
+// check reports whether this executable can run VM helpers in this store.
 func (l *local) check(ctx context.Context) error {
+	if err := l.store.CheckSocketPath(); err != nil {
+		return err
+	}
 	if err := vm.CheckEntitlement(ctx, l.exe); err != nil {
 		return fmt.Errorf("%s: %w", l.exe, err)
 	}

@@ -61,9 +61,17 @@ func (s Store) SocketPath(name string) (string, error) {
 	sum := sha256.Sum256([]byte(name))
 	p := filepath.Join(string(s), runDir, hex.EncodeToString(sum[:8])+".sock")
 	if len(p) > maxSocketPath {
-		return "", fmt.Errorf("guest agent socket path exceeds %d bytes; use a shorter VM store path", maxSocketPath)
+		return "", fmt.Errorf("guest agent socket path under %s exceeds %d bytes; use a shorter VM store path or BIVOUAC_HOME", string(s), maxSocketPath)
 	}
 	return p, nil
+}
+
+// CheckSocketPath fails when this store's guest agent sockets cannot fit
+// sun_path. Their length depends only on the store path, so one check covers
+// every VM before any guest starts.
+func (s Store) CheckSocketPath() error {
+	_, err := s.SocketPath("")
+	return err
 }
 
 // validName refuses names that could leave the store or are hidden.

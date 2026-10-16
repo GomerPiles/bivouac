@@ -471,3 +471,16 @@ func TestCheckNestedFollowsTheHost(t *testing.T) {
 		t.Fatalf("CheckNested = %v, want ErrNestedUnsupported", err)
 	}
 }
+
+// A store too deep for guest agent sockets must stop the daemon at startup,
+// before it accepts a job whose guest could never start.
+func TestRuntimeRefusesStoreTooLongForAgentSockets(t *testing.T) {
+	store := filepath.Join(t.TempDir(), strings.Repeat("v", 100))
+	p, err := New("macos", config.VZ{}, "controller", store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CheckRuntime(context.Background()); err == nil || !strings.Contains(err.Error(), "socket path") {
+		t.Fatal("over-long VM store accepted at startup", err)
+	}
+}
