@@ -569,10 +569,14 @@ status. An independent ten-second broker guard quarantines policy failures,
 blocks the owned port, and stops the owned VM if blocking fails. It verifies
 and blocks journalled ports even when App Sandbox is unavailable, but stops
 only a VM whose identity it proved. An incomplete pass blocks admission until
-the next fully successful pass; a policy failure blocks it until the broker
-restarts. It does not repair or resume a failed guest. Interface-change handling is polled rather
-than atomic: dynamic-interface, private-peer, MAC-change and host-reboot
-behavior are still live validation gates. Existing manual prototype results
+the next fully successful pass. Quarantined guests and retained network-cleanup
+records keep admission blocked, including after their VM has stopped or vanished.
+Once normal owned cleanup removes those records, a successful guard pass restores
+admission automatically in the same broker. Fresh guests build and verify the
+current host-interface policy; failed guests are never repaired or resumed.
+Canceled or unreadable guard passes cannot clear the admission gate.
+Interface-change handling is polled rather than atomic: dynamic-interface,
+private-peer, MAC-change and host-reboot behavior are still live validation gates. Existing manual prototype results
 do not establish that the new Go adapter passes those gates.
 
 System OpenSSH connects only through the native owned VM's loopback HvSocket

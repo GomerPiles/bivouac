@@ -146,7 +146,7 @@ func TestEngineGuardEnforcesPolicyWhileAppSandboxUnavailable(t *testing.T) {
 			}
 			a.statusErr = nil
 			n.verifyErr = nil
-			// A full successful pass clears an outage, never a policy failure.
+			// A full successful pass clears an outage, never a retained quarantine.
 			if err := e.Guard(ctx); err != nil && !policyLost {
 				t.Fatal(err)
 			}
