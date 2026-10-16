@@ -83,7 +83,10 @@ func redactFile(path string) error {
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	w := redact.NewWriter(tmp)
 	_, copyErr := io.Copy(w, in)
-	if err := errors.Join(copyErr, w.Close(), tmp.Close()); err != nil {
+	// Windows refuses replacement while our input handle lacks delete sharing.
+	// Finish both streams before committing, retaining the deferred close for
+	// earlier failures. Never delete the destination to force replacement.
+	if err := errors.Join(copyErr, w.Close(), tmp.Close(), in.Close()); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
