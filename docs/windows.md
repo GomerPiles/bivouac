@@ -180,7 +180,8 @@ CurrentUser root consent over SSH. Proxy certificates include a signed CRL at
 the guest's own cache endpoint so Windows retains default revocation checks.
 Nothing is installed into the host or baseline. Cache settings/capabilities
 travel on SSH stdin and are excluded from diagnostics. Workflow cache keys,
-metadata, uploads and upstream authorization stay on GitHub. Cache setup failure removes the
+metadata and upstream authorization stay on GitHub; with `store_uploads`,
+uploads reach GitHub through the host relay. Cache setup failure removes the
 partial adapter before normal runner startup. A lost host service falls back
 upstream with the same limits documented for macOS; an in-flight transfer can
 still fail and depend on caller retries.
