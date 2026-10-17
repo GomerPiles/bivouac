@@ -420,6 +420,23 @@ Dispatch it twice: the sentinel step proves the second guest is fresh.
 `bivouac status` during the run shows the guest, its job, and its age; the
 `_diag` logs land under the diagnostics directory after the job.
 
+### Label arrays on a scale set
+
+Before routing a label array to a scale set, verify it with an isolated
+test scale set, for example `scaleset = "bivouac-labeltest"` and
+`scaleset_labels = ["bivouac-lt-a", "bivouac-lt-b"]`, under a separate
+`BIVOUAC_HOME` with a one-job budget. Never give it every label of a
+production `runs-on` array: a job runs on any runner holding all its labels.
+
+1. `bivouac doctor --github` creates the scale set and fails if GitHub
+   dropped a label. Stop there if it did.
+2. `bivouac on`, then a throwaway-branch workflow (trigger `push` on that
+   branch) with three `echo ok` jobs: `runs-on: bivouac-labeltest` (control),
+   `[bivouac-lt-a, bivouac-lt-b]` (must run), and
+   `[bivouac-lt-a, bivouac-lt-nope]` (must stay queued; cancel it).
+3. Repeat with `self-hosted` added to both if production arrays use it.
+4. Delete the test scale set and branch.
+
 ## REST JIT fallback
 
 Finish active work with `bivouac off --wait` before changing demand mode.

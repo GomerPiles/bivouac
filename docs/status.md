@@ -57,6 +57,8 @@ Open:
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
+- Extra scale set labels (`scaleset_labels`): reconciliation is covered by
+  tests only; github.com support and label-array routing are unverified.
 - The Aqua session check, process-group launch, and cache bind to
   `guest_host` are untested on a real host.
 

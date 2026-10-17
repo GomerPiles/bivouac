@@ -97,9 +97,14 @@ func reconnectDelay(backoff time.Duration, healthy bool) (wait, next time.Durati
 // one poll succeeded, which resets the reconnect backoff.
 func (m *Manager) pollSession(ctx context.Context, p *poller, scaleSet string) (healthy bool, err error) {
 	log := m.o.Log.With("provider", p.name, "scaleset", scaleSet)
-	id, err := m.o.GitHub.Ensure(ctx, scaleSet, m.o.Config.GitHub.RunnerGroup)
+	labels := m.o.Config.Providers[p.name].ScaleSetLabelNames()
+	ss, err := m.o.GitHub.Ensure(ctx, scaleSet, m.o.Config.GitHub.RunnerGroup, labels)
 	if err != nil {
 		return false, err
+	}
+	id := ss.ID
+	if missing := github.MissingLabels(labels, ss.Labels); len(missing) > 0 {
+		log.Warn("scale set labels dropped by GitHub; jobs requiring them will not route here", "missing", missing, "labels", ss.Labels)
 	}
 	owner := "bivouac-" + m.o.Store.ControllerID()
 	if len(owner) > 64 {

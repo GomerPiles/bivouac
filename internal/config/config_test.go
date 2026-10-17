@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -152,5 +153,28 @@ func TestNestedVirtualizationParses(t *testing.T) {
 	}
 	if !c.Providers["macos"].VZ.Machine.NestedVirtualization {
 		t.Fatal("nested_virtualization not parsed")
+	}
+}
+
+func TestScaleSetLabels(t *testing.T) {
+	cfg, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Providers["macos"]
+	p.ScaleSetLabels = []string{"self-hosted", "bivouac-lt-a"}
+	cfg.Providers["macos"] = p
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ScaleSetLabelNames(); !slices.Equal(got, []string{"bivouac-macos-experimental", "self-hosted", "bivouac-lt-a"}) {
+		t.Fatalf("labels %q", got)
+	}
+	for _, labels := range [][]string{{""}, {" padded"}, {"BIVOUAC-MACOS-EXPERIMENTAL"}, {"a", "A"}, slices.Repeat([]string{"x"}, 100)} {
+		p.ScaleSetLabels = labels
+		cfg.Providers["macos"] = p
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("accepted invalid scale set labels: %q", labels)
+		}
 	}
 }

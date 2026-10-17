@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/github"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
@@ -148,11 +149,15 @@ func (e env) doctor(ctx context.Context, args []string) error {
 		default:
 			for _, name := range cfg.ProviderNames() {
 				ss := cfg.Providers[name].ScaleSet
-				id, err := gh.Ensure(ctx, ss, cfg.GitHub.RunnerGroup)
-				if err != nil {
+				labels := cfg.Providers[name].ScaleSetLabelNames()
+				got, err := gh.Ensure(ctx, ss, cfg.GitHub.RunnerGroup, labels)
+				switch missing := github.MissingLabels(labels, got.Labels); {
+				case err != nil:
 					add("FAIL", "scale set "+ss, err.Error())
-				} else {
-					add("PASS", "scale set "+ss, fmt.Sprintf("id %d in runner group %q", id, cfg.GitHub.RunnerGroup))
+				case len(missing) > 0:
+					add("FAIL", "scale set "+ss, fmt.Sprintf("id %d: GitHub dropped labels %q; it has %q", got.ID, missing, got.Labels))
+				default:
+					add("PASS", "scale set "+ss, fmt.Sprintf("id %d in runner group %q, labels %q", got.ID, cfg.GitHub.RunnerGroup, got.Labels))
 				}
 			}
 		}

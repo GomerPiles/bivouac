@@ -148,8 +148,12 @@ an assignment received while it boots. A sweep
 that finds nothing retires after `sweep_idle_timeout` (default 90 s);
 one that ran a job is followed by another sweep.
 
-Scale set labels: on github.com a scale set's name is its only label, so
-workflows use `runs-on: <scaleset name>` rather than a label array.
+Scale set labels: the name is always a label, so `runs-on: <scaleset name>`
+works. Optional `scaleset_labels` add labels for `runs-on` arrays. Every
+session open reconciles the scale set to exactly the configured set, then
+reads it back, because GitHub can drop unsupported labels without an error;
+missing labels are logged and fail `doctor --github`. Whether github.com
+keeps extra labels and routes arrays to them is not yet verified live.
 
 ## Demand: REST JIT fallback
 
