@@ -28,7 +28,12 @@ const (
 	DemandScaleSet Demand = "scaleset"
 	// DemandJIT keeps a small idle pool of JIT-registered ephemeral runners.
 	DemandJIT Demand = "jit"
+	// DemandQueued starts REST JIT runners only for matching queued jobs.
+	DemandQueued Demand = "queued"
 )
+
+// UsesRESTJIT reports whether registration uses the ordinary REST protocol.
+func (d Demand) UsesRESTJIT() bool { return d == DemandJIT || d == DemandQueued }
 
 // Config is the whole file.
 type Config struct {
@@ -59,8 +64,12 @@ type GitHub struct {
 	AppInstallationID int64 `toml:"app_installation_id"`
 	// PrivateKeySecret names the credential-store item holding the App's PEM key.
 	PrivateKeySecret string `toml:"private_key_secret"`
-	// Demand is "scaleset" (default) or "jit".
+	// Demand is "scaleset" (default), "jit" (warm pool), or "queued".
 	Demand Demand `toml:"demand"`
+	// QueueRepositories bounds Actions reads in queued mode to explicit owner/repo names.
+	QueueRepositories []string `toml:"queue_repositories"`
+	// QueueReadSecret optionally names a separate Actions-read credential.
+	QueueReadSecret string `toml:"queue_read_secret"`
 	// RunnerGroup is the runner group scale sets and JIT runners join.
 	RunnerGroup string `toml:"runner_group"`
 }
@@ -351,8 +360,31 @@ func (c *Config) Validate() error {
 	if c.GitHub.PrivateKeySecret == "" {
 		errs = append(errs, errors.New("github.private_key_secret is required"))
 	}
-	if c.GitHub.Demand != DemandScaleSet && c.GitHub.Demand != DemandJIT {
-		errs = append(errs, fmt.Errorf("github.demand must be %q or %q", DemandScaleSet, DemandJIT))
+	if c.GitHub.Demand != DemandScaleSet && !c.GitHub.Demand.UsesRESTJIT() {
+		errs = append(errs, fmt.Errorf("github.demand must be %q, %q or %q", DemandScaleSet, DemandJIT, DemandQueued))
+	}
+	if c.GitHub.Demand == DemandQueued {
+		if len(c.GitHub.QueueRepositories) == 0 || len(c.GitHub.QueueRepositories) > 20 {
+			errs = append(errs, errors.New("queued demand requires 1–20 queue_repositories"))
+		}
+		scope := ""
+		if u, err := url.Parse(c.GitHub.URL); err == nil {
+			scope = strings.Trim(u.Path, "/")
+		}
+		owner, _, _ := strings.Cut(scope, "/")
+		seen := map[string]bool{}
+		partRE := regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+		for _, repo := range c.GitHub.QueueRepositories {
+			parts := strings.Split(repo, "/")
+			valid := len(parts) == 2
+			for _, part := range parts {
+				valid = valid && part != "." && part != ".." && partRE.MatchString(part)
+			}
+			if !valid || !strings.EqualFold(parts[0], owner) || seen[strings.ToLower(repo)] || (strings.Contains(strings.Trim(scope, "/"), "/") && !strings.EqualFold(repo, strings.Trim(scope, "/"))) {
+				errs = append(errs, errors.New("queue_repositories must be unique owner/repo names within the registration scope"))
+			}
+			seen[strings.ToLower(repo)] = true
+		}
 	}
 	if c.Budget.MaxInstances < 1 {
 		errs = append(errs, errors.New("budget.max_instances must be at least 1"))
@@ -386,7 +418,7 @@ func (c *Config) Validate() error {
 			} else if !strings.HasPrefix(p.ScaleSet, NamePrefix) {
 				errs = append(errs, fmt.Errorf("provider %q: scaleset must start with %q", name, NamePrefix))
 			}
-		case DemandJIT:
+		case DemandJIT, DemandQueued:
 			if len(p.Labels) == 0 {
 				errs = append(errs, fmt.Errorf("provider %q: labels are required for jit demand", name))
 			}
@@ -404,7 +436,9 @@ func (c *Config) Validate() error {
 			if !isolated || len(p.Labels) > 100 {
 				errs = append(errs, fmt.Errorf("provider %q: jit labels need a bivouac- label and at most 100 entries", name))
 			}
-			if p.IdlePool < 1 || p.IdlePool > c.Budget.MaxInstances || (p.MaxInstances > 0 && p.IdlePool > p.MaxInstances) {
+			if c.GitHub.Demand == DemandQueued && p.IdlePool != 0 {
+				errs = append(errs, fmt.Errorf("provider %q: queued demand requires idle_pool = 0", name))
+			} else if c.GitHub.Demand == DemandJIT && (p.IdlePool < 1 || p.IdlePool > c.Budget.MaxInstances || (p.MaxInstances > 0 && p.IdlePool > p.MaxInstances)) {
 				errs = append(errs, fmt.Errorf("provider %q: idle_pool must be positive and fit instance budgets", name))
 			}
 		}
@@ -586,7 +620,9 @@ url = "https://github.com/example-org"
 app_client_id = "Iv1.0123456789abcdef"
 app_installation_id = 12345678
 private_key_secret = "github-app-key"
-demand = "scaleset"          # or "jit"
+demand = "scaleset"          # "queued" for zero idle VMs; "jit" for a warm pool
+# queue_repositories = ["example-org/repo"] # queued only; requires Actions read
+# queue_read_secret = "queue-read" # optional separate Actions-read token
 runner_group = "default"
 
 [budget]
@@ -604,7 +640,7 @@ type = "vz"
 scaleset = "bivouac-macos-experimental"
 labels = ["self-hosted", "macOS", "ARM64", "bivouac-experimental"]  # jit demand only
 max_instances = 1
-idle_pool = 1               # jit demand only; kept warm while on
+idle_pool = 1               # jit warm pool; queued demand requires 0
 
 [providers.macos.vz]
 baseline = "ci-macos"

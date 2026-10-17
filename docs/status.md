@@ -131,6 +131,15 @@ packaging, and login installation. The interface guard is periodic. The
 patched runtime must be rebuilt with the fail-closed filter; reused-PID,
 breakaway and log-cap retirement are untested on Windows.
 
+## Queued REST demand
+
+Queued-only REST demand has isolated tests for empty-queue zero guests,
+matching labels/groups, bounded paginated API reads, separate queue credentials,
+job completion back to zero, cancellation during boot, busy withdrawal races,
+queue-read failures and cancellable drain/shutdown. Live queued-only admission
+has not yet been validated; it requires Actions-read access for the monitored
+repositories. Existing warm JIT mode remains explicitly available.
+
 ## Caching
 
 Actions v2 archive restores and public GitHub release downloads are

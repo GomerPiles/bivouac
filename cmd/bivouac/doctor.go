@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/github"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
@@ -144,6 +145,16 @@ func (e env) doctor(ctx context.Context, args []string) error {
 				add("FAIL", "REST JIT", err.Error())
 			} else {
 				add("PASS", "REST JIT", "authenticated runner access; no registration created")
+			}
+			if cfg.GitHub.Demand == config.DemandQueued {
+				queue, ok := jit.(github.JobQueue)
+				if !ok {
+					add("FAIL", "queued jobs", "queue reader unavailable")
+				} else if _, err := queue.QueuedJobs(ctx, cfg.GitHub.QueueRepositories); err != nil {
+					add("FAIL", "queued jobs", err.Error())
+				} else {
+					add("PASS", "queued jobs", "Actions read access verified; no VM or registration created")
+				}
 			}
 		default:
 			for _, name := range cfg.ProviderNames() {
