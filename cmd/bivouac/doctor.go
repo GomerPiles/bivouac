@@ -151,11 +151,12 @@ func (e env) doctor(ctx context.Context, args []string) error {
 				ss := cfg.Providers[name].ScaleSet
 				labels := cfg.Providers[name].ScaleSetLabelNames()
 				got, err := gh.Ensure(ctx, ss, cfg.GitHub.RunnerGroup, labels)
-				switch missing := github.MissingLabels(labels, got.Labels); {
+				missing, extra := github.LabelDiff(labels, got.Labels)
+				switch {
 				case err != nil:
 					add("FAIL", "scale set "+ss, err.Error())
-				case len(missing) > 0:
-					add("FAIL", "scale set "+ss, fmt.Sprintf("id %d: GitHub dropped labels %q; it has %q", got.ID, missing, got.Labels))
+				case len(missing)+len(extra) > 0:
+					add("FAIL", "scale set "+ss, fmt.Sprintf("id %d has labels %q, config wants %q; GitHub fixes labels at creation, so delete the scale set to change them", got.ID, got.Labels, labels))
 				default:
 					add("PASS", "scale set "+ss, fmt.Sprintf("id %d in runner group %q, labels %q", got.ID, cfg.GitHub.RunnerGroup, got.Labels))
 				}

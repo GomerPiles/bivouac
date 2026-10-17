@@ -422,20 +422,12 @@ Dispatch it twice: the sentinel step proves the second guest is fresh.
 
 ### Label arrays on a scale set
 
-Before routing a label array to a scale set, verify it with an isolated
-test scale set, for example `scaleset = "bivouac-labeltest"` and
-`scaleset_labels = ["bivouac-lt-a", "bivouac-lt-b"]`, under a separate
-`BIVOUAC_HOME` with a one-job budget. Never give it every label of a
-production `runs-on` array: a job runs on any runner holding all its labels.
-
-1. `bivouac doctor --github` creates the scale set and fails if GitHub
-   dropped a label. Stop there if it did.
-2. `bivouac on`, then a throwaway-branch workflow (trigger `push` on that
-   branch) with three `echo ok` jobs: `runs-on: bivouac-labeltest` (control),
-   `[bivouac-lt-a, bivouac-lt-b]` (must run), and
-   `[bivouac-lt-a, bivouac-lt-nope]` (must stay queued; cancel it).
-3. Repeat with `self-hosted` added to both if production arrays use it.
-4. Delete the test scale set and branch.
+Set `scaleset_labels` before the scale set is first created; GitHub ignores
+later label changes. Never give a scale set every label of another runner's
+`runs-on` array: a job runs on any runner holding all its labels. To change
+labels: `bivouac off --wait`, delete the scale set from the organization's
+runner settings, then `bivouac doctor --github` creates it with the
+configured labels and reports any difference.
 
 ## REST JIT fallback
 

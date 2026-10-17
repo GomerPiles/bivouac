@@ -54,7 +54,7 @@ func (f *Fake) SetStatistics(s Statistics) {
 	f.stats = s
 }
 
-// Ensure implements ScaleSets.
+// Ensure implements ScaleSets. Like GitHub, labels are fixed at creation.
 func (f *Fake) Ensure(_ context.Context, name, _ string, labels []string) (ScaleSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -62,12 +62,12 @@ func (f *Fake) Ensure(_ context.Context, name, _ string, labels []string) (Scale
 	if !ok {
 		id = len(f.scaleSets) + 100
 		f.scaleSets[name] = id
+		f.labels[name] = append([]string(nil), labels...)
 	}
-	f.labels[name] = append([]string(nil), labels...)
-	return ScaleSet{ID: id, Labels: append([]string(nil), labels...)}, nil
+	return ScaleSet{ID: id, Labels: append([]string(nil), f.labels[name]...)}, nil
 }
 
-// ScaleSetLabels returns the labels last ensured for a scale set.
+// ScaleSetLabels returns the labels a scale set was created with.
 func (f *Fake) ScaleSetLabels(name string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

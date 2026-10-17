@@ -27,6 +27,9 @@ runtime with real scale-set jobs from a baseline with the guest agent:
   GitHub released the busy runner.
 - The real-guest integration test (helper arguments, VM lock, cleanup
   refusing the baseline).
+- Scale set label arrays: github.com kept extra labels (including
+  `self-hosted`) set at creation and assigned matching array jobs to the
+  session; verified with a session probe, not a guest.
 - Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
   5–10 s, teardown 1.3–1.8 s (power-off).
 
@@ -57,8 +60,6 @@ Open:
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
-- Extra scale set labels (`scaleset_labels`): reconciliation is covered by
-  tests only; github.com support and label-array routing are unverified.
 - The Aqua session check, process-group launch, and cache bind to
   `guest_host` are untested on a real host.
 

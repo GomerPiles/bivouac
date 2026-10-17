@@ -103,8 +103,8 @@ func (m *Manager) pollSession(ctx context.Context, p *poller, scaleSet string) (
 		return false, err
 	}
 	id := ss.ID
-	if missing := github.MissingLabels(labels, ss.Labels); len(missing) > 0 {
-		log.Warn("scale set labels dropped by GitHub; jobs requiring them will not route here", "missing", missing, "labels", ss.Labels)
+	if missing, extra := github.LabelDiff(labels, ss.Labels); len(missing)+len(extra) > 0 {
+		log.Warn("scale set labels differ from config; GitHub fixes them at creation", "missing", missing, "extra", extra, "labels", ss.Labels)
 	}
 	owner := "bivouac-" + m.o.Store.ControllerID()
 	if len(owner) > 64 {

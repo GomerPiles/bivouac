@@ -35,12 +35,12 @@ func TestRunnerRemovalError(t *testing.T) {
 	}
 }
 
-func TestMissingLabels(t *testing.T) {
-	want := []string{"bivouac-x", "Self-Hosted", "bivouac-lt-a"}
-	if got := MissingLabels(want, []string{"BIVOUAC-X", "self-hosted"}); !slices.Equal(got, []string{"bivouac-lt-a"}) {
-		t.Fatalf("missing %q", got)
+func TestLabelDiff(t *testing.T) {
+	missing, extra := LabelDiff([]string{"bivouac-x", "Self-Hosted", "bivouac-lt-a"}, []string{"BIVOUAC-X", "self-hosted", "bivouac-lt-b"})
+	if !slices.Equal(missing, []string{"bivouac-lt-a"}) || !slices.Equal(extra, []string{"bivouac-lt-b"}) {
+		t.Fatalf("missing %q, extra %q", missing, extra)
 	}
-	if !sameLabels(want, []string{"bivouac-lt-a", "bivouac-x", "self-hosted"}) || sameLabels(want, append(want, "extra")) {
-		t.Fatal("label set comparison is wrong")
+	if missing, extra := LabelDiff([]string{"a", "B"}, []string{"b", "A"}); missing != nil || extra != nil {
+		t.Fatalf("equal sets differ: %q, %q", missing, extra)
 	}
 }

@@ -46,9 +46,9 @@ type ScaleSet struct {
 
 // ScaleSets is what the manager needs from GitHub in scale-set mode.
 type ScaleSets interface {
-	// Ensure returns the scale set, creating it when absent and replacing
-	// its labels when they differ. GitHub may drop labels it does not
-	// support; compare the result with MissingLabels.
+	// Ensure returns the scale set and the labels GitHub reports, creating
+	// it with labels when absent. GitHub fixes labels at creation and
+	// silently ignores label updates; compare the result with LabelDiff.
 	Ensure(ctx context.Context, name, runnerGroup string, labels []string) (ScaleSet, error)
 	Open(ctx context.Context, scaleSetID int, owner string) (Session, error)
 	GenerateJIT(ctx context.Context, scaleSetID int, runnerName, workFolder string) (JITConfig, error)
@@ -102,30 +102,25 @@ func (c *Client) Ensure(ctx context.Context, name, runnerGroup string, labels []
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("look up scale set %q: %w", name, err)
 	}
-	if existing != nil && sameLabels(labels, labelNames(existing.Labels)) {
+	if existing != nil {
 		return ScaleSet{ID: existing.ID, Labels: labelNames(existing.Labels)}, nil
 	}
-	want := &scaleset.RunnerScaleSet{
+	if _, err := c.c.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
 		Name:          name,
 		RunnerGroupID: groupID,
 		Labels:        systemLabels(labels),
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
+	}); err != nil {
+		return ScaleSet{}, fmt.Errorf("create scale set %q: %w", name, err)
 	}
-	if existing == nil {
-		if _, err := c.c.CreateRunnerScaleSet(ctx, want); err != nil {
-			return ScaleSet{}, fmt.Errorf("create scale set %q: %w", name, err)
-		}
-	} else if _, err := c.c.UpdateRunnerScaleSet(ctx, existing.ID, want); err != nil {
-		return ScaleSet{}, fmt.Errorf("update scale set %q labels: %w", name, err)
-	}
-	// Read back rather than trusting the write response: unsupported
+	// Read back rather than trusting the create response: unsupported
 	// labels can be dropped without an error.
 	got, err := c.c.GetRunnerScaleSet(ctx, groupID, name)
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("look up scale set %q: %w", name, err)
 	}
 	if got == nil {
-		return ScaleSet{}, fmt.Errorf("scale set %q missing after write", name)
+		return ScaleSet{}, fmt.Errorf("scale set %q missing after create", name)
 	}
 	return ScaleSet{ID: got.ID, Labels: labelNames(got.Labels)}, nil
 }
@@ -146,24 +141,24 @@ func labelNames(labels []scaleset.Label) []string {
 	return names
 }
 
-// MissingLabels returns the wanted labels absent from got. GitHub labels
-// are case-insensitive.
-func MissingLabels(want, got []string) []string {
-	have := make(map[string]bool, len(got))
-	for _, l := range got {
-		have[strings.ToLower(l)] = true
-	}
-	var missing []string
-	for _, l := range want {
-		if !have[strings.ToLower(l)] {
-			missing = append(missing, l)
-		}
-	}
-	return missing
+// LabelDiff returns the wanted labels absent from got and the labels in
+// got that are not wanted. GitHub labels are case-insensitive.
+func LabelDiff(want, got []string) (missing, extra []string) {
+	return absent(want, got), absent(got, want)
 }
 
-func sameLabels(a, b []string) bool {
-	return len(MissingLabels(a, b)) == 0 && len(MissingLabels(b, a)) == 0
+func absent(from, in []string) []string {
+	have := make(map[string]bool, len(in))
+	for _, l := range in {
+		have[strings.ToLower(l)] = true
+	}
+	var out []string
+	for _, l := range from {
+		if !have[strings.ToLower(l)] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // Open implements ScaleSets.
