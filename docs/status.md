@@ -48,12 +48,22 @@ virtualization entitlement; macOS CI signs a test binary and has the
 framework validate every helper device combination (skipped where the host
 cannot virtualize).
 
-Tests only: startup stage timings through listener readiness, exact-hash reuse
-of a protected baseline helper, and one-copy macOS helper delivery shared by
-telemetry, caching and optional container pairs. Tests cover native read-only
-fingerprint probes, stale/untrusted helpers, transport and partial-copy failures,
-cache fallback and pair reuse. These changes are not deployed to the installed
-controller; no live cold-boot timings or speedup have been established.
+Isolated cold-boot validation: 12 successful macOS VM boots (three per condition,
+2 CPUs/4 GiB, caching and release proxy enabled), without runner registration.
+The original baseline's new one-upload fallback had median helper/cache
+preparation of 2.76 s versus 2.09 s for the old two-upload path. On a separately
+prepared baseline, verified helper reuse took 0.99 s versus 1.17 s for its
+old-path control. Overall startup medians did not improve; boot/readiness varied
+from 36.70 to 45.68 s and dominates the total. Host disk caches were retained.
+[Individual timings and methodology](macos-startup-benchmark.json) include the
+excluded failed verification attempt; successful samples all proved the intended
+helper mode and complete guest/record cleanup. Production configuration, mode
+and source image checks were unchanged.
+
+Tests only: JIT/listener stage timings, transport and partial-copy fault handling,
+cache failure fallback and optional container-pair reuse. Those paths were not
+part of the cold-boot trial. These changes are not deployed to the installed
+controller; no end-to-end registered-runner speedup has been established.
 
 Open:
 
