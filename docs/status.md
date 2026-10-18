@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“31 s, JIT to listening
-  5ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“1.8 s (power-off).
+- Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
+  5–10 s, teardown 1.3–1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -126,39 +126,15 @@ Validated live:
   fresh guests; file and container sentinels proved the reset.
 - A controller crash mid-job: the supervisor and VM survived and were
   adopted. Off mid-job lets the job finish and cleans up.
-- A fresh guest reaches listening in about 18 s.
 
-Startup optimization is implemented: stage timing, exact prepared-helper reuse,
-one private runtime helper installation and verification-first public DNS with
-repairs only when needed. A separate ordinary-token 2-CPU/2-GiB native trial
-passed agentless SSH readiness, runner/GPU/CDI checks, factory sanitation and
-actual prepared helper/DNS reuse without runner registration. In that same guest,
-bootstrap was 3.182 s with upload and 0.962 s after preparation; DNS was 121 ms
-with a profile repair and 32 ms without writes. These are warm same-boot bootstrap
-observations, not a paired cold-boot speedup or a new clone-to-listening result.
-Owned native processes, overlay, SSH pin and instance records were removed.
-Windows and Linux/WSL regressions cover helper fallback, DNS refusal/repair,
-bounded reports and factory sanitation. Explicit clean capture also passed:
-acknowledged guest shutdown, natural exit code zero, recorded native absence,
-one-time raw conversion, durable provenance and owned source cleanup. Three
-sequential fresh prepared cold boots then passed at 12.313 s, 10.738 s and
-10.884 s from clone through guest readiness (host-monotonic stage sums).
-Each required exact helper/DNS reuse, new machine and SSH-host-key fingerprints,
-runner/GPU/CDI readiness and complete owned cleanup. These are credential-free
-readiness measurements, not clone-to-listening or job timings. The independent
-captured image also passed live provider reopen/adoption and intentional recorded
-supervisor-loss cleanup. A separate manager with a unique validation label also
-reached a real JIT runner-listening state: clone 404 ms, boot/readiness 11.495 s,
-registration/listening 4.988 s (16.887 s total). Off then deregistered the idle
-runner and removed its guest, native processes, SSH pin and instance record.
-Two sequential smoke jobs on fresh prepared guests then passed helper reuse,
-sentinel reset, GPU/CDI, Docker, public DNS and HTTPS checks. Their clone-through-
-listening times were 18.975 s and 18.046 s; both jobs and their runner/guest cleanup
-completed. The temporary group was restricted to this repository and the exact
-trusted workflow/branch, then removed after its runners were gone. This is
-validation for a staged trusted-workload rollout, not untrusted-PR isolation. No production image, binary
-or configuration changed, and no service was disabled solely from a boot timestamp.
-
+Prepared-helper/DNS reuse, startup timing and explicit sanitized image capture
+are implemented and validated with trusted workloads. Three fresh 2-CPU/2-GiB
+prepared clones reached readiness in 10.7-12.3 s; two sequential smoke jobs reached
+listening in 18.0-19.0 s with fresh-state, GPU/CDI, Docker, DNS/HTTPS and cleanup
+checks. Prepared-image adoption and supervisor-loss cleanup are validated.
+The CLI sanitation-mode correction, configurable trial reserves and canonical
+capture-output check have regression coverage; live validation of those fixes
+remains pending. Production deployment of the prepared image remains pending.
 
 Open: private peers, NIC reconfiguration and dynamic interfaces, a cleanup
 soak, resource accounting with foreign managers, clean-room runtime

@@ -25,10 +25,6 @@ Windows host experiments have separate operator procedures:
 storage, and [`crosvm.md`](crosvm.md) for the ordinary-user Linux GPU supervisor.
 Keep production controllers and labels unchanged until the operator approves
 cutover after the relevant live validation. Remaining isolation gates still apply.
-Linux prepared-helper/DNS optimization and the separate credential-free factory
-exercise are documented in [the Crosvm procedure](crosvm.md#prepared-images-and-startup-measurements).
-The factory exercise discards its clone. Explicit `crosvm build-image` captures
-a new independent image after clean shutdown; it never deploys that image.
 
 ## Windows development boundary
 
@@ -164,7 +160,7 @@ To migrate a home-based layout:
    that manager build in the same window. A new build needs a new
    `BrokerSHA256`; keep the old pin only for identical bytes.
 6. In `engines.json`, add `Home` (the absolute `BIVOUAC_HOME`) and set `Broker`
-   to the bare file name of the copied executable. A path such as `bin\Ã¢â‚¬Â¦` is
+   to the bare file name of the copied executable. A path such as `bin\…` is
    refused. Update `Daemon` if App Sandbox moved.
 7. Replace `Start-VMEnginePrompt.ps1` and `Control.ps1` in the home with this
    version, and remove any `engine_directory` entry from `portable.json`.
@@ -206,7 +202,7 @@ Do not paste the discovery file into logs: it contains a per-run bearer token.
 
 `secret set/check/delete` uses the current Windows user's Credential Manager.
 Values enter through the existing file/stdin interface; generic items use the
-`bivouac/` namespace. Values must contain 1Ã¢â‚¬â€œ2,560 bytes; larger PEM keys are
+`bivouac/` namespace. Values must contain 1–2,560 bytes; larger PEM keys are
 rejected. Run an optional login item under this same user. Native credential tests
 are opt-in: `BIVOUAC_WINDOWS_CREDENTIAL_TEST=1 go test ./internal/secret` writes,
 updates, reads, and removes a randomly named synthetic fixture. It never
@@ -293,9 +289,9 @@ optional follow-up work for independent revocation; it does not block
 cutover. Keep the shared installation, permissions, and key unchanged
 when retiring Tartelet. To create a separate App later:
 
-1. Organization settings Ã¢â€ â€™ Developer settings Ã¢â€ â€™ GitHub Apps Ã¢â€ â€™ New GitHub
+1. Organization settings → Developer settings → GitHub Apps → New GitHub
    App. Name `gomerpiles-bivouac`. Any homepage URL. Uncheck Webhook.
-2. Permissions: Organization Ã¢â€ â€™ **Self-hosted runners: Read and write**.
+2. Permissions: Organization → **Self-hosted runners: Read and write**.
    Nothing else. "Where can this App be installed": only this account.
 3. Create, then generate a private key (downloads a `.pem`).
 4. Install the App on the organization with repository access limited to

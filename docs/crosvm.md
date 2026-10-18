@@ -79,65 +79,41 @@ presentation. There is no emulated Windows desktop in this provider.
 
 ## Prepared images and startup measurements
 
-The baseline already supplies installed packages and an unconfigured runner.
-Job clones do not reinstall them. A prepared baseline can additionally contain
-the exact selected helper at `/usr/local/libexec/bivouac-guest`, with root-owned
-ancestors and no group/other mutation permissions. Readiness verifies ownership,
-links and SHA-256 before executing that helper. A missing/stale helper falls back
-to upload; a failed SSH connection does not. Both paths still perform current
-ownership, GPU/CDI, runner-state and network-policy checks.
+Prepared images add the exact selected helper at
+`/usr/local/libexec/bivouac-guest` and persistent public DNS. Readiness verifies
+both before reuse and still checks ownership, GPU/CDI, runner state and native
+network policy. A changed helper emits a warning and uses upload; SSH failure
+refuses readiness. Keep the helper binary used to build the image: a rebuild
+can change its hash. Guest prerequisites include `/usr/bin/stat` and
+`/usr/bin/sha256sum`. See [the design contract](design.md#linux-gpu-provider-on-windows-experimental)
+for helper trust, DNS repair and capture rules; [status](status.md#windows-crosvm-linux-gpu-guests)
+records validated results and remaining gates.
 
-DNS already configured correctly in the image is verified and reused. Readiness
-checks the persistent NetworkManager profile, active upstreams and resolver;
-repairs only incorrect state, then verifies the result. A local resolved stub is
-accepted only with independently confirmed public upstreams. No native network
-filter, host-prefix guard or per-clone JIT requirement is skipped.
-
-Structured `linux startup stage` records include durations for clone, native
-start, SSH availability, helper check/upload, bootstrap, cache setup, JIT delivery
-and listener launch. Guest bootstrap adds DNS/helper/total durations plus reuse
-and mutation flags. Existing manager clone/boot/registration timings cover the
-full path through listening. Durations are monotonic; nested spans overlap and
-must not be summed with their parent. Explicit validation returns fixed numeric
-systemd activation timestamps for SSH, Docker, network wait and cloud-init.
-They do not measure service activation duration or establish a critical path.
-Use [systemd-analyze](https://www.freedesktop.org/software/systemd/man/latest/systemd-analyze.html)
-on an isolated clone for dependency analysis before disabling any service.
-
-The explicit guest factory operation is `guest linux prepare-image`, invoked as
-guest root with JSON on stdin containing `name`, `controller_id`, `boot_id` and
-`helper_sha256`. These must match a fresh, owned, unregistered bootstrap and the
-selected helper. It installs the protected helper, prepares DNS, sanitizes bounded
-factory runner logs, clears the factory machine-id/random seed/SSH host keys and
-installs a systemd prerequisite to generate host keys before ssh.service. It
-refuses credentials, nonempty job work, worker logs, unknown files and links.
-It removes only its two proven bootstrap files and records public provenance at
-`/etc/bivouac/prepared-image.json`. No package download or runner registration
-occurs. Never invoke factory preparation in a production guest or on the host.
-
-The host factory entry point is:
+Use an independent options file, root and controller ID for factory work;
+never point it at production ownership state. The credential-free host entry is:
 
 ```powershell
 bivouac crosvm build-image --options native-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --output-root D:\ImageBuild\Linux-Images
 ```
 
 The output directory must be absent, absolute, named `Linux-Images` and outside
-disposable instance storage. Use an independent root/controller/options file;
-never point a factory at production ownership state. The command bootstraps a
-fresh clone, validates absence of a listener, runs sanitation and schedules a
-short guest-only clean-shutdown timer. The host must receive an acknowledgement,
-then prove natural exit code zero, an empty recorded process group and absence
-of the supervisor/VM. It checks the overlay backing metadata again before
-one-worker `qemu-img convert` creates a raw image. Output geometry and flush must
-pass before `manifest.json` is published last. It never overwrites an image or
-changes the source; source cleanup uses the normal ownership contract. One-time
-conversion may read the complete source; no such IO is added to job boot.
-A failed conversion keeps only unpublishable owned staging for inspection.
+disposable instance storage. The command creates a fresh clone and invokes
+`guest linux prepare-image` as guest root with a JSON bootstrap binding on stdin.
+It sanitizes factory runner state, prepares identities for renewal and schedules
+clean shutdown. Native absence and backing checks precede one-worker raw
+conversion. `manifest.json` is published last, after geometry checks and flush;
+partial output remains unpublishable. Source cleanup runs on success or failure.
+No package download, runner registration or deployment occurs.
 
-The manifest is public provenance, not a new whole-image digest contract. Raw
-contents remain operator-managed, with the same per-clone metadata/backing checks
-as existing images. Keep the selected helper binary whose hash the image contains;
-rebuilding/changing it requires a new image for reuse or the normal upload path.
+Sanitation refuses enrolled runners, nonempty job work, worker logs, unknown
+runner diagnostics and links. It retains the designated SSH authorization public
+key and public provenance at `/etc/bivouac/prepared-image.json`. The uploaded
+home-directory helper, system journal and login records are currently retained;
+use only a credential-free generic factory source. Private client keys,
+GitHub/JIT credentials and repositories never belong in a baseline. Empty
+[machine-id](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html)
+requests a new identity on cold boot; SSH host keys regenerate before ssh.service.
+Do not generalize/reset a captured image again.
 
 Create another independent options/root/controller with `baseline` pointing to
 `<Linux-Images>/disk.raw`, then run sequential cold trials:
@@ -146,56 +122,40 @@ Create another independent options/root/controller with `baseline` pointing to
 bivouac crosvm validate --options prepared-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --require-prepared
 ```
 
-`--require-prepared` fails if the exact helper is unavailable or any DNS repair
-is needed. Its bounded report includes SHA-256 fingerprints of machine-id and
-the server's public host key; compare multiple fresh clones for distinct values.
-No private key or raw machine identity is returned. Every trial must finish with
-owned processes/overlay/SSH pin removed before another starts.
+`--require-prepared` refuses helper upload or DNS repair. Compare the returned
+machine-id and public SSH-key hashes across fresh clones for distinct values;
+no raw machine identity or private key is returned. Confirm absence of runner/job
+state, public DNS, GPU/CDI readiness and complete cleanup before deployment.
+Every trial must remove its owned processes, overlay and SSH pin before the next.
+The same-boot `validate --exercise-prepared-image` sanitation/reuse exercise
+publishes no image and skips cold-boot identity probes because sanitation has
+cleared those files. It cannot establish key renewal or cold-start performance.
 
-Production use still needs provenance review and repeated cold-boot validation
-of the independently captured baseline, followed by the normal explicit deployment
-procedure.
-Do not generalize/reset a captured image again or deploy a partially prepared
-image. Confirm distinct machine IDs and server host keys across clones, absence
-of runner/job/credential state, public DNS, GPU/CDI readiness and complete cleanup.
-The designated SSH authorization public key is retained; private client keys,
-GitHub/JIT credentials and repositories never belong in the baseline. Empty
-[machine-id](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html)
-provides a new identity without requesting the missing-file first-boot path.
+Standalone validation and image building default to 2 CPUs and 2048 MiB, bounded
+by 1-4 CPUs and 1024-4096 MiB. They leave 6144 MiB physical availability and
+2048 MiB commit headroom by default, configurable with `--reserve-memory-mb` and
+`--reserve-commit-mb`. Before launch, both floors additionally reserve the guest's
+requested RAM. During the trial, reserves are checked every two seconds; losing
+either reading or floor cancels only the owned trial. This policy is separate
+from the installed manager's admission configuration and requires no elevation.
 
-`crosvm validate --exercise-prepared-image` exercises factory preparation and
-requires actual helper/DNS reuse within the same running test clone, then deletes
-it. **It publishes no image and does not prove a prepared cold boot or key renewal.**
-Use a separate options file/root/controller ID, bounded resources and the filtered
-runtime. This validation is credential-free and uses no CI runner labels. It
-requires ordinary-user WHPX availability, not UAC. It admits only with spare
-memory/commit, watches reserves every two seconds and cancels only its test guest
-if physical availability falls below 6 GiB or commit headroom below 2 GiB.
+Structured `linux startup stage` logs measure clone, native start, SSH,
+helper check/upload, bootstrap, cache setup, JIT delivery and listener launch.
+Guest bootstrap adds DNS/helper/total durations and reuse/change flags. Nested
+spans overlap; do not add them to their parents. Validation's numeric systemd
+activation timestamps are boot milestones, not service durations or a critical
+path. Use `systemd-analyze` on an isolated clone before disabling services.
 
-One isolated 2-CPU/2-GiB trial observed 3.182 s upload bootstrap versus 0.962 s
-prepared reuse in the same VM; DNS was 121 ms with a repair versus 32 ms without
-writes. Those numbers do not establish a cold-start speedup. A subsequent explicit
-build passed clean shutdown/native absence and captured a new raw image with
-published provenance; its source clone was removed. Three sequential fresh
-prepared cold boots passed in 12.313 s, 10.738 s and
-10.884 s through guest readiness. Each proved exact helper/DNS reuse, distinct
-machine and SSH-host-key fingerprints, runner/GPU/CDI readiness and cleanup.
-These host-monotonic stage sums exclude runner registration/listening. The
-prepared baseline also passed provider reopen/adoption and intentional recorded
-supervisor-loss cleanup. An independent manager reached real JIT listening in
-16.887 s (404 ms clone, 11.495 s readiness, 4.988 s registration/listening),
-then Off deregistered its idle runner and fully cleaned up. Two sequential smoke jobs in fresh prepared guests also passed in 18.975 s and
-18.046 s from clone through listening, with complete runner/guest cleanup. The repository CI workflow
-has an explicit `workflow_dispatch` input, `prepared_linux`, for two sequential
-smoke jobs on the dedicated `bivouac-linux-prepared-validation` label. Leave the
-input false for normal hosted checks. Provision that label only in an independent
-one-runner validation home; the smoke checks helper reuse, fresh sentinel state,
-GPU/CDI, Docker, DNS and public HTTPS without repository credentials or checkout.
-For a public repository, use a separate test runner group that permits public
-repositories and is restricted to the selected repository and exact trusted
-workflow/branch. Do not broaden an existing production group to run the fixture.
-Retire its runners and remove the temporary group after validation.
-The installed production image/provider remains unchanged.
+For real JIT validation, the CI workflow's explicit `prepared_linux` dispatch
+input runs two sequential smoke jobs on `bivouac-linux-prepared-validation`.
+Normal PR/push CI remains GitHub-hosted. Provision the isolated runner before
+dispatch: `timeout-minutes: 3` bounds execution, not waiting for a runner.
+The jobs check helper reuse, fresh sentinels, GPU/CDI, Docker, DNS and HTTPS
+without checkout or repository credentials. Use a separate one-runner home and
+a temporary runner group restricted to this repository and the exact trusted
+workflow/branch; never broaden a production group. Remove the test runners and
+group after validation. Keeping this dispatch-only fixture does not provision
+runners or authorize production changes.
 
 ## Isolated configuration
 

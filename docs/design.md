@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128Ã¢â‚¬â€œ129 s in the crash tests). A job
+  GitHub expires the dead session (128–129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet Ã¢â‚¬Â¦] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet …] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -806,71 +806,45 @@ baseline. JIT input arrives over authenticated SSH stdin, is consumed once,
 and is never staged on the host. PID/start-time/executable proof protects
 listener cancellation. Logs and ZIP diagnostics are bounded and redacted.
 
-Linux readiness first fingerprints a prepared helper at the fixed root-owned
-`/usr/local/libexec/bivouac-guest` path. A fixed stdin script verifies every
-ancestor's owner/mutation bits, rejects links and computes the helper SHA-256
-without executing it. Only an exact match with the selected host helper skips
-SCP and chmod; absent, stale or untrusted files use the existing fresh upload.
-SSH transport failure refuses readiness rather than triggering a fallback.
-Bootstrap creates its private runtime helper once: a link to the verified
-root-owned helper or an exclusive copy of the uploaded helper. Subsequent
-operations and adoption use that fixed runtime path; listener launch no longer
-copies the helper again. Changing the selected helper requires a new image build
-for reuse, or takes the upload path until then.
+Linux readiness fingerprints `/usr/local/libexec/bivouac-guest` without executing
+it. A fixed stdin script verifies root ownership, mutation bits and absence of
+links on every ancestor and the helper. Only an exact SHA-256 match with the
+selected host helper permits reuse; missing, stale or untrusted helpers are
+uploaded afresh. A trusted fingerprint mismatch emits a warning. SSH transport
+failure refuses readiness. Bootstrap installs one private runtime helper, used
+by later operations and adoption without a second listener-start copy.
 
-Public DNS preparation verifies both the persistent eth0 NetworkManager profile
-and its live upstream set. Exactly the two selected public resolvers are allowed,
-with DHCP DNS ignored for IPv4/IPv6 and no configured IPv6 DNS. A resolved loopback
-stub is accepted only after live upstream verification. Correct state is reused
-without profile modification, reapply or resolver writes. Incorrect profile/live
-state is repaired and rechecked; an invalid resolver is replaced only in the
-clone and re-read. Images without NetworkManager require a regular unmanaged
-resolver file. This never weakens the native packet filter or network snapshot.
+Public DNS is checked before repair: the persistent eth0 NetworkManager profile,
+its live upstream set and the resolver must agree on the two selected public
+resolvers. DHCP DNS is ignored for IPv4/IPv6, with no configured IPv6 DNS. A
+resolved loopback stub requires verified live public upstreams. Correct state
+causes no writes or reapply; each repair is re-read. Images without NetworkManager
+require a regular unmanaged resolver file. Native network policy still applies.
 
-Fixed structured `linux startup stage` records measure clone, native launch,
-SSH availability, helper check/upload, guest preparation, optional cache setup,
-JIT delivery and listener launch with host monotonic clocks. Guest preparation
-adds bounded numeric DNS/helper/total durations and reuse/change booleans; failed
-preparation returns fixed numeric stage codes. Existing manager timing still
-measures registration through listening. An explicit credential-free validation
-also reports selected systemd activation timestamps, which are guest boot
-milestones, not host elapsed durations or service dependency-chain measurements.
+Startup observations are bounded numeric durations, stage codes and reuse/change
+booleans. Host spans use monotonic clocks; guest systemd activation timestamps are
+boot milestones, not host elapsed times or dependency-chain measurements.
 
-Image factory work is explicit: root `guest linux prepare-image` requires the
-exact fresh bootstrap name/controller/boot binding and selected helper hash,
-before any JIT or listener state. It refuses runner credentials, work files,
-worker logs, links and unknown diagnostics; only empty work directories and
-bounded startup-only Runner logs are removed. It installs the protected helper,
-prepares DNS, configures host-key generation before ssh.service, removes the
-factory SSH host keys, stops random-seed persistence before removing the factory
-seed, and empties machine-id with the D-Bus identity following it. Empty
-machine-id requests a new clone identity without the missing-file first-boot
-semantics. Only the two proven bootstrap files are removed before recording
-public preparation provenance. The designated guest authorization public key
-remains; host private keys and GitHub credentials must never be in the image.
-Factory failure is reported as a bounded stage number; partial output is never
-promotion evidence.
+The explicit image factory requires a fresh bootstrap bound to the exact guest,
+controller, boot and helper hash, before JIT delivery. It refuses enrollment,
+nonempty job work, worker logs, links and unknown runner diagnostics. It installs
+the protected helper and DNS, removes factory SSH host keys and the random seed
+(after stopping seed persistence), and empties machine-id with D-Bus following it.
+SSH host keys regenerate before ssh.service on cold boot. Only proven bootstrap
+files are removed; public provenance and the designated SSH authorization key
+remain. Host private keys and GitHub credentials must never enter the image.
 
-`crosvm validate --exercise-prepared-image` tests this operation and requires
-actual helper and DNS reuse in the same owned guest, then discards it. It does
-not publish an image. The separate `crosvm build-image` mode prepares a new owned
-clone, schedules acknowledged clean shutdown with a short guest-only transient
-timer, and records a sanitation/shutdown receipt. Capture requires natural exit
-code zero, the recorded empty native job, current owner/marker/backing proof and
-confirmed supervisor/VM absence; forced stops and ambiguous outcomes refuse it.
-One converter worker flattens only that stopped overlay into an exclusively
-created external `Linux-Images` directory. It verifies raw geometry and flushes
-the output before atomically publishing public provenance last. This is one-time
-factory IO; ordinary job creation gains no disk hashing or conversion. Partial
-output retains its ownership marker and is not a usable published image. The
-source clone is ownership-checked and deleted independently of capture success.
+Capture requires acknowledged clean shutdown, natural exit code zero, an empty
+recorded native job, current ownership/backing proof and supervisor/VM absence.
+Forced stops and ambiguous outcomes refuse capture. A single converter writes
+into a fresh external directory whose parent is resolved through the filesystem;
+geometry verification and flush precede publication of the provenance manifest.
+Partial output is unpublishable; owned source cleanup runs independently of
+capture success. This factory IO adds no hashing or conversion to ordinary boot.
+Factory/reuse validation discards its sanitized guest; only fresh cold clones
+can establish distinct machine and SSH identities. See `docs/crosvm.md` for
+commands, resource guards and validation prerequisites.
 
-`validate --require-prepared` refuses any helper upload or DNS repair, and reports
-only public hashes of machine-id and the server's public SSH key so fresh cold
-clones can be compared without exposing identities/private keys. Native validation
-and image building use bounded CPU/RAM plus a host memory/commit reserve guard
-that cancels only their owned trial. Production controllers, labels, images and
-admission policy are unchanged.
 Windowed jobs own their compositor inside the guest/container; hardware
 rendering plus wl_shm/Pixman presentation does not imply direct scanout or
 a logged-in desktop capability. See `docs/crosvm.md` for setup and gates.
