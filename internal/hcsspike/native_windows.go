@@ -505,7 +505,7 @@ func copyDriverFile(src *os.Root, relative, destination string, size int64) erro
 	}
 	n, err := io.Copy(out, io.LimitReader(in, size+1))
 	if err == nil && n != size {
-		err = errors.New("GPU driver file changed during copy")
+		err = fmt.Errorf("GPU driver file changed during copy (expected %d bytes, copied %d)", size, n)
 	}
 	if err == nil {
 		err = out.Sync()

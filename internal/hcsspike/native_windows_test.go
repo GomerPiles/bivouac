@@ -144,3 +144,37 @@ func TestBasicPropertyQueryUsesSchemaDefault(t *testing.T) {
 		t.Fatal("basic identity must use default properties, without an invalid selector")
 	}
 }
+
+func TestDriverCopyRequiresExactObservedSize(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		size      int64
+		wantError bool
+	}{{"exact", 7, false}, {"short", 8, true}, {"grew", 6, true}, {"empty", 0, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := t.TempDir()
+			if err := os.WriteFile(filepath.Join(source, "private-driver-name"), []byte("payload"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.OpenRoot(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = root.Close() }()
+			destination := filepath.Join(t.TempDir(), "copy")
+			err = copyDriverFile(root, "private-driver-name", destination, tc.size)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("size gate mismatch: %v", err)
+			}
+			if err != nil && (strings.Contains(err.Error(), source) || strings.Contains(err.Error(), "private-driver-name")) {
+				t.Fatal("copy diagnostic exposed a source identity")
+			}
+			if err == nil {
+				b, e := os.ReadFile(destination)
+				if e != nil || string(b) != "payload" {
+					t.Fatal("successful copy differs")
+				}
+			}
+		})
+	}
+}
