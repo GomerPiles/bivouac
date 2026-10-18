@@ -210,6 +210,7 @@ func TestPreparedCredentialRotationRequired(t *testing.T) {
 		t.Fatal("prepared clone admitted without credential rotation")
 	}
 	r.CredentialRotated = true
+	r.Boot = &GuestBootTimings{TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
 	b, _ = json.Marshal(r)
 	if _, err := validateRenderReport(b, true); err != nil {
 		t.Fatal(err)
@@ -488,5 +489,27 @@ func TestPreparedNativeOnlySessionDoesNotClaimSSHProof(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal("native-only trial requires guest SSH", err)
+	}
+}
+
+func TestGuestBootCheckpointsRequireOrderedBoundedUptime(t *testing.T) {
+	good := GuestBootTimings{TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
+	if !good.valid() {
+		t.Fatal("ordered uptime rejected")
+	}
+	for _, bad := range []GuestBootTimings{{}, {TaskBeginMS: 1000, KeysBeginMS: 999}, {TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 600001}, {TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 900, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}} {
+		if bad.valid() {
+			t.Fatal("invalid boot checkpoints admitted")
+		}
+	}
+	r := renderResult{CredentialRotated: true, GuestReady: true, DesktopReady: true, HardwareD3D11: true, Presented: true, PixelReadback: true, Stage: 7, AdapterCount: 1, HardwareAdapterCount: 1, VendorID: 0x1002, DeviceID: 1}
+	b, _ := json.Marshal(r)
+	if _, err := validateRenderReport(b, true); err == nil {
+		t.Fatal("missing prepared boot checkpoints admitted")
+	}
+	r.Boot = &good
+	b, _ = json.Marshal(r)
+	if _, err := validateRenderReport(b, true); err != nil {
+		t.Fatal(err)
 	}
 }

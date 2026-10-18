@@ -211,7 +211,12 @@ Validated-desktop times are 49.991 s including 11.818 s initial image verificati
 then 35.272 s and 37.052 s. Agent connection is still 23.531-25.249 s over 7-8
 attempts; the remaining guest startup interval has not been attributed. All three
 boots pass unique-key, credential, SSH, console, rendering and owned-cleanup
-gates. The installed provider and production CI are unchanged.
+gates. New bounded guest-uptime checkpoints distinguish task entry, key generation and
+SSH/agent service startup. The schema requires complete, ordered values within
+ten minutes, with no wall-clock timestamps or guest-controlled text. This keeps
+fresh keys, service ordering and every readiness check intact. Local race tests,
+vet, lint and script/report regressions pass; a newly captured instrumented image
+and live timing remain pending. The installed provider and production CI are unchanged.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

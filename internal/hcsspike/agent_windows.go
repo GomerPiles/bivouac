@@ -275,6 +275,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		report.TimingsMS.Guest.ConsoleWaitMS = observed.consoleWaitMS
 		report.TimingsMS.Guest.GPUDeviceWaitMS = observed.gpuDeviceWaitMS
 		report.TimingsMS.Guest.InteractiveProbeMS = observed.interactiveProbeMS
+		report.Boot = observed.Boot
 		report.CredentialRotated = observed.CredentialRotated
 		report.GuestValidationStep = observed.ValidationStep
 		report.GuestReady = observed.GuestReady

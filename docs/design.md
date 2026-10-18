@@ -853,7 +853,17 @@ Three same-image cold boots pass with native attempts capped at 3.000 s,
 times are 49.991 s including 11.818 s initial image verification, then 35.272 s
 and 37.052 s with verification reused. Keys, credential rotation, SSH, hardware
 rendering and owned cleanup pass. The remaining agent-readiness interval still
-needs guest startup attribution. The experiment is not wired into
+needs guest startup attribution. The fixed startup task now writes a bounded
+numeric checkpoint file for task entry, key-generation entry/exit, sshd running
+and guest-agent running. The pinned validation script returns these with its
+current guest uptime. Ordered positive uptimes must fit the ten-minute cold-boot
+bound; missing, wrapped, incomplete or out-of-order values refuse prepared
+readiness. Guest uptime has a different origin from host stopwatch spans: only
+within-guest stage differences are directly comparable. The source image contains
+no checkpoint file, and a pre-existing file refuses task startup. The image's
+sanitation/validation pins require a rebuild for this instrumentation. Its local
+regressions pass; instrumented live capture and boot measurement remain pending.
+The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template

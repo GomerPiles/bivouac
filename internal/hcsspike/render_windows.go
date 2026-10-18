@@ -37,7 +37,8 @@ func desktopValidationCommand() string {
 }
 
 type renderResult struct {
-	CredentialRotated         bool `json:"credential_rotated"`
+	Boot                      *GuestBootTimings `json:"boot,omitempty"`
+	CredentialRotated         bool              `json:"credential_rotated"`
 	consoleWaitMS             uint64
 	gpuDeviceWaitMS           uint64
 	interactiveProbeMS        uint64
@@ -102,6 +103,9 @@ func validateRenderReport(b []byte, prepared bool) (renderResult, error) {
 	}
 	if prepared && !r.CredentialRotated {
 		return r, errors.New("prepared clone credential rotation not proven")
+	}
+	if prepared && (r.Boot == nil || !r.Boot.valid()) {
+		return r, errors.New("prepared boot checkpoints missing or outside monotonic bounds")
 	}
 	return r, nil
 }

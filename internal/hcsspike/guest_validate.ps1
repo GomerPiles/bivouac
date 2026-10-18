@@ -111,7 +111,15 @@ public static class SpikeConsole {
   Write-SpikeStep 25
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
-  $report=[ordered]@{credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code} | ConvertTo-Json -Compress
+  $bootTimings=$null
+  if($data.prepared -eq $true){
+   $bootPath=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-boot.json'
+   $bootFile=Get-Item -Force -LiteralPath $bootPath
+   if($bootFile.PSIsContainer -or ($bootFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $bootFile.Length -gt 2048){exit 28}
+   $boot=Get-Content -LiteralPath $bootPath -Raw|ConvertFrom-Json
+   $bootTimings=[ordered]@{task_begin_ms=[uint64]$boot.task_begin_ms;keys_begin_ms=[uint64]$boot.keys_begin_ms;keys_end_ms=[uint64]$boot.keys_end_ms;sshd_ready_ms=[uint64]$boot.sshd_ready_ms;agent_ready_ms=[uint64]$boot.agent_ready_ms;observed_ms=[uint64][Environment]::TickCount}
+  }
+  $report=[ordered]@{boot=$bootTimings;credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code} | ConvertTo-Json -Compress -Depth 3
   [Console]::Out.Write($report)
   [Console]::Out.Flush()
  } finally {Unregister-ScheduledTask -TaskName $task -Confirm:$false}

@@ -491,6 +491,24 @@ manifest binds sanitation code, so images made with older sanitation are refused
 Repeated prepared trials reject missing or repeated public server fingerprints.
 The corrected image passed this gate on all three cold boots.
 
+## Guest startup checkpoints
+
+The startup task records `boot.task_begin_ms`, `keys_begin_ms`, `keys_end_ms`,
+`sshd_ready_ms` and `agent_ready_ms`; the validation script adds `observed_ms`.
+These use guest uptime from [Environment.TickCount](https://learn.microsoft.com/dotnet/api/system.environment.tickcount),
+not wall-clock dates. The reported values must be positive, ordered and within
+ten minutes of a fresh boot. A pre-existing checkpoint file refuses startup;
+missing/incomplete or invalid metrics refuse prepared readiness. Reports contain
+only fixed numeric fields, never key material or service/event log text.
+
+`task_begin_ms` includes guest boot, task dispatch and PowerShell initialization.
+Key generation and the subsequent service starts have separate elapsed spans.
+Guest uptime and the host stopwatch have different origins, so do not directly
+subtract one from the other. Startup/security ordering and task priority are
+unchanged for the instrumented control. Local regression checks pass; live image
+capture and three cold-boot measurements are pending. Sanitation and validation
+pins require rebuilding the prepared image for the new fixed scripts.
+
 ## Desktop validation checkpoints
 
 `guest_validation_step` retains only an allowlisted number from the SSH stderr

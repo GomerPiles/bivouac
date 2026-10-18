@@ -53,6 +53,11 @@ try {
  [IO.File]::WriteAllText($sshdConfig,"ListenAddress 127.0.0.1`r`nPasswordAuthentication no`r`nKbdInteractiveAuthentication no`r`nPubkeyAuthentication yes`r`nStrictModes yes`r`nSubsystem sftp sftp-server.exe`r`nMatch Group administrators`r`n AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys`r`n",[Text.UTF8Encoding]::new($false))
  $startup='$ErrorActionPreference=''Stop''
 $ProgressPreference=''SilentlyContinue''
+$bootPath=''C:\Windows\AppSandbox\hcs-spike-boot.json''
+if(Test-Path -LiteralPath $bootPath){exit 1}
+$boot=[ordered]@{task_begin_ms=[Environment]::TickCount;keys_begin_ms=0;keys_end_ms=0;sshd_ready_ms=0;agent_ready_ms=0}
+function Write-BootCheckpoint{[IO.File]::WriteAllText($bootPath,($boot|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))}
+Write-BootCheckpoint
 $service=Get-Service sshd
 $agent=Get-Service AppSandboxAgent
 if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped'' -or $agent.StartType -ne ''Disabled'' -or $agent.Status -ne ''Stopped''){exit 1}
@@ -60,14 +65,19 @@ foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecds
  $path=Join-Path ''C:\ProgramData\ssh'' $name
  if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
 }
+$boot.keys_begin_ms=[Environment]::TickCount;Write-BootCheckpoint
 & ''C:\Program Files\OpenSSH\ssh-keygen.exe'' @(''-A'') *> $null
 if($LASTEXITCODE){exit 1}
+$boot.keys_end_ms=[Environment]::TickCount;Write-BootCheckpoint
 foreach($name in @(''ssh_host_rsa_key'',''ssh_host_ecdsa_key'',''ssh_host_ed25519_key'')){if(!(Test-Path -LiteralPath (Join-Path ''C:\ProgramData\ssh'' $name) -PathType Leaf)){exit 1}}
 Set-Service sshd -StartupType Manual
 Start-Service sshd
+$boot.sshd_ready_ms=[Environment]::TickCount;Write-BootCheckpoint
 Set-Service AppSandboxAgent -StartupType Manual
 Start-Service AppSandboxAgent
+$boot.agent_ready_ms=[Environment]::TickCount;Write-BootCheckpoint
 '
+ if(Test-Path -LiteralPath (Join-Path $base 'hcs-spike-boot.json')){exit 1}
  $startupPath=Join-Path $base 'hcs-spike-startup.ps1';Assert-Ordinary $startupPath
  [IO.File]::WriteAllText($startupPath,$startup,[Text.UTF8Encoding]::new($false))
  $taskName='bivouac-hcs-ssh-hostkeys'
