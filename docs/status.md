@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
-  5–10 s, teardown 1.3–1.8 s (power-off).
+- Timings: clone 1Ã¢â‚¬â€œ6 ms, boot to guest agent 22Ã¢â‚¬â€œ31 s, JIT to listening
+  5Ã¢â‚¬â€œ10 s, teardown 1.3Ã¢â‚¬â€œ1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -127,6 +127,25 @@ Validated live:
 - A controller crash mid-job: the supervisor and VM survived and were
   adopted. Off mid-job lets the job finish and cleans up.
 - A fresh guest reaches listening in about 18 s.
+
+Startup optimization is implemented: stage timing, exact prepared-helper reuse,
+one private runtime helper installation and verification-first public DNS with
+repairs only when needed. A separate ordinary-token 2-CPU/2-GiB native trial
+passed agentless SSH readiness, runner/GPU/CDI checks, factory sanitation and
+actual prepared helper/DNS reuse without runner registration. In that same guest,
+bootstrap was 3.182 s with upload and 0.962 s after preparation; DNS was 121 ms
+with a profile repair and 32 ms without writes. These are warm same-boot bootstrap
+observations, not a paired cold-boot speedup or a new clone-to-listening result.
+Owned native processes, overlay, SSH pin and instance records were removed.
+Windows and Linux/WSL regressions cover helper fallback, DNS refusal/repair,
+bounded reports and factory sanitation. Explicit clean capture also passed: acknowledged guest shutdown, natural exit
+code zero, recorded native absence, one-time raw conversion, durable provenance
+and owned source cleanup. The following cold validation was refused before VM
+creation because physical memory was below its admission reserve. Cold prepared
+boots and actual identity/SSH-key renewal remain unverified. The independent
+captured image is retained for these checks. No production image, binary or
+configuration changed, and no service was disabled solely from a boot timestamp.
+
 
 Open: private peers, NIC reconfiguration and dynamic interfaces, a cleanup
 soak, resource accounting with foreign managers, clean-room runtime

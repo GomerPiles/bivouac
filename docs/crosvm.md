@@ -77,6 +77,109 @@ copies completed hardware-rendered frames through wl_shm with
 `MESA_VK_WSI_DEBUG=sw`; it does not promise direct display scanout or DMA-BUF
 presentation. There is no emulated Windows desktop in this provider.
 
+## Prepared images and startup measurements
+
+The baseline already supplies installed packages and an unconfigured runner.
+Job clones do not reinstall them. A prepared baseline can additionally contain
+the exact selected helper at `/usr/local/libexec/bivouac-guest`, with root-owned
+ancestors and no group/other mutation permissions. Readiness verifies ownership,
+links and SHA-256 before executing that helper. A missing/stale helper falls back
+to upload; a failed SSH connection does not. Both paths still perform current
+ownership, GPU/CDI, runner-state and network-policy checks.
+
+DNS already configured correctly in the image is verified and reused. Readiness
+checks the persistent NetworkManager profile, active upstreams and resolver;
+repairs only incorrect state, then verifies the result. A local resolved stub is
+accepted only with independently confirmed public upstreams. No native network
+filter, host-prefix guard or per-clone JIT requirement is skipped.
+
+Structured `linux startup stage` records include durations for clone, native
+start, SSH availability, helper check/upload, bootstrap, cache setup, JIT delivery
+and listener launch. Guest bootstrap adds DNS/helper/total durations plus reuse
+and mutation flags. Existing manager clone/boot/registration timings cover the
+full path through listening. Durations are monotonic; nested spans overlap and
+must not be summed with their parent. Explicit validation returns fixed numeric
+systemd activation timestamps for SSH, Docker, network wait and cloud-init.
+They do not measure service activation duration or establish a critical path.
+Use [systemd-analyze](https://www.freedesktop.org/software/systemd/man/latest/systemd-analyze.html)
+on an isolated clone for dependency analysis before disabling any service.
+
+The explicit guest factory operation is `guest linux prepare-image`, invoked as
+guest root with JSON on stdin containing `name`, `controller_id`, `boot_id` and
+`helper_sha256`. These must match a fresh, owned, unregistered bootstrap and the
+selected helper. It installs the protected helper, prepares DNS, sanitizes bounded
+factory runner logs, clears the factory machine-id/random seed/SSH host keys and
+installs a systemd prerequisite to generate host keys before ssh.service. It
+refuses credentials, nonempty job work, worker logs, unknown files and links.
+It removes only its two proven bootstrap files and records public provenance at
+`/etc/bivouac/prepared-image.json`. No package download or runner registration
+occurs. Never invoke factory preparation in a production guest or on the host.
+
+The host factory entry point is:
+
+```powershell
+bivouac crosvm build-image --options native-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --output-root D:\ImageBuild\Linux-Images
+```
+
+The output directory must be absent, absolute, named `Linux-Images` and outside
+disposable instance storage. Use an independent root/controller/options file;
+never point a factory at production ownership state. The command bootstraps a
+fresh clone, validates absence of a listener, runs sanitation and schedules a
+short guest-only clean-shutdown timer. The host must receive an acknowledgement,
+then prove natural exit code zero, an empty recorded process group and absence
+of the supervisor/VM. It checks the overlay backing metadata again before
+one-worker `qemu-img convert` creates a raw image. Output geometry and flush must
+pass before `manifest.json` is published last. It never overwrites an image or
+changes the source; source cleanup uses the normal ownership contract. One-time
+conversion may read the complete source; no such IO is added to job boot.
+A failed conversion keeps only unpublishable owned staging for inspection.
+
+The manifest is public provenance, not a new whole-image digest contract. Raw
+contents remain operator-managed, with the same per-clone metadata/backing checks
+as existing images. Keep the selected helper binary whose hash the image contains;
+rebuilding/changing it requires a new image for reuse or the normal upload path.
+
+Create another independent options/root/controller with `baseline` pointing to
+`<Linux-Images>/disk.raw`, then run sequential cold trials:
+
+```powershell
+bivouac crosvm validate --options prepared-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --require-prepared
+```
+
+`--require-prepared` fails if the exact helper is unavailable or any DNS repair
+is needed. Its bounded report includes SHA-256 fingerprints of machine-id and
+the server's public host key; compare multiple fresh clones for distinct values.
+No private key or raw machine identity is returned. Every trial must finish with
+owned processes/overlay/SSH pin removed before another starts.
+
+Production use still needs provenance review and repeated cold-boot validation
+of the independently captured baseline, followed by the normal explicit deployment
+procedure.
+Do not generalize/reset a captured image again or deploy a partially prepared
+image. Confirm distinct machine IDs and server host keys across clones, absence
+of runner/job/credential state, public DNS, GPU/CDI readiness and complete cleanup.
+The designated SSH authorization public key is retained; private client keys,
+GitHub/JIT credentials and repositories never belong in the baseline. Empty
+[machine-id](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html)
+provides a new identity without requesting the missing-file first-boot path.
+
+`crosvm validate --exercise-prepared-image` exercises factory preparation and
+requires actual helper/DNS reuse within the same running test clone, then deletes
+it. **It publishes no image and does not prove a prepared cold boot or key renewal.**
+Use a separate options file/root/controller ID, bounded resources and the filtered
+runtime. This validation is credential-free and uses no CI runner labels. It
+requires ordinary-user WHPX availability, not UAC. It admits only with spare
+memory/commit, watches reserves every two seconds and cancels only its test guest
+if physical availability falls below 6 GiB or commit headroom below 2 GiB.
+
+One isolated 2-CPU/2-GiB trial observed 3.182 s upload bootstrap versus 0.962 s
+prepared reuse in the same VM; DNS was 121 ms with a repair versus 32 ms without
+writes. Those numbers do not establish a cold-start speedup. A subsequent explicit build passed clean shutdown/native absence and captured a
+new raw image with published provenance; its source clone was removed. The next
+cold trial was refused before VM creation because host physical memory was below
+the admission reserve. Cold boot and actual identity/key renewal remain pending.
+The installed production image/provider remains unchanged.
+
 ## Isolated configuration
 
 Keep production controllers and labels unchanged. Use a separate
@@ -143,7 +246,9 @@ The explicit credential-free test accepts a JSON `Options` object matching
 the native fields above plus `name` and the isolated `controller_id`:
 
 ```text
-bivouac crosvm validate --options native-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --exercise-recovery
+bivouac crosvm validate --options native-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --exercise-recovery
+# Optional separate factory/reuse trial; no image is published:
+bivouac crosvm validate --options native-options.json --helper D:\RunnerTools\bivouac-linux-amd64 --cpu 2 --memory-mb 2048 --exercise-prepared-image
 ```
 
 It creates one recorded clone, proves generic guest/GPU readiness, reopens and
