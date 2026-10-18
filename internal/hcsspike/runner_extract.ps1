@@ -20,7 +20,19 @@ try {
    $parent=Split-Path -Parent $target
    if(!(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Path $parent -Force|Out-Null}
    $input=$entry.Open();$output=[IO.File]::Open($target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-   try{$input.CopyTo($output);if($output.Length -ne $entry.Length){exit 1}}finally{$output.Dispose();$input.Dispose()}
+   try{
+    $buffer=New-Object byte[] 65536
+    $written=[int64]0
+    while($true){
+     $limit=[int][Math]::Min($buffer.Length,$entry.Length-$written+1)
+     $count=$input.Read($buffer,0,$limit)
+     if($count -eq 0){break}
+     if($count -gt $entry.Length-$written){exit 1}
+     $output.Write($buffer,0,$count);$written+=$count
+    }
+    if($written -ne $entry.Length){exit 1}
+    $output.Flush($true)
+   }finally{$output.Dispose();$input.Dispose()}
   }
  }finally{$archive.Dispose()}
  if(!(Test-Path -LiteralPath (Join-Path $runner 'bin\Runner.Listener.exe') -PathType Leaf)){exit 1}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -246,7 +247,7 @@ func TestGuestAutologonHelperCompilesWithoutStoringAnything(t *testing.T) {
 	}
 }
 func TestRunnerExtractionRejectsTraversalLinksAndDuplicates(t *testing.T) {
-	for _, kind := range []string{"valid", "traversal", "absolute", "stream", "symlink", "duplicate"} {
+	for _, kind := range []string{"valid", "traversal", "absolute", "stream", "symlink", "duplicate", "false-size"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "runner.zip")
@@ -283,6 +284,20 @@ func TestRunnerExtractionRejectsTraversalLinksAndDuplicates(t *testing.T) {
 			}
 			if err = errors.Join(z.Close(), f.Close()); err != nil {
 				t.Fatal(err)
+			}
+			if kind == "false-size" {
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				offset := bytes.Index(data, []byte{'P', 'K', 1, 2})
+				if offset < 0 {
+					t.Fatal("central directory missing")
+				}
+				binary.LittleEndian.PutUint32(data[offset+24:offset+28], 1)
+				if err = os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			scriptPath := filepath.Join(dir, "extract.ps1")
 			if err = os.WriteFile(scriptPath, []byte(runnerExtract), 0600); err != nil {
