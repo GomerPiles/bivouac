@@ -104,8 +104,9 @@ func (b *NativeBackend) CaptureRawImage(ctx context.Context, name, outputRoot, h
 	b.mu.Lock()
 	root := b.opts.Root
 	b.mu.Unlock()
-	if strings.EqualFold(outputRoot, root) || strings.HasPrefix(strings.ToLower(outputRoot), strings.ToLower(root)+string(filepath.Separator)) {
-		return "", errors.New("published images must be outside disposable instance storage")
+	outputRoot, err = imageOutputPath(outputRoot, root)
+	if err != nil {
+		return "", err
 	}
 
 	if err = ctx.Err(); err != nil {
@@ -156,6 +157,24 @@ func (b *NativeBackend) CaptureRawImage(ctx context.Context, name, outputRoot, h
 	}{owner, opts.Baseline, imageInfo.Size(), true, true, true}
 	if err = writeJSON(outputRoot, "manifest.json", manifest); err != nil {
 		return "", err
+	}
+	return output, nil
+}
+
+// The destination does not exist yet. Resolve its existing parent through the
+// native filesystem API so junctions and short names cannot hide instance storage.
+func imageOutputPath(outputRoot, instanceRoot string) (string, error) {
+	parent, err := resolvePath(filepath.Dir(outputRoot))
+	if err != nil {
+		return "", errors.New("image output parent cannot be resolved")
+	}
+	root, err := resolvePath(instanceRoot)
+	if err != nil {
+		return "", errors.New("instance storage cannot be resolved")
+	}
+	output := filepath.Join(parent, filepath.Base(outputRoot))
+	if strings.EqualFold(output, root) || strings.HasPrefix(strings.ToLower(output), strings.ToLower(root)+string(filepath.Separator)) {
+		return "", errors.New("published images must be outside disposable instance storage")
 	}
 	return output, nil
 }
