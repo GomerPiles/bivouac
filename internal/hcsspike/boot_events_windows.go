@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -77,7 +78,7 @@ func parseBootEventSnapshot(b []byte) (bootEventSnapshot, error) {
 func bootEventCommand(script string) string {
 	// Only embedded source is encoded. No configuration or guest-supplied value
 	// is interpolated into the remote command.
-	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(bootEventsCommon+script)
+	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(strings.ReplaceAll(bootEventsCommon+script, "\r\n", "\n"))
 }
 
 func joinBootEvents(task, shell bootEventSnapshot) *BootEvents {

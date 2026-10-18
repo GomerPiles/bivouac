@@ -1,11 +1,11 @@
 $report.engine_ready_ms=$null;$report.shell_start_ms=$null;$report.shell_ready_ms=$null
+try{$report.log_enabled=[bool](Get-WinEvent -ListLog 'Microsoft-Windows-PowerShell/Operational' -ErrorAction Stop).IsEnabled}catch{}
 try{
  if(!$report.clock_stable){throw 'clock'}
- $engines=@(Read-BootEvents @{FilterHashtable=@{LogName='Windows PowerShell';Id=400;StartTime=$boot}}|Where-Object {([string]$_.Properties[2].Value).Contains('hcs-spike-startup.ps1')})
+ $engines=@(Read-BootEvents @{FilterHashtable=@{LogName='Windows PowerShell';Id=400;StartTime=$boot}}|Where-Object {([string]$_.Properties[2].Value).Contains('C:\Windows\AppSandbox\hcs-spike-startup.ps1')})
  if($engines.Count -ne 1 -or $engines[0].ProcessId -lt 1){throw 'identity'}
  $report.engine_ready_ms=Event-Milliseconds $engines[0]
  $targetPID=$engines[0].ProcessId
- $report.log_enabled=[bool](Get-WinEvent -ListLog 'Microsoft-Windows-PowerShell/Operational' -ErrorAction Stop).IsEnabled
  if(!$report.log_enabled){throw 'unavailable'}
  $items=@(Read-BootEvents @{FilterHashtable=@{LogName='Microsoft-Windows-PowerShell/Operational';Id=@(40961,40962);StartTime=$boot}}|Where-Object ProcessId -eq $targetPID)
  foreach($entry in @(@(40961,'shell_start_ms'),@(40962,'shell_ready_ms'))){

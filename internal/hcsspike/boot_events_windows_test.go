@@ -75,6 +75,7 @@ function Get-WinEvent($FilterHashtable,$MaxEvents,$ListLog,$ErrorAction,$ErrorVa
   return
  }
  if($FilterHashtable.LogName -eq 'Windows PowerShell'){
+  if($d.mode -eq 'missing'){return}
   return New-FixtureEvent 400 4 123 30 '<Event/>' 'discarded-private-fixture C:\Windows\AppSandbox\hcs-spike-startup.ps1'
  }
  foreach($id in @(40961,40962)){
@@ -95,6 +96,7 @@ if($d.kind -eq 'task'){
  if($d.mode -eq 'disabled' -or $d.mode -eq 'overflow'){if($r.query_complete -or $null -ne $r.process_created_ms){exit 5}}
  elseif(!$r.query_complete -or $r.task_start_ms -ne 2000 -or $r.process_created_ms -ne 3000 -or $r.action_start_ms -ne 3000){exit 6}
 }else{
+ if($d.mode -eq 'missing'){if(!$r.log_enabled -or $r.query_complete -or $null -ne $r.engine_ready_ms){exit 10};exit 0}
  if($r.engine_ready_ms -ne 4000){exit 7}
  if($d.mode -eq 'disabled'){if($r.query_complete -or $null -ne $r.shell_start_ms){exit 8}}
  elseif(!$r.query_complete -or $r.shell_start_ms -ne 3200 -or $r.shell_ready_ms -ne 5000){exit 9}
@@ -106,8 +108,8 @@ func TestBootEventQueriesCorrelateIdentityAndSuppressUnavailableTimes(t *testing
 		if len(bootEventCommand(part.script)) > 7800 {
 			t.Fatal("fixed event query approaches remote cmd limit")
 		}
-		for _, mode := range []string{"valid", "clock", "disabled", "overflow"} {
-			if mode == "overflow" && part.name != "task" {
+		for _, mode := range []string{"valid", "clock", "disabled", "overflow", "missing"} {
+			if (mode == "overflow" && part.name != "task") || (mode == "missing" && part.name != "shell") {
 				continue
 			}
 			t.Run(part.name+"/"+mode, func(t *testing.T) {
