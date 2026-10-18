@@ -85,8 +85,7 @@ $boot.agent_ready_ms=[Environment]::TickCount;Write-BootCheckpoint
  $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
  $action=New-ScheduledTaskAction -Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Windows\AppSandbox\hcs-spike-startup.ps1'
  $trigger=New-ScheduledTaskTrigger -AtStartup
- # Normal priority avoids background scheduling for this boot admission path.
- $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Priority 4
+ $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
  Register-ScheduledTask -TaskName $taskName -Principal $principal -Action $action -Trigger $trigger -Settings $settings|Out-Null
  # The upstream agent can re-enable sshd, so it must also stay stopped until
  # the boot task has generated server keys and started SSH.

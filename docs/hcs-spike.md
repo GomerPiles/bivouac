@@ -522,9 +522,28 @@ pass every key, credential, SSH, console, rendering and owned-cleanup gate.
 The first desktop span includes 11.714 s initial image verification. The dominant
 interval is before the script begins, not key generation or service starts. These
 metrics do not separate OS boot, task dispatch and PowerShell initialization.
-The next experiment requests [normal task priority](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-priority)
-(4), replacing the scheduler default below-normal priority (7). It preserves all
-key/security/service ordering and readiness gates; its live effect is unverified.
+A separate image tested [normal task priority](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-priority)
+(4) against the default below-normal priority (7). Three alternating pairs used
+30 continuous seconds of sufficient reserves before every boot. All six boots
+passed distinct server keys, credential rotation, SSH, console, hardware rendering
+and native-absence/owned-cleanup checks. Each invocation verified its pinned
+images independently; the table subtracts only that host-measured verification
+span from its host desktop milestone.
+
+| Pair | Agent: default | Agent: normal | Desktop: default | Desktop: normal |
+| --- | --- | --- | --- | --- |
+| 1 | 23.482 s | 23.425 s | 36.225 s | 36.535 s |
+| 2 | 25.451 s | 26.633 s | 39.224 s | 42.138 s |
+| 3 | 26.988 s | 27.013 s | 40.077 s | 44.436 s |
+
+Normal priority started the script earlier but did not make the validated desktop
+ready sooner in any pair. In the first pair, task entry moved from 21.015 to
+17.875 s guest uptime, while the subsequent work grew from 1.844 to 4.968 s;
+the agent-running checkpoint was almost identical. This small sample does not
+establish a general performance penalty, but supplies no reason to keep the
+change. Default priority is retained. No security/service ordering or readiness
+gate was removed. Separating OS boot, task dispatch and PowerShell initialization
+requires finer startup tracing before changing the boot mechanism.
 Sanitation and validation pins require rebuilding the prepared image when the
 fixed scripts change.
 

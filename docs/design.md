@@ -804,8 +804,7 @@ Sanitation refuses runner registration/work/diagnostic state, removes the fixed
 probe output, cached answer files and authorized SSH keys, and removes server
 host keys and schedules shutdown in that same SSH operation; no new SSH exec
 may regenerate keys between sanitation and capture. A fixed guest SYSTEM startup
-task runs at normal priority, requires disabled/stopped sshd and guest agent,
-removes any residual server
+task requires disabled/stopped sshd and guest agent, removes any residual server
 keys, generates fresh ones, then enables/starts sshd followed by the guest agent.
 The upstream agent can re-enable sshd, so both services stay disabled until this
 ordering completes. Password authentication is disabled; SSH binds only loopback and
@@ -866,11 +865,16 @@ readiness. Guest uptime has a different origin from host stopwatch spans: only
 within-guest stage differences are directly comparable. The source image contains
 no checkpoint file, and a pre-existing file refuses task startup. The image's
 sanitation/validation pins require a rebuild for this instrumentation. Its local
-regressions, instrumented capture and three cold boots pass, including distinct
-server keys, credential rotation, hardware rendering and owned cleanup. The task
-now requests normal priority (4), instead of the scheduler default below-normal
-priority (7); a new image and paired live measurements are still required to
-establish its effect. No security/service ordering or host CI setting changes.
+regressions, instrumented capture and cold boots pass, including distinct server
+keys, credential rotation, hardware rendering and owned cleanup. Three alternating
+control/normal-priority pairs also pass all six boots and cleanup, but normal
+priority provides no repeatable readiness benefit: validated-desktop spans excluding
+image verification are 36.225/39.224/40.077 s for control and
+36.535/42.138/44.436 s for normal priority. The default below-normal task priority
+(7) is retained. Script entry alone is not a readiness milestone; an earlier
+entry can be offset by slower subsequent work. OS boot, task dispatch and
+PowerShell initialization still require finer attribution before replacing the
+startup path. Security/service ordering and host CI settings are unchanged.
 The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only

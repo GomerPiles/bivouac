@@ -222,9 +222,13 @@ generation takes 0.485-0.578 s, SSH startup 0.281-0.312 s and agent startup
 0.516-0.610 s. All identity/readiness/rendering/cleanup gates pass. Validated
 desktop times are 49.247 s including 11.714 s initial verification, then 39.694 s
 and 38.661 s. The large interval precedes script execution; OS boot, task dispatch
-and PowerShell initialization are not yet separated. Normal task priority (4)
-replaces default below-normal (7) as a targeted experiment; its live effect is
-unverified. The installed provider and production CI are unchanged.
+and PowerShell initialization are not yet separated. Three alternating
+control/normal-priority pairs pass all six boots with distinct server keys and
+complete owned cleanup. Normal priority does not improve readiness in this sample:
+desktop spans excluding image verification are 36.225/39.224/40.077 s for control
+and 36.535/42.138/44.436 s for normal priority. Default task priority (7) is
+retained; no startup speedup is claimed from the earlier script entry. The
+installed provider and production CI are unchanged.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
