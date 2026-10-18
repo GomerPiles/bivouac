@@ -2,9 +2,11 @@ package manager
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/state"
 )
 
@@ -45,4 +47,20 @@ func TestPollCapacityRespectsForeignSlots(t *testing.T) {
 	if got := h.m.pollCapacity(context.Background(), "macos"); got != 1 {
 		t.Fatalf("poll capacity with foreign guest = %d, want 1", got)
 	}
+}
+
+func TestSessionEnsuresScaleSetLabels(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		p := c.Providers["macos"]
+		p.ScaleSetLabels = []string{"bivouac-lt-a", "self-hosted"}
+		c.Providers["macos"] = p
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.setMode(control.ModeOn)
+	done := h.run(ctx)
+	want := []string{"bivouac-macos-experimental", "bivouac-lt-a", "self-hosted"}
+	h.eventually("labels ensured", func() bool { return slices.Equal(h.gh.ScaleSetLabels(want[0]), want) })
+	cancel()
+	<-done
 }

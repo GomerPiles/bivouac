@@ -14,6 +14,7 @@ type Fake struct {
 	mu        sync.Mutex
 	nextID    int64
 	scaleSets map[string]int
+	labels    map[string][]string
 	Runners   map[int64]string // registered runner id -> name
 	Removed   []int64
 	Acquired  []int64
@@ -29,7 +30,7 @@ type Fake struct {
 
 // NewFake returns an empty fake.
 func NewFake() *Fake {
-	return &Fake{scaleSets: map[string]int{}, Runners: map[int64]string{}, busyRunners: map[int64]error{}, queue: make(chan *Message, 64)}
+	return &Fake{scaleSets: map[string]int{}, labels: map[string][]string{}, Runners: map[int64]string{}, busyRunners: map[int64]error{}, queue: make(chan *Message, 64)}
 }
 
 // Push queues a message for the next Poll. Statistics default to the fake's
@@ -53,16 +54,24 @@ func (f *Fake) SetStatistics(s Statistics) {
 	f.stats = s
 }
 
-// Ensure implements ScaleSets.
-func (f *Fake) Ensure(_ context.Context, name, _ string) (int, error) {
+// Ensure implements ScaleSets. Like GitHub, labels are fixed at creation.
+func (f *Fake) Ensure(_ context.Context, name, _ string, labels []string) (ScaleSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if id, ok := f.scaleSets[name]; ok {
-		return id, nil
+	id, ok := f.scaleSets[name]
+	if !ok {
+		id = len(f.scaleSets) + 100
+		f.scaleSets[name] = id
+		f.labels[name] = append([]string(nil), labels...)
 	}
-	id := len(f.scaleSets) + 100
-	f.scaleSets[name] = id
-	return id, nil
+	return ScaleSet{ID: id, Labels: append([]string(nil), f.labels[name]...)}, nil
+}
+
+// ScaleSetLabels returns the labels a scale set was created with.
+func (f *Fake) ScaleSetLabels(name string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.labels[name]...)
 }
 
 // Open implements ScaleSets.

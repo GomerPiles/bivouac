@@ -420,6 +420,15 @@ Dispatch it twice: the sentinel step proves the second guest is fresh.
 `bivouac status` during the run shows the guest, its job, and its age; the
 `_diag` logs land under the diagnostics directory after the job.
 
+### Label arrays on a scale set
+
+Set `scaleset_labels` before the scale set is first created; GitHub ignores
+later label changes. Never give a scale set every label of another runner's
+`runs-on` array: a job runs on any runner holding all its labels. To change
+labels: `bivouac off --wait`, delete the scale set from the organization's
+runner settings, then `bivouac doctor --github` creates it with the
+configured labels and reports any difference.
+
 ## REST JIT fallback
 
 Finish active work with `bivouac off --wait` before changing demand mode.

@@ -133,6 +133,10 @@ while sessions fail; one successful poll resets the delay.
   returned, across replacement sessions, and despite idle sweep runners.
   The 65 s poll bound did not fix this; logs showed normal ~50 s empty
   responses. Reporting nonzero total capacity fixed fresh-job routing.
+- (2026-10-17) A scale set created with extra labels received `JobAssigned`
+  for arrays its labels cover, with or without `self-hosted` and without
+  naming the scale set; an array with a label it lacked stayed queued.
+  Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
   GitHub expires the dead session (128–129 s in the crash tests). A job
@@ -148,8 +152,13 @@ an assignment received while it boots. A sweep
 that finds nothing retires after `sweep_idle_timeout` (default 90 s);
 one that ran a job is followed by another sweep.
 
-Scale set labels: on github.com a scale set's name is its only label, so
-workflows use `runs-on: <scaleset name>` rather than a label array.
+Scale set labels: the name is always a label. Optional `scaleset_labels`
+add labels, including `self-hosted`, so workflows can use a `runs-on` array
+instead of the name. GitHub fixes labels when it creates a scale set and
+silently ignores later updates, so bivouac never updates them. It reads the
+labels back after creation; any difference from the config is logged at
+session open and fails `doctor --github`. To change labels, delete the scale
+set while off; the next session creates it again.
 
 ## Demand: REST JIT fallback
 

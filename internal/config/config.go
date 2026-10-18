@@ -90,8 +90,11 @@ type Budget struct {
 type Provider struct {
 	// Type is the engine: "vz" (macOS Virtualization.framework), experimental "appsandbox" or "crosvm".
 	Type string `toml:"type"`
-	// ScaleSet is the scale set name, which is also the runs-on label.
+	// ScaleSet is the scale set name, which is always one of its labels.
 	ScaleSet string `toml:"scaleset"`
+	// ScaleSetLabels are extra scale set labels, so workflows can target it
+	// with a label array (demand = "scaleset").
+	ScaleSetLabels []string `toml:"scaleset_labels"`
 	// Labels are the JIT-mode runner labels (demand = "jit").
 	Labels []string `toml:"labels"`
 	// MaxInstances caps this provider; 0 means the host budget decides.
@@ -386,6 +389,16 @@ func (c *Config) Validate() error {
 			} else if !strings.HasPrefix(p.ScaleSet, NamePrefix) {
 				errs = append(errs, fmt.Errorf("provider %q: scaleset must start with %q", name, NamePrefix))
 			}
+			seen := map[string]bool{strings.ToLower(p.ScaleSet): true}
+			for _, label := range p.ScaleSetLabels {
+				if strings.TrimSpace(label) != label || label == "" || len(label) > 255 || seen[strings.ToLower(label)] {
+					errs = append(errs, fmt.Errorf("provider %q: scaleset_labels must be nonempty, trimmed, unique, and differ from the scaleset name", name))
+				}
+				seen[strings.ToLower(label)] = true
+			}
+			if len(p.ScaleSetLabels) > 99 {
+				errs = append(errs, fmt.Errorf("provider %q: scaleset_labels allow at most 99 entries", name))
+			}
 		case DemandJIT:
 			if len(p.Labels) == 0 {
 				errs = append(errs, fmt.Errorf("provider %q: labels are required for jit demand", name))
@@ -568,6 +581,11 @@ func windowsPath(path string) bool {
 	return len(path) > 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && (path[2] == '\\' || path[2] == '/') && !strings.ContainsAny(path, "\x00\r\n") && !strings.Contains(path, "..")
 }
 
+// ScaleSetLabelNames returns the scale set name followed by its extra labels.
+func (p Provider) ScaleSetLabelNames() []string {
+	return append([]string{p.ScaleSet}, p.ScaleSetLabels...)
+}
+
 // ProviderNames returns provider names in a stable order.
 func (c *Config) ProviderNames() []string {
 	names := make([]string, 0, len(c.Providers))
@@ -602,6 +620,7 @@ sweep_idle_timeout = "90s"   # a sweep runner that finds no queued job retires a
 [providers.macos]
 type = "vz"
 scaleset = "bivouac-macos-experimental"
+# scaleset_labels = ["bivouac-experimental"]  # extra scale set labels for runs-on arrays
 labels = ["self-hosted", "macOS", "ARM64", "bivouac-experimental"]  # jit demand only
 max_instances = 1
 idle_pool = 1               # jit demand only; kept warm while on
