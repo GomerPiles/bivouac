@@ -195,19 +195,23 @@ with one session-scoped verification of pinned source/derived images and rejects
 missing/repeated public SSH server-key fingerprints. Publication/ownership,
 private image ACLs, VHD ancestry, extraction safety and credential gates have
 ordinary-token regression coverage.
-The corrected factory build completed in 184.604 s. Three prepared cold boots
-passed autologon, credential rotation, authenticated SSH, stable console, hardware
-D3D11, presentation/pixel checks and owned cleanup, with three distinct server
-keys, all different from the factory key. Validated-desktop times were 54.666 s
-(including 11.664 s session image verification), 41.753 s and 42.474 s. Setup media,
-offline answer staging and driver copies were zero. Each boot used two agent
-dial attempts; one spent about 30 s in the earlier transport's pending native
-connect. The spike now owns cancellable event-based overlapped I/O, with native
-cancellation drained before unpinning buffers or closing handles. The three-second
+The corrected factory build completed in 184.604 s. Prepared cold boots pass
+with distinct SSH server keys, credential rotation, authenticated SSH, console,
+hardware D3D11, presentation/pixel checks and owned cleanup. Setup media, offline
+answer staging and driver copies are zero. Before the connection fix, desktop
+readiness was 54.666 s including initial verification, then 41.753 s and 42.474 s;
+one native connection attempt took about 30 s on every boot.
+The spike now owns cancellable event-based overlapped I/O. Cancellation drains
+native completion before unpinning buffers or closing handles. The three-second
 agent attempt budget, remaining SSH guest budget and all safety/readiness checks
-are preserved. Ordinary-token native cancellation/deadline/close regressions,
-race tests, vet, lint and cgo-free builds pass. New cold-boot measurements remain
-pending.
+are preserved. Native cancellation/deadline/close regressions, cancellation-race
+stress, race tests, vet, lint and cgo-free builds pass; hosted checks pass on all
+three platforms. Same-image live trials cap every native attempt at 3.000 s.
+Validated-desktop times are 49.991 s including 11.818 s initial image verification,
+then 35.272 s and 37.052 s. Agent connection is still 23.531-25.249 s over 7-8
+attempts; the remaining guest startup interval has not been attributed. All three
+boots pass unique-key, credential, SSH, console, rendering and owned-cleanup
+gates. The installed provider and production CI are unchanged.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

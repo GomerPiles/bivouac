@@ -449,11 +449,19 @@ A live independent corrected build completed in 184.604 s, including factory
 setup, rendering, sanitation, acknowledged guest shutdown, native `GracefulExit`,
 publication and source cleanup. Three fresh prepared cold boots then passed:
 
-| Fresh boot | Validated desktop | Session image verification | Agent connection |
-| --- | --- | --- | --- |
-| 1 | 54.666 s | 11.664 s | 30.506 s |
-| 2 | 41.753 s | reused | 30.510 s |
-| 3 | 42.474 s | reused | 30.520 s |
+The same image was then measured with the cancellable transport:
+
+| Fresh boot | Desktop before fix | Desktop after fix | Image verification after fix | Agent connection after fix |
+| --- | --- | --- | --- | --- |
+| 1 | 54.666 s | 49.991 s | 11.818 s | 25.146 s |
+| 2 | 41.753 s | 35.272 s | reused | 23.531 s |
+| 3 | 42.474 s | 37.052 s | reused | 25.249 s |
+
+After the fix, every native dial took at most 3.000 s, with 8, 7 and 8 attempts
+respectively. This removes the 30-s pending attempt. Agent reachability still
+takes 23.5-25.2 s; these measurements do not yet attribute that interval to guest
+startup components. The observed post-verification desktop improvement is about
+5-6.5 s in this sample; it is not a paired test against the installed provider.
 
 Every boot presented a distinct SSH server key, all different from the factory
 key, rotated its local credential, and passed authenticated SSH, console,
@@ -472,7 +480,9 @@ close waits for admitted operations before closing the socket and owned native
 references. The agent attempt remains three seconds, and the SSH dial remains
 within the guest budget. No background attempt is abandoned, no dependency or
 production transport is patched, and no readiness check is removed. Ordinary-
-token native socket regressions pass; new cold-boot timings remain pending.
+token native socket regressions and cancellation-race stress pass. The live
+same-image trials above confirm the native attempt budget and all existing
+readiness/identity/rendering/cleanup checks.
 
 Sanitation and shutdown run in one SSH operation to avoid recreating factory
 keys through another SSH process. The boot task keeps both sshd and the guest

@@ -848,7 +848,12 @@ references and events; close joins all admitted I/O before releasing them. No
 background dial survives timeout, and no dependency or production provider is
 patched. Native private-loopback regressions cover cancellation, changed
 deadlines, stream/EOF, close races and cancellation before wait registration.
-Live timing of this transport remains pending. The experiment is not wired into
+Three same-image cold boots pass with native attempts capped at 3.000 s,
+7-8 attempts per boot and 23.531-25.249 s until agent connection. Validated-desktop
+times are 49.991 s including 11.818 s initial image verification, then 35.272 s
+and 37.052 s with verification reused. Keys, credential rotation, SSH, hardware
+rendering and owned cleanup pass. The remaining agent-readiness interval still
+needs guest startup attribution. The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
