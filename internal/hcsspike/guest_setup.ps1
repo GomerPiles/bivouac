@@ -10,7 +10,7 @@ foreach($file in @('appsandbox-agent.exe','appsandbox-input.exe','appsandbox-dis
 foreach($file in @('AppSandboxVDD.dll','AppSandboxVDD.inf','AppSandboxVDD.cat','devcon.exe')) {
  Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $drivers $file) -Force
 }
-foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1','hcs-spike-validate.ps1'))) {
+foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1','hcs-spike-validate.ps1'),@('HCSSANITIZE.PS1','hcs-spike-sanitize.ps1'),@('HCSLOGON.PS1','hcs-spike-autologon.ps1'))) {
  $source=Join-Path $PSScriptRoot $entry[0]
  if(Test-Path -LiteralPath $source -PathType Leaf){Copy-Item -LiteralPath $source -Destination (Join-Path $base $entry[1]) -Force}
 }
@@ -30,4 +30,11 @@ $agent=Get-Service AppSandboxAgent
 $agent.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running,[TimeSpan]::FromSeconds(30))
 $agent.Refresh()
 if($agent.Status -ne 'Running'){exit 1}
+
+$runnerZip=Join-Path $PSScriptRoot 'RUNNER.ZIP'
+if(Test-Path -LiteralPath $runnerZip -PathType Leaf){
+ & (Join-Path $PSScriptRoot 'HCSRUNNER.PS1') $runnerZip 'C:\actions-runner'
+ if($LASTEXITCODE){exit 1}
+}
+
 Set-Content -LiteralPath (Join-Path $base 'hcs-spike-setup-complete.json') -Value '{"ready":true}' -Encoding UTF8

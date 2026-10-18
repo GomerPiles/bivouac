@@ -31,6 +31,9 @@ import (
 //go:embed make_iso.ps1
 var makeISO string
 
+//go:embed runner_extract.ps1
+var runnerExtract string
+
 //go:embed guest_setup.ps1
 var guestSetup string
 
@@ -61,7 +64,7 @@ func validateAssets(c Config) error {
 	for _, a := range c.SetupAssets {
 		name := strings.ToUpper(a.Name)
 		_, requiredName := required[name]
-		if (!requiredName && name != "OPENSSH.MSI") || seen[name] {
+		if (!requiredName && name != "OPENSSH.MSI" && name != "RUNNER.ZIP") || seen[name] {
 			return errors.New("unsupported or duplicate setup asset")
 		}
 		seen[name] = true
@@ -77,7 +80,16 @@ func validateAssets(c Config) error {
 	}
 	return nil
 }
-func readPinned(f PinnedFile) ([]byte, error) {
+func hasRunnerAsset(c Config) bool {
+	for _, asset := range c.SetupAssets {
+		if strings.EqualFold(asset.Name, "RUNNER.ZIP") {
+			return true
+		}
+	}
+	return false
+}
+func readPinned(f PinnedFile) ([]byte, error) { return readPinnedLimit(f, 64<<20) }
+func readPinnedLimit(f PinnedFile, limit int64) ([]byte, error) {
 	if err := appsandbox.CheckProtectedFile(f.Source); err != nil {
 		return nil, errors.New("spike resource is not administrator-protected")
 	}
@@ -86,9 +98,9 @@ func readPinned(f PinnedFile) ([]byte, error) {
 		return nil, errors.New("cannot open spike resource")
 	}
 	defer func() { _ = in.Close() }()
-	b, err := io.ReadAll(io.LimitReader(in, 64<<20+1))
-	if err != nil || len(b) > 64<<20 {
-		return nil, errors.New("spike resource exceeds 64 MiB")
+	b, err := io.ReadAll(io.LimitReader(in, limit+1))
+	if err != nil || int64(len(b)) > limit {
+		return nil, errors.New("spike resource exceeds its byte bound")
 	}
 	h := sha256.Sum256(b)
 	if !strings.EqualFold(hex.EncodeToString(h[:]), f.SHA256) {
@@ -165,13 +177,17 @@ func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) er
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		b, err := readPinned(asset.PinnedFile)
+		limit := int64(64 << 20)
+		if strings.EqualFold(asset.Name, "RUNNER.ZIP") {
+			limit = 128 << 20
+		}
+		b, err := readPinnedLimit(asset.PinnedFile, limit)
 		if err != nil {
 			return err
 		}
 		total += len(b)
-		if total > 128<<20 {
-			return errors.New("setup assets exceed 128 MiB")
+		if total > 256<<20 {
+			return errors.New("setup assets exceed 256 MiB")
 		}
 		if err = os.WriteFile(filepath.Join(folder, asset.Name), b, 0600); err != nil {
 			return err
@@ -182,8 +198,8 @@ func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) er
 		if err != nil {
 			return err
 		}
-		if len(probe) > 128<<20-total {
-			return errors.New("setup assets exceed 128 MiB")
+		if len(probe) > 256<<20-total {
+			return errors.New("setup assets exceed 256 MiB")
 		}
 		if err := os.WriteFile(filepath.Join(folder, "HCSRENDER.EXE"), probe, 0600); err != nil {
 			return err
@@ -191,6 +207,17 @@ func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) er
 		if err := os.WriteFile(filepath.Join(folder, "HCSVALIDATE.PS1"), []byte(guestValidate), 0600); err != nil {
 			return err
 		}
+	}
+	if c.ImageRoot != "" {
+		if err := os.WriteFile(filepath.Join(folder, "HCSSANITIZE.PS1"), []byte(imageSanitize), 0600); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(folder, "HCSRUNNER.PS1"), []byte(runnerExtract), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(folder, "HCSLOGON.PS1"), []byte(autologonSecret), 0600); err != nil {
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(folder, "SETUP.PS1"), []byte(guestSetup), 0600); err != nil {
 		return err

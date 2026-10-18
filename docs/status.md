@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1–6 ms, boot to guest agent 22–31 s, JIT to listening
-  5–10 s, teardown 1.3–1.8 s (power-off).
+- Timings: clone 1â€“6 ms, boot to guest agent 22â€“31 s, JIT to listening
+  5â€“10 s, teardown 1.3â€“1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -182,13 +182,18 @@ build pass. Fresh live timings and performance gains remain unverified.
 Supplied existing-provider evidence places about 87% of readiness in native
 startup plus console preflight; the latter observes console availability pending
 while setup/OOBE flags are already clear.
-The target pipeline uses a generalized build source and a derived prepared
-runtime image that completes OS setup, driver/service installation and profile
-creation once. `guest_computer_name` supports an explicit prepared Windows name
-without changing fresh HCS ownership/runtime or SSH identity; with no setup
-assets, this path attaches no setup media and stages no answer file. Config,
-planning and ownership tests pass. Prepared-image building/promotion, credential
-sanitation/rotation and live boot timings remain unimplemented/unverified.
+The prepared-image pipeline is implemented in the experimental executable:
+`build-image` prepares an unenrolled derived image, validates rendering,
+sanitizes authentication/runner state and requires clean shutdown/native absence
+before publishing pinned provenance. Runtime trials omit setup media, OS setup,
+installations and driver copies, rotate the local credential and use fresh SSH
+keys. `trial --repetitions` runs sequential fresh clones with one session-scoped
+verification of pinned source/derived images. Publication/ownership checks,
+private image ACLs, synthetic VHD ancestry, extraction safety and credential
+gates have ordinary-token regression coverage. No manager integration or live
+prepared-image build/boot validation has occurred; boot-time improvement,
+cloned autologon, SSH host-key regeneration and sanitation remain unverified
+against a real guest. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

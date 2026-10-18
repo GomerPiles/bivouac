@@ -23,6 +23,8 @@ const ownerPrefix = "bivouac-hcs-spike:"
 // A specialized image has the guest components already prepared; generalized
 // templates require the explicit pinned SetupAssets for disposable provisioning.
 type Config struct {
+	ImageRoot         string        `json:"image_root,omitempty"`
+	PreparedImage     *PinnedFile   `json:"prepared_image,omitempty"`
 	GuestComputerName string        `json:"guest_computer_name,omitempty"`
 	Root              string        `json:"root"`
 	InstanceID        string        `json:"instance_id"`
@@ -120,9 +122,22 @@ func (c Config) Validate() error {
 	if len(c.GuestUser) < 1 || len(c.GuestUser) > 32 || strings.ContainsAny(c.GuestUser, "\x00\r\n\\/@ :\t") {
 		return errors.New("guest_user must name a local guest account")
 	}
+	if c.ImageRoot != "" {
+		if !localPath(c.ImageRoot) || !strings.EqualFold(filepath.Base(c.ImageRoot), "HCS-Images") || !strings.EqualFold(filepath.Dir(c.ImageRoot), filepath.Dir(c.Root)) || within(c.ImageRoot, c.Baseline) || len(c.SetupAssets) == 0 || c.RenderProbe == nil || c.PreparedImage != nil || c.GuestComputerName != "" || !hasRunnerAsset(c) {
+			return errors.New("image build requires a sibling HCS-Images root, generalized setup, pinned runner archive and rendering probe")
+		}
+	}
+	if c.PreparedImage != nil {
+		if err := validatePinned(c, *c.PreparedImage); err != nil {
+			return err
+		}
+		if c.ImageRoot != "" || len(c.SetupAssets) != 0 || len(c.Drivers) != 0 || c.GuestComputerName == "" || c.RenderProbe == nil {
+			return errors.New("prepared image requires its guest name and render probe, without setup assets, driver copies or image build output")
+		}
+	}
 	if c.GuestComputerName != "" {
 		name := c.GuestComputerName
-		if len(c.SetupAssets) != 0 || len(name) > 15 || !asciiLetter(name[0]) || name[len(name)-1] == '-' {
+		if c.PreparedImage == nil || len(c.SetupAssets) != 0 || len(name) > 15 || !asciiLetter(name[0]) || name[len(name)-1] == '-' {
 			return errors.New("guest_computer_name requires a prepared image and a 1-15 character name starting with a letter and ending with a letter or digit")
 		}
 		for _, b := range []byte(name) {

@@ -116,7 +116,7 @@ func (a *native) check() error {
 	if runtime.GOARCH != "amd64" {
 		return errors.New("HCS spike supports Windows amd64 only")
 	}
-	for _, name := range []string{"HcsCreateOperation", "HcsCloseOperation", "HcsWaitForOperationResult", "HcsCreateComputeSystem", "HcsOpenComputeSystem", "HcsCloseComputeSystem", "HcsGetComputeSystemProperties", "HcsStartComputeSystem", "HcsModifyComputeSystem", "HcsTerminateComputeSystem", "HcsGrantVmAccess", "HcsCreateEmptyGuestStateFile", "HcsCreateEmptyRuntimeStateFile"} {
+	for _, name := range []string{"HcsCreateOperation", "HcsCloseOperation", "HcsWaitForOperationResult", "HcsCreateComputeSystem", "HcsOpenComputeSystem", "HcsCloseComputeSystem", "HcsGetComputeSystemProperties", "HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsModifyComputeSystem", "HcsTerminateComputeSystem", "HcsGrantVmAccess", "HcsCreateEmptyGuestStateFile", "HcsCreateEmptyRuntimeStateFile"} {
 		if err := a.dll.NewProc(name).Find(); err != nil {
 			return fmt.Errorf("required HCS export unavailable: %s", name)
 		}
@@ -174,11 +174,11 @@ func (a *native) wait(ctx context.Context, op uintptr, method string, wantResult
 	return boundedResult(result)
 }
 
-// Start/Terminate reserve their options argument and require NULL, not an
+// Start/Shutdown/Terminate reserve their options argument and require NULL, not an
 // empty JSON object or even a pointer to an empty UTF-16 string.
 func operationInput(method, document string) (*uint16, error) {
 	switch method {
-	case "HcsStartComputeSystem", "HcsTerminateComputeSystem":
+	case "HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsTerminateComputeSystem":
 		if document != "" {
 			return nil, errors.New("HCS lifecycle options must be absent")
 		}
@@ -316,6 +316,10 @@ func (s *nativeSystem) GPU(ctx context.Context) error {
 	_, err := s.api.operation(ctx, "HcsModifyComputeSystem", s.handle, gpuDocument(), false)
 	return err
 }
+func (s *nativeSystem) Shutdown(ctx context.Context) error {
+	_, err := s.api.operation(ctx, "HcsShutDownComputeSystem", s.handle, "", false)
+	return err
+}
 func (s *nativeSystem) Terminate(ctx context.Context) error {
 	_, err := s.api.operation(ctx, "HcsTerminateComputeSystem", s.handle, "", false)
 	return err
@@ -331,17 +335,10 @@ func pinBaseline(c Config) (*os.File, error) {
 	if err := appsandbox.CheckProtectedFile(c.Baseline); err != nil {
 		return nil, errors.New("spike baseline must be administrator-protected")
 	}
-	p, err := windows.UTF16PtrFromString(c.Baseline)
+	f, err := openReadOnlyPinned(c.Baseline)
 	if err != nil {
 		return nil, err
 	}
-	// Hold a read-only handle denying write/delete for the entire trial. The
-	// operator must pregrant VM read access to this independent test baseline.
-	h, err := windows.CreateFile(p, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if err != nil {
-		return nil, errors.New("cannot pin read-only spike baseline")
-	}
-	f := os.NewFile(uintptr(h), c.Baseline)
 	hash := sha256.New()
 	if _, err = io.Copy(hash, f); err != nil {
 		_ = f.Close()

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -26,20 +25,22 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(result)
 	}
-	if len(args) == 0 || (args[0] != "plan" && args[0] != "headroom" && args[0] != "trial" && args[0] != "cleanup") {
-		return errors.New("usage: hcs-spike check | plan|headroom|trial|cleanup --config <file>")
+	if len(args) == 0 || (args[0] != "plan" && args[0] != "headroom" && args[0] != "trial" && args[0] != "cleanup" && args[0] != "build-image") {
+		return errors.New("usage: hcs-spike check | plan|headroom|trial|build-image|cleanup --config <file>")
 	}
 	fs := flag.NewFlagSet("hcs-spike", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "spike configuration JSON")
 	retainFailed := fs.Bool("retain-failed-storage", false, "retain stopped failed-trial storage for explicit offline inspection")
 	bootOnly := fs.Bool("boot-only", false, "test native lifecycle without guest initialization")
-	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || ((*bootOnly || *retainFailed) && args[0] != "trial") {
-		return errors.New("provide --config <file>; --boot-only and --retain-failed-storage are valid only for trial")
+	repetitions := fs.Int("repetitions", 1, "sequential fresh clones sharing one immutable-image verification")
+	instanceID := fs.String("instance-id", "", "matching retained instance identity for cleanup")
+	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || *repetitions < 1 || *repetitions > 5 || (*bootOnly && args[0] != "trial") || (*retainFailed && args[0] != "trial" && args[0] != "build-image") || (*repetitions != 1 && args[0] != "trial") || (*instanceID != "" && args[0] != "cleanup") {
+		return errors.New("provide --config; repetitions 1-5/boot-only require trial; instance-id requires cleanup")
 	}
 	// Refuse before reading configuration or creating any file. Never prompt,
 	// invoke runas, install a service/task, or use the existing elevated broker.
-	live := args[0] == "trial" || args[0] == "cleanup"
+	live := args[0] == "trial" || args[0] == "cleanup" || args[0] == "build-image"
 	if live && !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("live HCS spike requires an explicitly elevated launch; no elevation was requested and no VM was touched")
 	}
@@ -61,6 +62,18 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *instanceID != "" {
+		c.InstanceID = *instanceID
+		if err = c.Validate(); err != nil {
+			return err
+		}
+	}
+	if args[0] == "build-image" && c.ImageRoot == "" {
+		return errors.New("build-image requires image_root and complete build assets")
+	}
+	if args[0] == "trial" && c.ImageRoot != "" {
+		return errors.New("image output requires build-image mode")
+	}
 	if args[0] == "plan" {
 		plan, err := Plan(c)
 		if err != nil {
@@ -80,7 +93,7 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	// Refuse before opening the journal or hashing the immutable template.
 	// Native preparation and dispatch recheck after potentially slow staging.
 	// Cleanup remains available regardless of host pressure.
-	if args[0] == "trial" {
+	if args[0] == "trial" || args[0] == "build-image" {
 		if err = requireHeadroom(c); err != nil {
 			return err
 		}
@@ -105,34 +118,80 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	if args[0] == "cleanup" {
 		cleanupCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		if err = cleanup(cleanupCtx, c, j, api); err != nil {
+		var existing record
+		readErr := j.read(recordName(c), &existing)
+		if errors.Is(readErr, os.ErrNotExist) && c.ImageRoot != "" {
+			if _, e := j.root.Stat(c.InstanceID); !errors.Is(e, os.ErrNotExist) {
+				return errors.New("unrecorded child retained")
+			}
+			if err = absent(cleanupCtx, api, c.name()); err != nil {
+				return err
+			}
+		} else if err = cleanup(cleanupCtx, c, j, api); err != nil {
 			return err
 		}
-		return json.NewEncoder(out).Encode(Report{Cleaned: true, NativeAbsent: true})
+		if err = cleanupImageStaging(c); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(Report{InstanceID: c.InstanceID, Cleaned: true, NativeAbsent: true})
 	}
-	trialStarted := time.Now()
 	baselineStarted := time.Now()
-	baseline, err := pinBaseline(c)
-	baselineMS := elapsedMS(baselineStarted)
+	images, err := openImageSession(c)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = baseline.Close() }()
-	trialCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds+120)*time.Second)
-	defer cancel()
-	var beforeTrialMS uint64
-	report, trialErr := guardTrialResources(trialCtx, c, func(guarded context.Context) (Report, error) {
-		beforeTrialMS = elapsedMS(trialStarted)
-		return trial(guarded, c, j, api, *bootOnly, *retainFailed)
-	})
-	if report.TimingsMS.ToValidatedDesktopMS != 0 {
-		report.TimingsMS.ToValidatedDesktopMS += beforeTrialMS
-	}
-	report.TimingsMS.TotalMS = elapsedMS(trialStarted)
-	report.TimingsMS.BaselineVerifyMS = baselineMS
-	report.TimingsMS.Preparation = api.preparationTimings
-	if err = json.NewEncoder(out).Encode(report); err != nil {
-		return errors.Join(trialErr, fmt.Errorf("write spike report: %w", err))
-	}
-	return trialErr
+	defer images.Close()
+	baselineMS := elapsedMS(baselineStarted)
+	return runTrialSession(ctx, c, *repetitions, func(sessionCtx context.Context, current Config, index int) (Report, error) {
+		started := time.Now()
+		budget := current.TimeoutSeconds + 120
+		if current.ImageRoot != "" {
+			budget += 600
+		}
+		trialCtx, cancel := context.WithTimeout(sessionCtx, time.Duration(budget)*time.Second)
+		defer cancel()
+		var output *journal
+		if current.ImageRoot != "" {
+			var e error
+			output, e = beginImageOutput(current)
+			if e != nil {
+				return Report{}, e
+			}
+			defer func() { _ = output.root.Close() }()
+		}
+		var beforeTrialMS uint64
+		report, trialErr := guardTrialResources(trialCtx, current, func(guarded context.Context) (Report, error) {
+			beforeTrialMS = elapsedMS(started)
+			r, e := trial(guarded, current, j, api, *bootOnly, *retainFailed)
+			if e == nil && output != nil {
+				if e = publishImage(guarded, current, j, output, api, &r); e == nil {
+					cleanupCtx, done := context.WithTimeout(context.WithoutCancel(guarded), 60*time.Second)
+					e = cleanup(cleanupCtx, current, j, api)
+					done()
+					r.Cleaned = e == nil
+					r.StorageRetained = e != nil
+				}
+			}
+			return r, e
+		})
+		if trialErr != nil && current.ImageRoot != "" && report.NativeAbsent {
+			trialErr = errors.Join(trialErr, cleanupImageStaging(current))
+		}
+		if report.TimingsMS.ToValidatedDesktopMS != 0 {
+			report.TimingsMS.ToValidatedDesktopMS += beforeTrialMS
+		}
+		report.TimingsMS.TotalMS = elapsedMS(started)
+		report.TimingsMS.Preparation = api.preparationTimings
+		if index == 0 {
+			report.TimingsMS.BaselineVerifyMS = baselineMS
+			report.TimingsMS.TotalMS += baselineMS
+			if report.TimingsMS.ToValidatedDesktopMS != 0 {
+				report.TimingsMS.ToValidatedDesktopMS += baselineMS
+			}
+		}
+		if current.ImageRoot != "" {
+			trialErr = imageError(trialErr)
+		}
+		return report, trialErr
+	}, func(r Report) error { return json.NewEncoder(out).Encode(r) })
 }

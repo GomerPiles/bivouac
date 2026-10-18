@@ -129,19 +129,19 @@ func TestISOBuilderUsesMemoryAnswerFile(t *testing.T) {
 func TestRenderReportRejectsPartialAndSoftwareResults(t *testing.T) {
 	good := renderResult{GuestReady: true, DesktopReady: true, HardwareD3D11: true, Presented: true, PixelReadback: true, Stage: 7, AdapterCount: 2, HardwareAdapterCount: 1, VendorID: 0x1002, DeviceID: 1}
 	data, _ := json.Marshal(good)
-	if _, err := validateRenderReport(data); err != nil {
+	if _, err := validateRenderReport(data, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*renderResult){func(r *renderResult) { r.GuestReady = false }, func(r *renderResult) { r.DesktopReady = false }, func(r *renderResult) { r.PixelReadback = false }, func(r *renderResult) { r.Presented = false }, func(r *renderResult) { r.HardwareD3D11 = false }, func(r *renderResult) { r.HRESULT = 1 }, func(r *renderResult) { r.AdapterCount = 33 }, func(r *renderResult) { r.DisplayDeviceCount = 33 }, func(r *renderResult) { r.VirtualRenderDeviceCount = 1 }, func(r *renderResult) { r.VirtualRenderProblemCode = 256 }, func(r *renderResult) { r.HardwareAdapterCount = 0 }, func(r *renderResult) { r.HardwareAdapterCount = 3 }, func(r *renderResult) { r.Stage = 6 }, func(r *renderResult) { r.VendorID = 0x1414; r.DeviceID = 0x8c }} {
 		bad := good
 		mutate(&bad)
 		data, _ := json.Marshal(bad)
-		if _, err := validateRenderReport(data); err == nil {
+		if _, err := validateRenderReport(data, false); err == nil {
 			t.Fatal("incomplete/software rendering accepted")
 		}
 	}
 	for _, bad := range []string{`{"guest_ready":"true"}`, `{} {}`, `{"arbitrary":"guest text"}`} {
-		if _, err := validateRenderReport([]byte(bad)); err == nil {
+		if _, err := validateRenderReport([]byte(bad), false); err == nil {
 			t.Fatal("malformed guest report accepted")
 		}
 	}
@@ -458,7 +458,7 @@ func TestDesktopRequestCarriesOnlySmallMetadataAndFixedEntry(t *testing.T) {
 		t.Fatal("fixed entry payload missing")
 	}
 	hash, ok := payload.Data["script_sha256"].(string)
-	if !ok || len(hash) != 64 || len(payload.Data) != 5 || payload.Data["sha256"] != c.RenderProbe.SHA256 {
+	if !ok || len(hash) != 64 || len(payload.Data) != 7 || payload.Data["sha256"] != c.RenderProbe.SHA256 {
 		t.Fatal("guest resource integrity pins missing")
 	}
 }
@@ -466,7 +466,7 @@ func TestDesktopRequestCarriesOnlySmallMetadataAndFixedEntry(t *testing.T) {
 // Exercise the real nested launcher and the report producer under Windows
 // PowerShell; marshaling a Go struct alone cannot verify guest stdout framing.
 func TestDesktopReportProducerThroughFramedLauncher(t *testing.T) {
-	start := strings.Index(guestValidate, "  $report=[ordered]@{guest_ready=")
+	start := strings.Index(guestValidate, "  $report=[ordered]@{")
 	if start < 0 {
 		t.Fatal("report producer missing")
 	}
@@ -494,7 +494,7 @@ func TestDesktopReportProducerThroughFramedLauncher(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatal("synthetic report launcher failed")
 	}
-	r, err := validateRenderReport(out.data)
+	r, err := validateRenderReport(out.data, false)
 	if err != nil {
 		t.Fatalf("synthetic report rejected: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestDesktopReportProducerThroughFramedLauncher(t *testing.T) {
 
 func TestMalformedRenderReportDiagnosticsContainOnlyNumbers(t *testing.T) {
 	for _, input := range []string{"", "private-output", `{"guest_ready":"private-output"}`, `{} private-output`, `{} {}`} {
-		_, err := validateRenderReport([]byte(input))
+		_, err := validateRenderReport([]byte(input), false)
 		if err == nil {
 			t.Fatal("malformed output accepted")
 		}
@@ -556,6 +556,7 @@ if($state.written -ne 1 -or ($data.exists -and $state.created -ne 0) -or (!$data
 func TestPreparedGuestNameDoesNotReplaceNativeOwnership(t *testing.T) {
 	c := exampleConfig()
 	c.GuestComputerName = "bivouac-ready"
+	c.PreparedImage = &PinnedFile{Source: `C:\Tests\HCS-Images\manifest.json`, SHA256: c.BaselineSHA256}
 	c.RenderProbe = &PinnedFile{Source: `C:\Tests\render.exe`, SHA256: c.BaselineSHA256}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)

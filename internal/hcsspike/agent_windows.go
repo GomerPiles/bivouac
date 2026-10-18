@@ -239,11 +239,13 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	defer func() { _ = client.Close() }()
 	report.TimingsMS.Guest.SSHAuthenticateMS = elapsedMS(started)
 	report.SSHAuthenticated = true
-	started = time.Now()
-	err = checkSSHExecution(sshCtx, client, &report)
-	report.TimingsMS.Guest.SSHChecksMS = elapsedMS(started)
-	if err != nil {
-		return report, err
+	if c.RenderProbe == nil {
+		started = time.Now()
+		err = checkSSHExecution(sshCtx, client, &report)
+		report.TimingsMS.Guest.SSHChecksMS = elapsedMS(started)
+		if err != nil {
+			return report, err
+		}
 	}
 	if c.RenderProbe != nil {
 		if err = a.verify(ctx, c, runtimeID); err != nil {
@@ -255,6 +257,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		report.TimingsMS.Guest.ConsoleWaitMS = observed.consoleWaitMS
 		report.TimingsMS.Guest.GPUDeviceWaitMS = observed.gpuDeviceWaitMS
 		report.TimingsMS.Guest.InteractiveProbeMS = observed.interactiveProbeMS
+		report.CredentialRotated = observed.CredentialRotated
 		report.GuestValidationStep = observed.ValidationStep
 		report.GuestReady = observed.GuestReady
 		report.DesktopReady = observed.DesktopReady
@@ -273,6 +276,19 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		report.DisplayDeviceCount = observed.DisplayDeviceCount
 		report.VirtualRenderDeviceCount = observed.VirtualRenderDeviceCount
 		report.VirtualRenderProblemCode = observed.VirtualRenderProblemCode
+		if renderErr == nil {
+			report.SSHCommandReady = true
+			report.SSHStdinReady = true
+		}
+		if renderErr == nil && c.ImageRoot != "" {
+			if err = a.verify(ctx, c, runtimeID); err != nil {
+				return report, err
+			}
+			if err = sanitizeImageGuest(sshCtx, client, c); err != nil {
+				return report, err
+			}
+			report.ImageSanitized = true
+		}
 		return report, renderErr
 	}
 	return report, nil

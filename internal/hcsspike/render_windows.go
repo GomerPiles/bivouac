@@ -29,7 +29,7 @@ const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-Spi
 const guestValidateEntry = `param($data);$f=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-validate.ps1';if((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ine $data.script_sha256){exit 14};& $f $data`
 
 func desktopScriptInput(c Config) ([]byte, error) {
-	return guestScriptInput(guestValidateEntry, map[string]any{"name": c.guestName(), "user": c.GuestUser, "sha256": c.RenderProbe.SHA256, "script_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(guestValidate))), "require_setup": len(c.SetupAssets) != 0})
+	return guestScriptInput(guestValidateEntry, map[string]any{"name": c.guestName(), "user": c.GuestUser, "sha256": c.RenderProbe.SHA256, "script_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(guestValidate))), "require_setup": len(c.SetupAssets) != 0, "prepared": c.PreparedImage != nil, "autologon_sha256": autologonHash()})
 }
 
 func desktopValidationCommand() string {
@@ -37,6 +37,7 @@ func desktopValidationCommand() string {
 }
 
 type renderResult struct {
+	CredentialRotated         bool `json:"credential_rotated"`
 	consoleWaitMS             uint64
 	gpuDeviceWaitMS           uint64
 	interactiveProbeMS        uint64
@@ -68,7 +69,7 @@ func (w *boundedOutput) Write(b []byte) (int, error) {
 	w.data = append(w.data, b...)
 	return len(b), nil
 }
-func validateRenderReport(b []byte) (renderResult, error) {
+func validateRenderReport(b []byte, prepared bool) (renderResult, error) {
 	var r renderResult
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
@@ -98,6 +99,9 @@ func validateRenderReport(b []byte) (renderResult, error) {
 	}
 	if r.AdapterCount == 0 || r.AdapterCount > 32 || r.HardwareAdapterCount == 0 || r.HardwareAdapterCount > r.AdapterCount || !r.GuestReady || !r.DesktopReady || !r.HardwareD3D11 || !r.Presented || !r.PixelReadback || r.Stage != 7 || r.HRESULT != 0 || r.VendorID == 0 || (r.VendorID == 0x1414 && r.DeviceID == 0x8c) {
 		return r, errors.New("guest rendering checks did not all pass")
+	}
+	if prepared && !r.CredentialRotated {
+		return r, errors.New("prepared clone credential rotation not proven")
 	}
 	return r, nil
 }
@@ -195,7 +199,7 @@ func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderR
 		}
 		return r, errors.New("fixed guest desktop validation failed")
 	}
-	r, err = validateRenderReport(out)
+	r, err = validateRenderReport(out, c.PreparedImage != nil)
 	setProgress()
 	return r, err
 }

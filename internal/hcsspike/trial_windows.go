@@ -33,6 +33,13 @@ type system interface {
 	Close()
 }
 
+type stoppedSystem struct {
+	system
+	props properties
+}
+
+func (s *stoppedSystem) Properties(context.Context) (properties, error) { return s.props, nil }
+
 type backend interface {
 	Open(context.Context, string) (system, error)
 	Prepare(context.Context, Config) error
@@ -46,6 +53,14 @@ type backend interface {
 // interactive probe checks hardware D3D11, presentation and two-color GPU/desktop
 // pixel readback; it does not test keyboard/mouse input.
 type Report struct {
+	CredentialRotated          bool    `json:"credential_rotated"`
+	InstanceID                 string  `json:"instance_id,omitempty"`
+	ImageSanitized             bool    `json:"image_sanitized"`
+	CleanShutdown              bool    `json:"clean_shutdown"`
+	ImageBuilt                 bool    `json:"image_built"`
+	ImageSHA256                string  `json:"image_sha256,omitempty"`
+	ManifestSHA256             string  `json:"manifest_sha256,omitempty"`
+	BaselineReused             bool    `json:"baseline_reused"`
 	TimingsMS                  Timings `json:"timings_ms"`
 	NativeAbsent               bool    `json:"native_absent"`
 	StorageRetained            bool    `json:"storage_retained"`
@@ -204,7 +219,7 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		defer cancel()
 		cleanupStarted := time.Now()
-		err := cleanupHeld(cleanupCtx, c, j, api, created, retainFailed && result != nil)
+		err := cleanupHeld(cleanupCtx, c, j, api, created, retainFailed && result != nil || c.ImageRoot != "" && report.CleanShutdown && report.ImageSanitized)
 		report.TimingsMS.Lifecycle.CleanupMS = elapsedMS(cleanupStarted)
 		_, childErr := j.root.Stat(c.InstanceID)
 		_, recordErr := j.root.Stat(recordName(c))
@@ -299,6 +314,34 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	}
 	observed.NativeStarted = report.NativeStarted
 	observed.GPUAssigned = report.GPUAssigned
+	if err == nil && c.ImageRoot != "" {
+		shutdown, ok := s.(interface{ Shutdown(context.Context) error })
+		if !ok || !observed.ImageSanitized || !observed.GuestReady || !observed.HardwareD3D11 || !observed.PixelReadback {
+			return observed, errors.New("image shutdown requires sanitized, validated guest")
+		}
+		current, queryErr := s.Properties(probeCtx)
+		if queryErr != nil {
+			return observed, queryErr
+		}
+		if err = proveNative(c, r, current); err != nil {
+			return observed, err
+		}
+		if current.State != "Running" {
+			return observed, errors.New("image guest stopped before clean shutdown dispatch")
+		}
+		if err = shutdown.Shutdown(probeCtx); err != nil {
+			return observed, err
+		}
+		// A successful asynchronous HCS operation acknowledges clean shutdown.
+		// The same held handle binds this last verified identity. Properties may
+		// become unavailable during native object teardown; only absence releases
+		// its disk, so retain the verified identity for this close/absence check.
+		current.State = "Stopped"
+		created = &stoppedSystem{system: s, props: current}
+		observed.CleanShutdown = true
+	}
+	observed.NativeStarted = report.NativeStarted
+	observed.GPUAssigned = report.GPUAssigned
 	return observed, err
 }
 
@@ -367,8 +410,10 @@ func cleanupHeld(ctx context.Context, c Config, j *journal, api backend, held sy
 		if err = j.write(recordName(c), r, false); err != nil {
 			return err
 		}
-		if err = s.Terminate(ctx); err != nil {
-			return err
+		if p.State != "Stopped" {
+			if err = s.Terminate(ctx); err != nil {
+				return err
+			}
 		}
 		s.Close()
 	} else if !errors.Is(err, errMissing) {

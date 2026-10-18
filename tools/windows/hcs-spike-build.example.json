@@ -1,0 +1,69 @@
+{
+  "root": "C:\\HCSLab\\HCS-Spike",
+  "instance_id": "00112233445566778899aabbccddeeff",
+  "baseline": "C:\\HCSLab\\Images\\generalized.vhdx",
+  "baseline_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "guest_user": "ciuser",
+  "cpu": 2,
+  "memory_mb": 2048,
+  "gpu": true,
+  "drivers": [
+    {
+      "source": "C:\\HCSLab\\Drivers\\vendor",
+      "guest_path": "C:\\Windows\\System32\\HostDriverStore\\FileRepository\\vendor"
+    }
+  ],
+  "timeout_seconds": 600,
+  "setup_assets": [
+    {
+      "name": "appsandbox-agent.exe",
+      "source": "C:\\HCSLab\\GuestAssets\\appsandbox-agent.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "appsandbox-input.exe",
+      "source": "C:\\HCSLab\\GuestAssets\\appsandbox-input.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "appsandbox-displays.exe",
+      "source": "C:\\HCSLab\\GuestAssets\\appsandbox-displays.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "AppSandboxVDD.dll",
+      "source": "C:\\HCSLab\\GuestAssets\\AppSandboxVDD.dll",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "AppSandboxVDD.inf",
+      "source": "C:\\HCSLab\\GuestAssets\\AppSandboxVDD.inf",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "AppSandboxVDD.cat",
+      "source": "C:\\HCSLab\\GuestAssets\\AppSandboxVDD.cat",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "devcon.exe",
+      "source": "C:\\HCSLab\\GuestAssets\\devcon.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "OpenSSH.msi",
+      "source": "C:\\HCSLab\\GuestAssets\\OpenSSH.msi",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "RUNNER.ZIP",
+      "source": "C:\\HCSLab\\Assets\\runner.zip",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ],
+  "render_probe": {
+    "source": "C:\\HCSLab\\GuestAssets\\hcs-render-probe.exe",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "image_root": "C:\\HCSLab\\HCS-Images"
+}

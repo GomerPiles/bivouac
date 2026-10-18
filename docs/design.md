@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128–129 s in the crash tests). A job
+  GitHub expires the dead session (128â€“129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet …] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet â€¦] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -713,15 +713,16 @@ entry request. The guest verifies the staged validation script against the host
 build's embedded hash and the native probe against its configured hash. Four
 little-endian bytes describe the UTF-8 payload, read in chunks of at most 4096
 bytes with a fixed allocation bound. Execution depends on neither stdin EOF nor
-a huge console text line. Separate bounded fixed command/stdin
-round trips distinguish authentication from remote command execution before a
-five-minute desktop request; all fit inside the guest budget. A timeout closes
+a huge console text line. Without a rendering probe, separate bounded fixed command/stdin round trips
+distinguish authentication from execution. With the probe, the actual authenticated
+framed desktop request proves both, avoiding two redundant round trips. All fit
+inside the guest budget. A timeout closes
 the owned SSH client instead of replaying a command. Fixed numeric failure
 stages replace raw guest errors. The stderr sink drains arbitrary text and
 retains only allowlisted phase numbers; after parsing the input frame, progress
 is also recorded inside the disposable guest for stopped-clone inspection.
 Offline probe reports are re-encoded as bounded fixed booleans/numbers. The setup marker is written only after the
-agent service reaches Running. Native C++ supplies the Windows Direct3D COM ABI
+agent service reaches Running and optional pinned runner extraction completes. Native C++ supplies the Windows Direct3D COM ABI
 without adding cgo to the Go host.
 Readiness requires setup completion, the intended console user's Explorer and
 Default input desktop. The probe enumerates at most 32 DXGI adapters and
@@ -785,26 +786,47 @@ disposable-child specialization by default, preserving every other policy value
 and all readiness checks. Prepared images bake the same setting during their
 build. Live timing and any performance gain remain unverified.
 
-The target image pipeline has two immutable artifacts: a generalized source
-for reproducible image builds, and a derived prepared runtime image for jobs.
-The derived image completes specialization/OOBE, driver/service installation,
-the CI user's profile and stable desktop once, then shuts down cleanly before
-capture. It is not generalized again. Each job uses a fresh differencing child
-of that prepared image and performs no unattended OS setup or package install.
-A prepared Windows name is image metadata; fresh native identity and ephemeral
-SSH authentication are per-instance. Readiness, hardware rendering and eventual
-network isolation remain admission checks, rather than installation steps.
-The image must be captured before runner registration or any job. Promotion
-requires bounded evidence of clean shutdown, exact parent/build provenance,
-setup completion, matching drivers, validation asset hashes and sanitized
-runner/authentication state. Local account/autologon state is machine-specific;
-the prepared-image builder must define its protection and per-clone credential
-rotation before external network or job admission. GitHub/JIT credentials,
-authorized SSH keys and host-held private SSH keys must never be baked in.
-Current configuration/planning supports the prepared guest name, but runtime
-image building/promotion, credential sanitation and live prepared-image boots
-are not implemented or validated. These gates prevent treating an arbitrary
-used CI disk as a reusable prepared image.
+The image pipeline has a generalized source and a derived prepared runtime
+image. `build-image` completes specialization/OOBE, driver/service installation,
+the CI user's profile, optional pinned runner extraction and stable desktop once.
+It validates hardware rendering, sanitizes the guest, then requires successful
+HCS clean shutdown and native absence before capture. The prepared image is a
+differencing disk over its recorded standalone generalized source, not generalized
+again. Both source and derived disk remain immutable. Each job trial uses a new
+child, native owner/runtime, firmware state and in-memory SSH client identity.
+No unattended setup, package installation, driver copy or registration repeats.
+`RUNNER.ZIP` extraction rejects escaping paths, streams, symlinks, duplicates and
+bounded expansion overflow; no runner executes during the build.
+
+Sanitation refuses runner registration/work/diagnostic state, removes the fixed
+probe output, cached answer files and authorized SSH keys, and removes server
+host keys. A fixed guest SYSTEM startup task generates fresh server keys before
+starting sshd. Password authentication is disabled; SSH binds only loopback and
+is reached through the owned runtime's HvSocket. The image retains a randomized
+local account credential with autologon stored as an LSA private secret, not a
+plaintext Winlogon value. Prepared storage is administrator/SYSTEM-only with VM
+worker read access; ordinary-user read access is refused. Every prepared clone
+rotates the local password and autologon secret after stable console logon and
+before readiness admission. No GitHub/JIT credentials or host private keys are
+baked in. This offline spike attaches no NIC and admits no jobs.
+
+Publication uses an exclusive owned build directory under a protected sibling
+`HCS-Images` root. Only a clean, sanitized, validated and confirmed-absent source
+can be copied. The runtime config precedes an atomically published, hash-pinned
+manifest binding image, flat parent, build owner, guest identity and public asset
+hashes. Interrupted unpublished output is removable only with its exact owner
+marker; published images are never removed by trial cleanup. Parent resolution
+is checked through read-only virtdisk metadata. A session hashes and pins both
+image files once with handles denying writes/deletion until all trials finish.
+`trial --repetitions 1..5` runs sequential fresh clones, stopping on any error or
+retained state. Each report carries its instance ID and whether verification was
+reused; no persistent hash cache substitutes for an open immutable-file pin.
+
+Ordinary-token tests cover ancestry, pin lifetimes, bounded capture, graceful
+shutdown requirements, guest LSA binding compilation, extraction safety and
+credential/report gates. Prepared-image building, sanitation, cloned autologon,
+server-key renewal and cold boot timings still require explicit elevated live
+validation. The experiment is not wired into the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

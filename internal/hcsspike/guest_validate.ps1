@@ -1,6 +1,7 @@
 param($data)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+$rotated=$false
 $step=17
 Write-SpikeStep 17
 try {
@@ -40,6 +41,27 @@ public static class SpikeConsole {
  $acl=New-Object Security.AccessControl.DirectorySecurity
  $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
  Set-Acl -LiteralPath $base -AclObject $acl
+ if($data.prepared -eq $true){
+  $marker=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-prepared.json'
+  if(!(Test-Path -LiteralPath $marker -PathType Leaf) -or ((Get-Item -LiteralPath $marker).Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Item -LiteralPath $marker).Length -gt 4096){exit 21}
+  $image=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
+  if($image.name -ine $data.name -or $image.user -ine $data.user -or $image.probe_sha256 -ine $data.sha256 -or $image.validation_sha256 -ine $data.script_sha256 -or $image.autologon_sha256 -ine $data.autologon_sha256){exit 21}
+  $secretHelper=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-autologon.ps1'
+  if((Get-FileHash -LiteralPath $secretHelper -Algorithm SHA256).Hash -ine $data.autologon_sha256){throw 'Autologon helper integrity differs'}
+  . $secretHelper
+  $random=New-Object byte[] 32
+  $rng=[Security.Cryptography.RandomNumberGenerator]::Create()
+  try{$rng.GetBytes($random)}finally{$rng.Dispose()}
+  $password='Bv!'+[Convert]::ToBase64String($random)
+  $secure=[Security.SecureString]::new()
+  $characters=$password.ToCharArray()
+  try{foreach($character in $characters){$secure.AppendChar($character)};$secure.MakeReadOnly()}finally{[Array]::Clear($characters,0,$characters.Length)}
+  try{Set-LocalUser -Name $data.user -Password $secure}finally{$secure.Dispose()}
+  $logon=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon',$true)
+  try{if([SpikeAutoLogonSecret]::Store($password) -ne 0){throw 'Cannot protect clone autologon credential'}
+  $logon.DeleteValue('DefaultPassword',$false)}finally{$logon.Dispose();$password=$null;[Array]::Clear($random,0,$random.Length)}
+  $rotated=$true
+ }
  $step=22
  Write-SpikeStep 22
  $probe=Join-Path $base 'render.exe'
@@ -89,7 +111,7 @@ public static class SpikeConsole {
   Write-SpikeStep 25
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
-  $report=[ordered]@{guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code} | ConvertTo-Json -Compress
+  $report=[ordered]@{credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code} | ConvertTo-Json -Compress
   [Console]::Out.Write($report)
   [Console]::Out.Flush()
  } finally {Unregister-ScheduledTask -TaskName $task -Confirm:$false}

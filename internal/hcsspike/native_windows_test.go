@@ -114,7 +114,7 @@ func TestPayloadProofDetectsACLChange(t *testing.T) {
 }
 
 func TestLifecycleOperationsUseNullOptions(t *testing.T) {
-	for _, method := range []string{"HcsStartComputeSystem", "HcsTerminateComputeSystem"} {
+	for _, method := range []string{"HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsTerminateComputeSystem"} {
 		p, err := operationInput(method, "")
 		if err != nil || p != nil {
 			t.Fatal("reserved lifecycle options must be a native NULL")

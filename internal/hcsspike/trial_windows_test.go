@@ -13,6 +13,9 @@ import (
 )
 
 type fakeBackend struct {
+	imageReady                                      bool
+	shutdownErr                                     error
+	shutdowns                                       int
 	closeBeforeStop                                 bool
 	c                                               Config
 	vm                                              *fakeSystem
@@ -37,7 +40,19 @@ func (s *fakeSystem) Terminate(ctx context.Context) error {
 	s.api.vm = nil
 	return nil
 }
+func (s *fakeSystem) Shutdown(context.Context) error {
+	s.api.shutdowns++
+	if s.api.shutdownErr != nil {
+		return s.api.shutdownErr
+	}
+	s.props.State = "Stopped"
+	return nil
+}
 func (s *fakeSystem) Close() {
+	if s.props.State == "Stopped" {
+		s.api.vm = nil
+		return
+	}
 	if s.api.vm != nil && s.api.stops == 0 {
 		s.api.closeBeforeStop = true
 	}
@@ -77,7 +92,16 @@ func (f *fakeBackend) Probe(_ context.Context, _ Config, _ string) (Report, erro
 	if f.probeChange != nil {
 		f.probeChange(f.vm)
 	}
-	return Report{AgentConnected: true, DisplayReady: true, SSHAuthenticated: f.probeErr == nil, SSHCommandReady: f.probeErr == nil, SSHStdinReady: f.probeErr == nil}, f.probeErr
+	r := Report{AgentConnected: true, DisplayReady: true, SSHAuthenticated: f.probeErr == nil, SSHCommandReady: f.probeErr == nil, SSHStdinReady: f.probeErr == nil}
+	if f.imageReady {
+		r.GuestReady = true
+		r.DesktopReady = true
+		r.HardwareD3D11 = true
+		r.Presented = true
+		r.PixelReadback = true
+		r.ImageSanitized = true
+	}
+	return r, f.probeErr
 }
 
 func testJournal(t *testing.T) (Config, *journal) {
@@ -302,7 +326,7 @@ func TestCLIRefusesLiveOperationsWithoutElevation(t *testing.T) {
 	if info["administrator"] == true {
 		t.Skip("requires an ordinary token")
 	}
-	for _, mode := range []string{"trial", "cleanup"} {
+	for _, mode := range []string{"trial", "cleanup", "build-image"} {
 		err := RunCLI(context.Background(), []string{mode, "--config", filepath.Join(t.TempDir(), "missing.json")}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "no elevation was requested") {
 			t.Fatalf("did not refuse before config access: %v", err)

@@ -234,9 +234,9 @@ The larger image-preparation candidates need separate validation:
 - Build a prepared runtime image derived from the generalized source, as
   described below, and compare its fresh-child cold boots against provisioning
   boots. This changes the image used for jobs, rather than bypassing readiness.
-- A future long-lived provider could verify an immutable baseline once while
-  retaining a read-only handle that denies writes/deletion, rather than hash the
-  same large image for every trial. Current full verification remains intact.
+- Sequential trials now verify the immutable image chain once per session and
+  retain read-only handles denying writes/deletion. A future manager integration
+  can use the same lifetime model; every new session still fully verifies hashes.
 
 Microsoft documents [generalization and device preservation](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep--generalize--a-windows-installation?view=windows-11),
 [the next-boot specialize pass](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep-process-overview?view=windows-11)
@@ -261,7 +261,8 @@ a fresh differencing disk; the prepared parent stays read-only and unchanged.
 This is a prepared disk image and ordinary cold boot, not a saved running VM
 containing reusable memory, sockets or credentials.
 
-The launcher now accepts an explicit `guest_computer_name` without `setup_assets`.
+The launcher requires an explicit `guest_computer_name` and pinned
+`prepared_image` manifest, without `setup_assets` or per-boot driver copies.
 The [prepared-image example](../tools/windows/hcs-spike-prepared.example.json)
 uses this path. The declared name is bounded ASCII image metadata, bound with
 the image hash in the protected configuration and journal. The guest check
@@ -273,7 +274,7 @@ refuses an explicit prepared name. No wildcard guest identity check is added.
 
 A prepared trial attaches no setup ISO, performs no offline answer staging, and
 needs no `setup_assets`. With matching drivers already in its HostDriverStore,
-it can omit `drivers` too, avoiding their host copy and guest installation. Its
+it omits `drivers`, avoiding their host copy and guest installation. Its
 preinstalled validation script must match this host build's embedded script hash;
 the native probe must match its configured hash. Hash mismatch or incomplete
 setup/console/rendering still fails admission. Ordinary planning and fake-backed
@@ -291,10 +292,12 @@ Image promotion must remove runner registration, job files, authorized SSH keys
 and transient setup material; GitHub/JIT credentials and host-held private keys
 never enter the reusable image. Local Windows account/autologon state is retained
 by specialized images, so its factory credential handling and per-clone rotation
-must be designed and verified before any external NIC or job is admitted. A
+uses the protected LSA secret and per-clone rotation implemented below; both
+require live verification before any external NIC or job is admitted. A
 prepared image is rebuilt when its base, driver package or pinned helpers change.
-The builder/promotion and credential sanitation path is still required; this
-configuration support does not implement or certify that path.
+The builder/promotion and credential sanitation path is implemented but has
+not been exercised against a real guest. Configuration support alone does not
+certify a prepared image.
 
 Microsoft describes [specialized images](https://learn.microsoft.com/azure/virtual-machines/shared-image-galleries#generalized-and-specialized-images)
 as already past first boot, with faster startup and retained account/computer-name
@@ -360,8 +363,8 @@ operator agreement on those resources.
 
 Success reports `agent_connected`, `gpu_assigned` (when requested),
 `display_ready`, `ssh_authenticated`, `ssh_command_ready`, `ssh_stdin_ready` and
-`cleaned`. The two SSH execution fields distinguish a fixed no-input command
-from a framed-stdin command round trip. These mean that HCS accepted
+`cleaned`. With a rendering probe, the actual authenticated framed validation request
+proves command and stdin execution; without it, two fixed smoke requests do so. These mean that HCS accepted
 GPU assignment, the guest agent reported the display driver ready, SSH actually
 authenticated, and cleanup completed. With `render_probe`, success also requires
 `guest_ready`, `desktop_ready`, `hardware_d3d11`, `presented` and `pixel_readback`.
@@ -386,6 +389,60 @@ After detaching the inspected clone, use the matching `cleanup` command; it
 revalidates ownership and native absence before removing the child. Routine
 trials still clean up automatically, including on failure. Offline diagnostics
 must emit only bounded flags/codes, never raw setup logs or answer-file contents.
+
+## Prepared runtime images (live validation pending)
+
+The image builder and runtime path are implemented here, separate from the
+production CI provider. Build once from an independent generalized source;
+never export an enrolled runner or production disk. No network or runner
+registration is involved in this experiment.
+
+1. Prepare the independent protected `HCS-Spike` root and pinned source/assets
+   described above. Create its sibling `HCS-Images` with protected inheritance:
+   Administrators/SYSTEM full access and VM worker group (`S-1-5-83-0`) read/execute
+   only. Do not grant ordinary-user read access: the prepared disk contains local
+   account state. The generalized source must be a standalone VHDX.
+2. Start from [`hcs-spike-build.example.json`](../tools/windows/hcs-spike-build.example.json).
+   Pin an official Windows runner ZIP as `RUNNER.ZIP`, public guest components,
+   the native probe and the independent source. The runner archive is extracted
+   once with path/stream/link/duplicate and expansion bounds; no runner is run or
+   registered. Use a fresh `instance_id`, review `check`, `headroom` and `plan`,
+   and arrange explicit elevation only when the operator is present.
+3. Run `hcs-spike.exe build-image --config <protected-build-config.json>`.
+   The guarded guest must finish setup, profile creation and hardware rendering.
+   Fixed sanitation refuses registered-runner/work state, removes cached answer
+   files and SSH keys, randomizes the local password and configures fresh server
+   host keys at boot. Autologon uses an LSA secret. Only successful clean shutdown
+   and confirmed native absence permit copying the owned child into the exclusive
+   image directory and publishing `manifest.json` last. The source child is then
+   cleaned up. No baseline is mounted or modified by the builder.
+4. Review `<HCS-Images>/<build-id>/trial.json` and the manifest. The former is
+   the generated runtime config; the
+   [prepared example](../tools/windows/hcs-spike-prepared.example.json) shows its
+   shape but uses placeholder hashes. Keep the published disk and its recorded
+   generalized parent in place. Runtime configuration pins the manifest, which
+   binds image/parent hashes, guest identity, build owner and public helper hashes.
+5. In a separately approved elevated context, run
+   `hcs-spike.exe trial --config <generated-trial.json> --repetitions 3`.
+   Repetitions (1-5) are sequential fresh cold boots, not saved-memory resumes.
+   The session verifies both immutable disks once and keeps deny-write/delete
+   handles open. Subsequent reports mark `baseline_reused`; only the first
+   includes baseline verification time. Every clone gets fresh native identity,
+   SSH keys and local credential rotation, and still proves stable console,
+   hardware rendering and clean removal. Setup media, installations and driver
+   copies are absent. Any failure or retained storage prevents the next boot.
+6. If `--retain-failed-storage` was explicitly selected, inspect only a stopped
+   clone whose report confirms native absence. Match the report's `instance_id`
+   to its journal/owner marker. After detaching, run
+   `cleanup --config <matching-config.json> --instance-id <reported-id>`.
+   Build cleanup removes only owned unpublished staging. Published images and
+   their manifests are preserved; do not erase ownership evidence manually.
+
+Compare host-monotonic `timings_ms.to_validated_desktop` and its preparation,
+agent, SSH and console breakdown across cold boots. The build is a one-time cost;
+first-session hashing is separately visible. There is no runner-listening time
+in this offline spike, so it cannot yet establish clone-to-job latency. Do not
+claim a speedup until live builds and repeated prepared-image boots pass.
 
 ## Desktop validation checkpoints
 

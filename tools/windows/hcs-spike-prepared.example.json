@@ -1,10 +1,10 @@
 {
   "root": "C:\\HCSLab\\HCS-Spike",
-  "instance_id": "00112233445566778899aabbccddeeff",
-  "baseline": "C:\\HCSLab\\Images\\prepared.vhdx",
+  "instance_id": "112233445566778899aabbccddeeff00",
+  "baseline": "C:\\HCSLab\\HCS-Images\\00112233445566778899aabbccddeeff\\disk.vhdx",
   "baseline_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "guest_user": "ciuser",
-  "guest_computer_name": "bivouac-ready",
+  "guest_computer_name": "bivouac-aaisemy",
   "cpu": 2,
   "memory_mb": 4096,
   "gpu": true,
@@ -12,5 +12,9 @@
   "render_probe": {
     "source": "C:\\HCSLab\\Assets\\render.exe",
     "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "prepared_image": {
+    "source": "C:\\HCSLab\\HCS-Images\\00112233445566778899aabbccddeeff\\manifest.json",
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   }
 }
