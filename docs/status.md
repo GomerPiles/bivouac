@@ -97,7 +97,9 @@ Open:
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
-- The cache bind to `guest_host` is untested on a real host.
+- Native VM-helper process-group launch and the cache bind to `guest_host`
+  remain unverified on a real host; the guest agent's runner process lifetime
+  was checked separately above.
 
 ## Windows: App Sandbox (Windows guests)
 
