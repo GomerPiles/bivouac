@@ -68,23 +68,3 @@ func runGuest(ctx context.Context, operation, directory, runner string, out io.W
 		return errors.New("unknown fixed guest operation")
 	}
 }
-
-func (p *Provider) installGuestHelper(ctx context.Context, name string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	f, err := os.Open(exe)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := p.output(ctx, name, []string{"/usr/bin/install", "-m", "0600", "/dev/null", guestHelper}, nil); err != nil {
-		return errors.New("prepare guest helper")
-	}
-	if _, err := p.output(ctx, name, []string{"dd", "of=" + guestHelper, "status=none"}, f); err != nil {
-		return errors.New("install guest helper")
-	}
-	_, err = p.output(ctx, name, []string{"chmod", "0700", guestHelper}, nil)
-	return err
-}

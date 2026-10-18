@@ -111,7 +111,7 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 	if err != nil || policy != r.Policy {
 		return errors.New("host network changed before relay startup")
 	}
-	mac, err := rt.Duplex(ctx, r.Name, []string{engine.GuestHelper, "engine", "listen"})
+	mac, err := rt.Duplex(ctx, r.Name, []string{guestHelper, "engine", "listen"})
 	if err != nil {
 		return err
 	}

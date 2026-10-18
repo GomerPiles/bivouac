@@ -1,7 +1,9 @@
 package manager
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -116,6 +118,8 @@ func (h *harness) run(ctx context.Context) <-chan error {
 
 func TestOneJobPerGuest(t *testing.T) {
 	h := newHarness(t, nil)
+	var stageLog bytes.Buffer
+	h.m.o.Log = slog.New(slog.NewJSONHandler(&stageLog, nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	h.setMode(control.ModeOn)
@@ -161,6 +165,27 @@ func TestOneJobPerGuest(t *testing.T) {
 	}
 	cancel()
 	<-done
+	stages := map[string]bool{}
+	decoder := json.NewDecoder(&stageLog)
+	for decoder.More() {
+		var record struct {
+			Stage      string `json:"stage"`
+			DurationMS int64  `json:"duration_ms"`
+			Success    bool   `json:"success"`
+		}
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Stage != "" {
+			if !record.Success || record.DurationMS < 0 {
+				t.Fatal("invalid registration timing")
+			}
+			stages[record.Stage] = true
+		}
+	}
+	if !stages["jit_generation"] || !stages["listener_wait"] {
+		t.Fatal("macOS registration stages missing")
+	}
 }
 
 func TestBudgetCapsConcurrency(t *testing.T) {

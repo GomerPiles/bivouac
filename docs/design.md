@@ -313,13 +313,28 @@ startup intact. No detached logging process, extra service, host endpoint or
 workflow change is needed. Hook output on a lost guest may be unavailable, while
 its last retained report remains eligible for normal diagnostics.
 
-The macOS provider copies the native manager binary into each disposable clone as a private
-helper, independently of whether caching is enabled. Its listener wrapper starts
+The macOS provider selects one native helper per disposable clone, shared by
+telemetry, optional caching and the macOS side of optional container pairs.
+Before executing the baseline's `/usr/local/bin/bivouac`, a fixed stdin probe
+checks the file and every ancestor for root ownership, no group/other mutation
+permissions and no symlinks, then compares SHA-256 with the selected host binary.
+An exact match gets a private runtime symlink at `/tmp/bivouac-helper`; an absent,
+stale or untrusted image helper gets one private upload instead. The same opened
+host file is fingerprinted and uploaded. A transport failure or malformed probe
+response never triggers an upload. Protocol compatibility alone does not prove
+that the image carries the current telemetry/cache implementation.
+
+Its listener wrapper starts
 the official runner in the same Aqua session, records the actual listener PID
 for existing cancellation, preserves its exit code and joins sampling at exit.
 The existing shell hook still records job identity; the helper's job marker only
 starts numeric sampling. Partial helper installation is removed before falling
 back to the official listener. Optional telemetry errors cannot fail a job.
+An unavailable shared helper also disables optional cache setup; a cache failure
+removes only cache assets, preserving the helper used by telemetry or the relay.
+Container readiness installs the macOS helper once before relay startup and
+never overwrites it at runner start; its Linux companion receives its own Linux
+helper. No running guest agent, baseline or host binary is modified.
 It archives the optional report alongside the runner log; extraction validates
 and re-encodes numeric fields, skipping malformed reports while retaining logs.
 
@@ -484,6 +499,19 @@ path fits `sun_path` whatever the name.
 The runner package is baked into the baseline; `doctor` reports its version.
 A host-cached package copied at boot is a later option if baseline updates
 lag runner releases.
+
+Structured `macos startup stage` records use the daemon's redacted sink and
+host-monotonic durations. They distinguish clone, VM-helper process launch,
+agent availability (including OS boot and Aqua login), bootstrap script delivery,
+Aqua session verification, helper check/upload/preparation, optional cache setup,
+JIT generation/delivery and waiting for the official listener. Container pairs
+also time companion agent/helper preparation and DNS setup. Each visited stage
+records milliseconds and success even on failure; helper preparation additionally
+records whether the baseline helper was reused. No command arguments, stdin,
+guest output, credential material or raw errors enter these records. Nested
+helper timings overlap their preparation parent; they must not be added twice.
+The existing manager clone/boot/registration totals remain authoritative for
+end-to-end startup, and adoption does not repeat helper delivery or registration.
 
 ### Windows foundation and App Sandbox (experimental integration)
 

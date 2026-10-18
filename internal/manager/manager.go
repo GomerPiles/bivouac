@@ -587,6 +587,11 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 	p := m.o.Providers[inst.Provider]
 	pcfg := m.o.Config.Providers[inst.Provider]
 	log := m.o.Log.With("instance", inst.ID, "name", inst.Name, "provider", inst.Provider)
+	startupStage := func(stage string, started time.Time, err error) {
+		if pcfg.Type == "vz" {
+			log.Info("macos startup stage", "stage", stage, "duration_ms", time.Since(started).Milliseconds(), "success", err == nil)
+		}
+	}
 	var launchLog *os.File
 	defer func() {
 		if launchLog != nil {
@@ -708,6 +713,7 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 		} else {
 			jit, err = m.o.GitHub.GenerateJIT(ctx, inst.ScaleSetID, inst.Name, "_work")
 		}
+		startupStage("jit_generation", t2, err)
 		if err != nil {
 			m.fail(inst, fmt.Errorf("jit config: %w", err))
 			teardown("jit failed")
@@ -730,7 +736,10 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 			teardown("runner start failed")
 			return
 		}
-		if err := m.waitListening(waitCtx, p, inst); err != nil {
+		listenStart := time.Now()
+		err = m.waitListening(waitCtx, p, inst)
+		startupStage("listener_wait", listenStart, err)
+		if err != nil {
 			if r.stopRequested() {
 				// The listener may already hold a job: cancel it through the
 				// official runner before the guest goes.

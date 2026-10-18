@@ -89,6 +89,9 @@ func (e env) run(ctx context.Context, args []string) error {
 	defer closeProviders(providers)
 	// Only the daemon runs guests; list and cleanup work without this.
 	for name, p := range providers {
+		if logged, ok := p.(interface{ SetLogger(*slog.Logger) }); ok {
+			logged.SetLogger(log)
+		}
 		if r, ok := p.(interface{ CheckRuntime(context.Context) error }); ok {
 			if err := r.CheckRuntime(ctx); err != nil {
 				return fail(fmt.Errorf("provider %q: %w", name, err))

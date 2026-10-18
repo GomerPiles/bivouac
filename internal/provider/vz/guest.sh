@@ -83,7 +83,7 @@ cache-setup)
   sudo -n /usr/bin/security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/bivouac-cache-ca.pem || exit 3
   /usr/bin/security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain > /tmp/bivouac-cache-roots.pem || exit 3
   /usr/bin/security find-certificate -a -p /Library/Keychains/System.keychain >> /tmp/bivouac-cache-roots.pem || exit 3
-  /tmp/bivouac-cache-client cache proxy /tmp/bivouac/cache-config.json /tmp/bivouac-cache-env > /tmp/bivouac-cache-proxy.log 2>&1 < /dev/null &
+  /tmp/bivouac-helper cache proxy /tmp/bivouac/cache-config.json /tmp/bivouac-cache-env > /tmp/bivouac-cache-proxy.log 2>&1 < /dev/null &
   proxy_pid=$!
   attempt=0
   while [ ! -f /tmp/bivouac-cache-env ]; do

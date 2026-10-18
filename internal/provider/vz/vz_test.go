@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -87,18 +88,20 @@ func (c callRuntime) List(ctx context.Context) ([]vm.Entry, error) {
 
 // recorder is a fake VM runtime: it records calls and answers from a table.
 type recorder struct {
-	calls     [][]string
-	stdin     map[string]string // joined args -> stdin received
-	vms       map[string]bool   // name -> running
-	exited    map[string]bool
-	status    string
-	statusErr error // returned by the guest script's status mode when set
-	session   string
-	diag      map[string][]byte // guest script mode -> stdout
-	launchOut string            // written by the VM helper instead of "started"
-	readyErrs []error           // returned in turn by the readiness command
-	started   []*fakeProc
-	store     vm.Store // set by newProvider; Clone copies manifests in it
+	calls        [][]string
+	stdin        map[string]string // joined args -> stdin received
+	vms          map[string]bool   // name -> running
+	exited       map[string]bool
+	status       string
+	statusErr    error // returned by the guest script's status mode when set
+	session      string
+	diag         map[string][]byte // guest script mode -> stdout
+	launchOut    string            // written by the VM helper instead of "started"
+	readyErrs    []error           // returned in turn by the readiness command
+	helperReport string            // prepared helper probe output; empty means absent
+	helperErr    error             // failed probe must not trigger an upload
+	started      []*fakeProc
+	store        vm.Store // set by newProvider; Clone copies manifests in it
 }
 
 type fakeProc struct {
@@ -176,6 +179,15 @@ func (r *recorder) answer(_ context.Context, args []string, stdin io.Reader) ([]
 		return nil, nil
 	case "Exec":
 		i := 1
+		if len(args) == 6 && args[2] == "/bin/sh" && args[5] == preparedHelper {
+			if r.helperErr != nil {
+				return nil, r.helperErr
+			}
+			if r.helperReport != "" {
+				return []byte(r.helperReport), nil
+			}
+			return []byte("absent\n"), nil
+		}
 		if len(args) == i+2 && args[i+1] == "true" && len(r.readyErrs) > 0 {
 			err := r.readyErrs[0]
 			r.readyErrs = r.readyErrs[1:]
@@ -257,6 +269,8 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 func TestLifecycleArguments(t *testing.T) {
 	r := newRecorder()
 	p := newProvider(t, r)
+	var stageLog bytes.Buffer
+	p.SetLogger(slog.New(slog.NewJSONHandler(&stageLog, nil)))
 	ctx := context.Background()
 	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
 	// Simulate the clone creating the directory before the marker is written.
@@ -288,6 +302,24 @@ func TestLifecycleArguments(t *testing.T) {
 	}
 	if err := p.StartRunner(ctx, spec.Name, []byte("secret-jit")); err != nil {
 		t.Fatal(err)
+	}
+	stages := map[string]bool{}
+	decoder := json.NewDecoder(&stageLog)
+	for decoder.More() {
+		var record struct {
+			Stage      string `json:"stage"`
+			DurationMS int64  `json:"duration_ms"`
+			Success    bool   `json:"success"`
+		}
+		if err := decoder.Decode(&record); err != nil || record.DurationMS < 0 || !record.Success {
+			t.Fatal("invalid startup stage outcome", err)
+		}
+		stages[record.Stage] = true
+	}
+	for _, stage := range []string{"clone", "native_start", "agent_wait", "script_install", "aqua_session_check"} {
+		if !stages[stage] {
+			t.Fatalf("missing %s timing", stage)
+		}
 	}
 	if got := r.stdin["Exec bivouac-macos-abc /tmp/bivouac-guest start /Users/admin/actions-runner"]; got != "secret-jit" {
 		t.Fatalf("JIT not delivered on stdin: %q", got)

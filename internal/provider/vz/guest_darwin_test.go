@@ -3,6 +3,8 @@ package vz
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -16,6 +18,38 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/perf"
 )
+
+// Execute only the fixed fingerprint probe against host fixtures. No guest,
+// manager, production binary or baseline is started or modified.
+func TestPreparedHelperProbeNativePaths(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	f, err := os.Open("/bin/sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "helper")
+	if err := os.Symlink("/bin/sh", link); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []string{"/bin/sh", link, link + "-absent"} {
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-s", "--", candidate)
+		cmd.Stdin = strings.NewReader(helperProbe)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal("fixed helper probe failed", err)
+		}
+		matches, err := helperMatches(out, hex.EncodeToString(hash.Sum(nil)))
+		if err != nil || matches != (candidate == "/bin/sh") {
+			t.Fatal("probe accepted an unprotected path or rejected a protected file", err)
+		}
+	}
+}
 
 // Exercise the wrapper's real child process and recorder together, including
 // an official-listener failure. The fixture never registers or launches a VM.
@@ -158,42 +192,5 @@ exit 7
 	job, err := os.ReadFile(filepath.Join(root, "bivouac", "job"))
 	if err != nil || string(job) != "run_id=123\nrepository=example/repository\njob=macos\n" {
 		t.Fatal("job identity changed", err)
-	}
-}
-
-type failedHelper struct {
-	*recorder
-	cleanupFails bool
-}
-
-func (f failedHelper) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
-	if strings.Contains(strings.Join(args, " "), "dd of="+guestHelper) {
-		return errors.New("synthetic partial copy failure")
-	}
-	if f.cleanupFails && len(args) >= 3 && args[len(args)-1] == guestHelper && args[len(args)-3] == "rm" {
-		return errors.New("synthetic cleanup failure")
-	}
-	return f.recorder.Run(ctx, args, stdin, stdout)
-}
-
-func TestPartialHelperInstallationFallsBackOnlyAfterRemoval(t *testing.T) {
-	for _, cleanupFails := range []bool{false, true} {
-		r := newRecorder()
-		p := newProvider(t, r)
-		writeMarker(t, p, "bivouac-macos-fixture")
-		p.rt = callRuntime{failedHelper{r, cleanupFails}}
-		err := p.StartRunner(context.Background(), "bivouac-macos-fixture", []byte("synthetic-jit"))
-		if (err != nil) != cleanupFails {
-			t.Fatal("partial helper cleanup outcome", err)
-		}
-		started := false
-		for _, call := range r.calls {
-			if strings.Contains(strings.Join(call, " "), guestPath+" start") {
-				started = true
-			}
-		}
-		if started == cleanupFails {
-			t.Fatal("JIT dispatched before partial helper removal")
-		}
 	}
 }

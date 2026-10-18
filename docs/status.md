@@ -48,6 +48,13 @@ virtualization entitlement; macOS CI signs a test binary and has the
 framework validate every helper device combination (skipped where the host
 cannot virtualize).
 
+Tests only: startup stage timings through listener readiness, exact-hash reuse
+of a protected baseline helper, and one-copy macOS helper delivery shared by
+telemetry, caching and optional container pairs. Tests cover native read-only
+fingerprint probes, stale/untrusted helpers, transport and partial-copy failures,
+cache fallback and pair reuse. These changes are not deployed to the installed
+controller; no live cold-boot timings or speedup have been established.
+
 Open:
 
 - Production cutover to a baseline with the guest agent installed.
