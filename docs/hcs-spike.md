@@ -505,9 +505,12 @@ only fixed numeric fields, never key material or service/event log text.
 Key generation and the subsequent service starts have separate elapsed spans.
 Guest uptime and the host stopwatch have different origins, so do not directly
 subtract one from the other. Startup/security ordering and task priority are
-unchanged for the instrumented control. Local regression checks pass; live image
-capture and three cold-boot measurements are pending. Sanitation and validation
-pins require rebuilding the prepared image for the new fixed scripts.
+unchanged for the instrumented control. Local regression checks and instrumented
+image capture pass, including sanitation, acknowledged clean shutdown, publication
+and source cleanup. Three cold-boot measurements remain pending because the live
+reserve guard stopped the first prepared clone before agent connection; native
+absence and owned cleanup passed. Sanitation and validation pins require rebuilding
+the prepared image for the new fixed scripts.
 
 ## Desktop validation checkpoints
 

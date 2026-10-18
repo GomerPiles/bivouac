@@ -215,8 +215,10 @@ gates. New bounded guest-uptime checkpoints distinguish task entry, key generati
 SSH/agent service startup. The schema requires complete, ordered values within
 ten minutes, with no wall-clock timestamps or guest-controlled text. This keeps
 fresh keys, service ordering and every readiness check intact. Local race tests,
-vet, lint and script/report regressions pass; a newly captured instrumented image
-and live timing remain pending. The installed provider and production CI are unchanged.
+vet, lint and script/report regressions pass. The instrumented image passes
+sanitation, acknowledged clean shutdown, publication and source cleanup. Cold-boot
+attribution remains pending: the live reserve guard canceled the first prepared
+clone before agent connection and confirmed native absence and owned cleanup. The installed provider and production CI are unchanged.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
