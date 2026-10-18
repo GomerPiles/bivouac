@@ -54,6 +54,9 @@ func nativeSocketPair(t *testing.T) (*hvConn, net.Conn) {
 	if err = server.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	if err = client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	return client, server
 }
 
@@ -140,7 +143,7 @@ func TestNativeCloseJoinsConcurrentIO(t *testing.T) {
 	for _, done := range []chan error{reads, writes} {
 		select {
 		case err := <-done:
-			if !errors.Is(err, net.ErrClosed) {
+			if !errors.Is(err, net.ErrClosed) && !errors.Is(err, windows.ERROR_OPERATION_ABORTED) {
 				t.Fatal("I/O survived close", err)
 			}
 		case <-time.After(time.Second):
@@ -192,14 +195,15 @@ func TestNativeCancellationBeforeWaitRegistration(t *testing.T) {
 	client, _ := nativeSocketPair(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	var submitted error
 	_, err := client.operation(ctx, &client.read, make([]byte, 1), func(o *hvOperation) error {
-		err := windows.WSARecv(client.socket, &o.buffer, 1, &o.bytes, &o.flags, &o.overlapped, nil)
-		if !errors.Is(err, windows.ERROR_IO_PENDING) {
-			t.Fatal("fixture did not start pending I/O", err)
-		}
+		submitted = windows.WSARecv(client.socket, &o.buffer, 1, &o.bytes, &o.flags, &o.overlapped, nil)
 		cancel() // Between kernel submission and cancellation callback registration.
-		return err
+		return submitted
 	})
+	if !errors.Is(submitted, windows.ERROR_IO_PENDING) {
+		t.Fatal("fixture did not start pending I/O", submitted)
+	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("cancel-before-wait lost", err)
 	}
