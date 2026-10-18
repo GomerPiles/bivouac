@@ -804,8 +804,10 @@ Sanitation refuses runner registration/work/diagnostic state, removes the fixed
 probe output, cached answer files and authorized SSH keys, and removes server
 host keys and schedules shutdown in that same SSH operation; no new SSH exec
 may regenerate keys between sanitation and capture. A fixed guest SYSTEM startup
-task requires disabled/stopped sshd, removes any residual server keys, generates
-fresh ones, then enables and starts sshd. The agent cannot start sshd first. Password authentication is disabled; SSH binds only loopback and
+task requires disabled/stopped sshd and guest agent, removes any residual server
+keys, generates fresh ones, then enables/starts sshd followed by the guest agent.
+The upstream agent can re-enable sshd, so both services stay disabled until this
+ordering completes. Password authentication is disabled; SSH binds only loopback and
 is reached through the owned runtime's HvSocket. The image retains a randomized
 local account credential with autologon stored as an LSA private secret, not a
 plaintext Winlogon value. Prepared storage is administrator/SYSTEM-only with VM

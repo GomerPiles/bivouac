@@ -185,7 +185,7 @@ func runTrialSession(ctx context.Context, c Config, count int, run func(context.
 		r, err := run(ctx, c, i)
 		r.InstanceID = c.InstanceID
 		r.BaselineReused = i > 0
-		if err == nil && c.PreparedImage != nil {
+		if err == nil && c.PreparedImage != nil && r.SSHAuthenticated {
 			key, decodeErr := hex.DecodeString(r.SSHHostKeySHA256)
 			_, reused := hostKeys[r.SSHHostKeySHA256]
 			if decodeErr != nil || len(key) != sha256.Size || strings.ToLower(r.SSHHostKeySHA256) != r.SSHHostKeySHA256 || reused {

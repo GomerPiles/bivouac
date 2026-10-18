@@ -410,7 +410,7 @@ registration is involved in this experiment.
    The guarded guest must finish setup, profile creation and hardware rendering.
    Fixed sanitation refuses registered-runner/work state, removes cached answer
    files and SSH keys, randomizes the local password and configures fresh server
-   host keys at boot before enabling sshd. Sanitation and shutdown run in one SSH
+   host keys at boot before enabling sshd and then the guest agent. Sanitation and shutdown run in one SSH
    operation so another SSH process cannot recreate factory keys before capture.
    Autologon uses an LSA secret. Only acknowledged guest OS shutdown, a successful native `GracefulExit`
    and confirmed native absence permit copying the owned child into the exclusive
@@ -468,7 +468,8 @@ context expires. No extra sleep or weaker readiness gate is used to mask it.
 
 Read-only inspection confirmed the captured disk retained the server keys seen
 by all three clones. The correction combines sanitation and shutdown, requires
-sshd to stay disabled until a boot task replaces server keys, binds sanitation
+sshd and the guest agent to stay disabled until a boot task replaces server keys,
+starts SSH and then starts the agent, binds sanitation
 code in the image manifest, and rejects repeated server fingerprints. Local race,
 vet and lint checks pass; a new image build and three distinct-key cold boots
 remain the live validation gate. Old manifests fail the new sanitation pin.

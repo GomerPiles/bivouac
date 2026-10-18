@@ -202,7 +202,8 @@ staging and driver copies were zero on every prepared boot. Agent connection was
 A fingerprint comparison then found reused SSH server keys; read-only inspection
 confirmed keys remained in that captured disk. The corrected factory coordinates
 sanitation and shutdown in one SSH operation, pins sanitation code in provenance,
-and leaves sshd disabled until the boot task replaces server keys. Repeated
+and leaves sshd and the guest agent disabled until the boot task replaces server
+keys, starts SSH, then starts the agent. Repeated
 prepared trials now refuse missing/reused public fingerprints. Local regression
 checks pass; corrected-image live validation remains pending. The earlier image
 is unsuitable for promotion and is rejected by the new sanitation pin.

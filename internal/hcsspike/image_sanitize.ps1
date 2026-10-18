@@ -54,7 +54,8 @@ try {
  $startup='$ErrorActionPreference=''Stop''
 $ProgressPreference=''SilentlyContinue''
 $service=Get-Service sshd
-if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped''){exit 1}
+$agent=Get-Service AppSandboxAgent
+if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped'' -or $agent.StartType -ne ''Disabled'' -or $agent.Status -ne ''Stopped''){exit 1}
 foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecdsa_key'',''ssh_host_ecdsa_key.pub'',''ssh_host_ed25519_key'',''ssh_host_ed25519_key.pub'')){
  $path=Join-Path ''C:\ProgramData\ssh'' $name
  if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
@@ -64,6 +65,8 @@ if($LASTEXITCODE){exit 1}
 foreach($name in @(''ssh_host_rsa_key'',''ssh_host_ecdsa_key'',''ssh_host_ed25519_key'')){if(!(Test-Path -LiteralPath (Join-Path ''C:\ProgramData\ssh'' $name) -PathType Leaf)){exit 1}}
 Set-Service sshd -StartupType Manual
 Start-Service sshd
+Set-Service AppSandboxAgent -StartupType Manual
+Start-Service AppSandboxAgent
 '
  $startupPath=Join-Path $base 'hcs-spike-startup.ps1';Assert-Ordinary $startupPath
  [IO.File]::WriteAllText($startupPath,$startup,[Text.UTF8Encoding]::new($false))
@@ -74,6 +77,9 @@ Start-Service sshd
  $trigger=New-ScheduledTaskTrigger -AtStartup
  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
  Register-ScheduledTask -TaskName $taskName -Principal $principal -Action $action -Trigger $trigger -Settings $settings|Out-Null
+ # The upstream agent can re-enable sshd, so it must also stay stopped until
+ # the boot task has generated server keys and started SSH.
+ Set-Service AppSandboxAgent -StartupType Disabled
  Set-Service sshd -StartupType Disabled
  foreach($name in @('ssh_host_rsa_key','ssh_host_rsa_key.pub','ssh_host_ecdsa_key','ssh_host_ecdsa_key.pub','ssh_host_ed25519_key','ssh_host_ed25519_key.pub')){
   $path=Join-Path $ssh $name;Assert-Ordinary $path

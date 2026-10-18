@@ -441,7 +441,7 @@ func TestPreparedTrialSessionRejectsMissingOrRepeatedServerKeys(t *testing.T) {
 				case "invalid":
 					fingerprint = strings.Repeat("g", 64)
 				}
-				return Report{SSHHostKeySHA256: fingerprint, Cleaned: true, NativeAbsent: true}, nil
+				return Report{SSHHostKeySHA256: fingerprint, SSHAuthenticated: true, Cleaned: true, NativeAbsent: true}, nil
 			}, func(Report) error { reports++; return nil })
 			wantCalls := 1
 			if kind == "fresh" {
@@ -472,5 +472,21 @@ if($errors.Count){exit 3}
 `
 	if err := runImageFixture(t, script, payload); err != nil {
 		t.Fatal("nested guest SSH key rotation task syntax invalid", err)
+	}
+}
+
+func TestPreparedNativeOnlySessionDoesNotClaimSSHProof(t *testing.T) {
+	c := exampleConfig()
+	c.PreparedImage = &PinnedFile{}
+	err := runTrialSession(context.Background(), c, 1, func(context.Context, Config, int) (Report, error) {
+		return Report{NativeStarted: true, Cleaned: true, NativeAbsent: true}, nil
+	}, func(r Report) error {
+		if r.SSHAuthenticated || r.SSHHostKeySHA256 != "" {
+			t.Fatal("native-only trial claimed SSH proof")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("native-only trial requires guest SSH", err)
 	}
 }
