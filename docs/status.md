@@ -233,7 +233,15 @@ Validated live:
   fresh guests; file and container sentinels proved the reset.
 - A controller crash mid-job: the supervisor and VM survived and were
   adopted. Off mid-job lets the job finish and cleans up.
-- A fresh guest reaches listening in about 18 s.
+
+Prepared-helper/DNS reuse, startup timing and explicit sanitized image capture
+are implemented and validated with trusted workloads. Three fresh 2-CPU/2-GiB
+prepared clones reached readiness in 10.7-12.3 s; two sequential smoke jobs reached
+listening in 18.0-19.0 s with fresh-state, GPU/CDI, Docker, DNS/HTTPS and cleanup
+checks. Prepared-image adoption and supervisor-loss cleanup are validated.
+The CLI sanitation-mode correction, configurable trial reserves and canonical
+capture-output check have regression coverage; live validation of those fixes
+remains pending. Production deployment of the prepared image remains pending.
 
 Open: private peers, NIC reconfiguration and dynamic interfaces, a cleanup
 soak, resource accounting with foreign managers, clean-room runtime

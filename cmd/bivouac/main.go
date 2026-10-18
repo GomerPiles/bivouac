@@ -52,6 +52,7 @@ Setup:
   appsandbox inspect  read-only daemon/version/VM inventory (no startup)
   appsandbox broker   operator-started elevated lifecycle broker
   crosvm validate     credential-free Linux GPU/lifecycle/recovery test
+  crosvm build-image  prepare and cleanly capture an independent Linux image
   crosvm cleanup      retry one exact recorded native validation instance
   version
 `

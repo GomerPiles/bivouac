@@ -1,4 +1,5 @@
-# Lints and tests bivouac itself on GitHub-hosted runners only.
+# Default checks use GitHub-hosted runners. The explicit prepared-image smoke
+# requires a separately provisioned, dedicated validation runner.
 name: CI
 
 on:
@@ -6,6 +7,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      prepared_linux:
+        description: Run two isolated prepared Linux smoke jobs (requires dedicated validation runner)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -51,3 +57,30 @@ jobs:
           rustc --version
           rustc --test --edition 2021 tools/crosvm/public_ipv4.rs -o "$RUNNER_TEMP/public-ipv4-tests"
           "$RUNNER_TEMP/public-ipv4-tests"
+
+  prepared-linux:
+    if: github.event_name == 'workflow_dispatch' && inputs.prepared_linux
+    runs-on: bivouac-linux-prepared-validation
+    timeout-minutes: 3
+    strategy:
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        clone: [1, 2]
+    steps:
+      - name: Verify prepared guest and fresh job state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /etc/bivouac/prepared-image.json
+          test -x /usr/local/libexec/bivouac-guest
+          test "$(stat -c %u /usr/local/libexec/bivouac-guest)" = 0
+          test "$(readlink /tmp/bivouac-runner/helper)" = /usr/local/libexec/bivouac-guest
+          test ! -e /var/tmp/bivouac-prepared-validation-sentinel
+          touch /var/tmp/bivouac-prepared-validation-sentinel
+          test -c /dev/dri/renderD128
+          test "$(cat /sys/class/drm/renderD128/device/vendor)" = 0x1af4
+          test -f /etc/cdi/ci-gpu.json
+          docker info --format '{{.ServerVersion}}'
+          getent ahostsv4 github.com >/dev/null
+          curl --fail --silent --show-error --max-time 20 --output /dev/null https://api.github.com

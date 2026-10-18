@@ -1004,6 +1004,46 @@ official runner and generic Docker/virtio/CDI runtime come from the immutable
 baseline. JIT input arrives over authenticated SSH stdin, is consumed once,
 and is never staged on the host. PID/start-time/executable proof protects
 listener cancellation. Logs and ZIP diagnostics are bounded and redacted.
+
+Linux readiness fingerprints `/usr/local/libexec/bivouac-guest` without executing
+it. A fixed stdin script verifies root ownership, mutation bits and absence of
+links on every ancestor and the helper. Only an exact SHA-256 match with the
+selected host helper permits reuse; missing, stale or untrusted helpers are
+uploaded afresh. A trusted fingerprint mismatch emits a warning. SSH transport
+failure refuses readiness. Bootstrap installs one private runtime helper, used
+by later operations and adoption without a second listener-start copy.
+
+Public DNS is checked before repair: the persistent eth0 NetworkManager profile,
+its live upstream set and the resolver must agree on the two selected public
+resolvers. DHCP DNS is ignored for IPv4/IPv6, with no configured IPv6 DNS. A
+resolved loopback stub requires verified live public upstreams. Correct state
+causes no writes or reapply; each repair is re-read. Images without NetworkManager
+require a regular unmanaged resolver file. Native network policy still applies.
+
+Startup observations are bounded numeric durations, stage codes and reuse/change
+booleans. Host spans use monotonic clocks; guest systemd activation timestamps are
+boot milestones, not host elapsed times or dependency-chain measurements.
+
+The explicit image factory requires a fresh bootstrap bound to the exact guest,
+controller, boot and helper hash, before JIT delivery. It refuses enrollment,
+nonempty job work, worker logs, links and unknown runner diagnostics. It installs
+the protected helper and DNS, removes factory SSH host keys and the random seed
+(after stopping seed persistence), and empties machine-id with D-Bus following it.
+SSH host keys regenerate before ssh.service on cold boot. Only proven bootstrap
+files are removed; public provenance and the designated SSH authorization key
+remain. Host private keys and GitHub credentials must never enter the image.
+
+Capture requires acknowledged clean shutdown, natural exit code zero, an empty
+recorded native job, current ownership/backing proof and supervisor/VM absence.
+Forced stops and ambiguous outcomes refuse capture. A single converter writes
+into a fresh external directory whose parent is resolved through the filesystem;
+geometry verification and flush precede publication of the provenance manifest.
+Partial output is unpublishable; owned source cleanup runs independently of
+capture success. This factory IO adds no hashing or conversion to ordinary boot.
+Factory/reuse validation discards its sanitized guest; only fresh cold clones
+can establish distinct machine and SSH identities. See `docs/crosvm.md` for
+commands, resource guards and validation prerequisites.
+
 Windowed jobs own their compositor inside the guest/container; hardware
 rendering plus wl_shm/Pixman presentation does not imply direct scanout or
 a logged-in desktop capability. See `docs/crosvm.md` for setup and gates.
