@@ -820,8 +820,8 @@ Publication uses an exclusive owned build directory under a protected sibling
 `HCS-Images` root. Only a clean, sanitized, validated and confirmed-absent source
 can be copied. The runtime config precedes an atomically published, hash-pinned
 manifest binding image, flat parent, build owner, guest identity and public asset
-hashes, including the exact sanitation implementation. Interrupted unpublished output is removable only with its exact owner
-marker; published images are never removed by trial cleanup. Parent resolution
+hashes, including the exact sanitation implementation. Interrupted unpublished
+output is removable only with its exact owner marker; published images are never removed by trial cleanup. Parent resolution
 is checked through read-only virtdisk metadata. A session hashes and pins both
 image files once with handles denying writes/deletion until all trials finish.
 `trial --repetitions 1..5` runs sequential fresh clones, stopping on any error or
@@ -834,13 +834,12 @@ shutdown requirements, guest LSA binding compilation, extraction safety and
 credential/report gates. Live building, sanitation, acknowledged guest shutdown,
 native graceful exit, publication and three prepared cold boots pass, including
 cloned autologon, credential rotation, authenticated SSH, hardware rendering and
-owned cleanup. The report can compare public server-key fingerprints across
-clones and records numeric connect-attempt counts/latencies. That comparison
-found captured-key reuse in the earlier image; coordinated shutdown, disabled
-sshd ordering, sanitation provenance and duplicate-key rejection correct the
-implementation. Live validation of the corrected image remains pending.
-The experiment is
-not wired into the manager/provider contract.
+owned cleanup. Three fresh corrected-image boots presented distinct public SSH
+server keys, all different from the factory key. Reports retain only their public
+fingerprints and numeric connect-attempt counts/latencies. Each prepared boot
+used two attempts, including one approximately 30-s native pending connect;
+transport cancellation remains a follow-up. The experiment is not wired into
+the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

@@ -445,34 +445,35 @@ agent, SSH and console breakdown across cold boots. The build is a one-time cost
 first-session hashing is separately visible. There is no runner-listening time
 in this offline spike, so it cannot yet establish clone-to-job latency.
 
-A live independent build completed in 183.904 s, including factory setup,
-rendering, sanitation, acknowledged guest shutdown, native `GracefulExit`,
-publication and source cleanup. Its initial prepared cold boots passed the
-desktop checks below; later fingerprint validation rejected this image for server-
-key reuse, so it must not be promoted:
+A live independent corrected build completed in 184.604 s, including factory
+setup, rendering, sanitation, acknowledged guest shutdown, native `GracefulExit`,
+publication and source cleanup. Three fresh prepared cold boots then passed:
 
 | Fresh boot | Validated desktop | Session image verification | Agent connection |
 | --- | --- | --- | --- |
-| 1 | 55.873 s | 11.960 s | 30.512 s |
-| 2 | 41.783 s | reused | 30.508 s |
-| 3 | 41.652 s | reused | 30.514 s |
+| 1 | 54.666 s | 11.664 s | 30.506 s |
+| 2 | 41.753 s | reused | 30.510 s |
+| 3 | 42.474 s | reused | 30.520 s |
 
-Every boot rotated its local credential and passed authenticated SSH, console,
+Every boot presented a distinct SSH server key, all different from the factory
+key, rotated its local credential, and passed authenticated SSH, console,
 hardware D3D11, presentation and pixel checks. Setup-media, answer-staging and
 driver-copy times were zero. Native absence and owned cleanup passed after every
 boot. These are offline desktop timings, not Windows runner-listening/job times
-or a paired comparison with the existing provider. The repeatable 30.5-s agent
-connection plateau used two dial attempts per boot, with one taking about 30 s; the selected HvSocket
-implementation does not cancel its pending native connect when the attempt
-context expires. No extra sleep or weaker readiness gate is used to mask it.
+or a paired comparison with the existing provider.
 
-Read-only inspection confirmed the captured disk retained the server keys seen
-by all three clones. The correction combines sanitation and shutdown, requires
-sshd and the guest agent to stay disabled until a boot task replaces server keys,
-starts SSH and then starts the agent, binds sanitation
-code in the image manifest, and rejects repeated server fingerprints. Local race,
-vet and lint checks pass; a new image build and three distinct-key cold boots
-remain the live validation gate. Old manifests fail the new sanitation pin.
+The repeatable 30.5-s agent connection plateau used two dial attempts per boot,
+with one taking about 30 s. The selected HvSocket implementation does not cancel
+its pending native connect when the attempt context expires. This remains a
+performance and bounded-cancellation follow-up; no extra sleep or weaker
+readiness gate masks it.
+
+Sanitation and shutdown run in one SSH operation to avoid recreating factory
+keys through another SSH process. The boot task keeps both sshd and the guest
+agent disabled until fresh keys exist, then starts SSH before the agent. The
+manifest binds sanitation code, so images made with older sanitation are refused.
+Repeated prepared trials reject missing or repeated public server fingerprints.
+The corrected image passed this gate on all three cold boots.
 
 ## Desktop validation checkpoints
 

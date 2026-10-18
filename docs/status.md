@@ -182,31 +182,27 @@ provider or clone-to-CI-listener comparison has been run.
 Supplied existing-provider evidence places about 87% of readiness in native
 startup plus console preflight; the latter observes console availability pending
 while setup/OOBE flags are already clear.
-The prepared-image pipeline is implemented in the experimental executable:
-`build-image` prepares an unenrolled derived image, validates rendering,
-sanitizes authentication/runner state and requires clean shutdown/native absence
-before publishing pinned provenance. Runtime trials omit setup media, OS setup,
-installations and driver copies and rotate the local credential. SSH starts
-disabled until the boot task generates fresh server keys. `trial --repetitions` runs sequential fresh clones with one session-scoped
-verification of pinned source/derived images. Publication/ownership checks,
-private image ACLs, synthetic VHD ancestry, extraction safety and credential
-gates have ordinary-token regression coverage. Live factory setup, runner
-extraction, desktop rendering, sanitation, acknowledged guest shutdown, native
-`GracefulExit`, image publication and owned source cleanup pass. Three fresh
-prepared cold boots then passed autologon, per-clone credential rotation,
-authenticated SSH, stable console, hardware D3D11, presentation/pixel checks and
-owned cleanup. Their validated-desktop times were 55.873 s (including 11.960 s
-session image verification), 41.783 s and 41.652 s. Setup media, offline answer
-staging and driver copies were zero on every prepared boot. Agent connection was
-30.5 s on all three boots; its transport wait remains a performance follow-up.
-A fingerprint comparison then found reused SSH server keys; read-only inspection
-confirmed keys remained in that captured disk. The corrected factory coordinates
-sanitation and shutdown in one SSH operation, pins sanitation code in provenance,
-and leaves sshd and the guest agent disabled until the boot task replaces server
-keys, starts SSH, then starts the agent. Repeated
-prepared trials now refuse missing/reused public fingerprints. Local regression
-checks pass; corrected-image live validation remains pending. The earlier image
-is unsuitable for promotion and is rejected by the new sanitation pin.
+The prepared-image pipeline is live validated in the experimental executable.
+`build-image` prepares an unenrolled derived image, validates rendering, sanitizes
+authentication/runner state, acknowledges guest shutdown and requires native
+`GracefulExit`/absence before publishing pinned provenance. Sanitation and
+shutdown share one SSH operation. Both sshd and the guest agent stay disabled
+until a fixed boot task replaces server keys, starts SSH, then starts the agent.
+The manifest pins this sanitation implementation; older images fail that pin.
+Runtime trials omit setup media, OS setup, installations and driver copies and
+rotate the local credential. `trial --repetitions` runs sequential fresh clones
+with one session-scoped verification of pinned source/derived images and rejects
+missing/repeated public SSH server-key fingerprints. Publication/ownership,
+private image ACLs, VHD ancestry, extraction safety and credential gates have
+ordinary-token regression coverage.
+The corrected factory build completed in 184.604 s. Three prepared cold boots
+passed autologon, credential rotation, authenticated SSH, stable console, hardware
+D3D11, presentation/pixel checks and owned cleanup, with three distinct server
+keys, all different from the factory key. Validated-desktop times were 54.666 s
+(including 11.664 s session image verification), 41.753 s and 42.474 s. Setup media,
+offline answer staging and driver copies were zero. Each boot used two agent
+dial attempts; one spent about 30 s in the pending native connect. That transport
+wait remains a performance and bounded-cancellation follow-up.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
