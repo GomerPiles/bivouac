@@ -14,6 +14,7 @@ import (
 
 type fakeBackend struct {
 	imageReady                                      bool
+	shutdownAcknowledgementMissing                  bool
 	shutdownErr                                     error
 	shutdowns                                       int
 	closeBeforeStop                                 bool
@@ -40,7 +41,7 @@ func (s *fakeSystem) Terminate(ctx context.Context) error {
 	s.api.vm = nil
 	return nil
 }
-func (s *fakeSystem) Shutdown(context.Context) error {
+func (s *fakeSystem) WaitGracefulExit(context.Context) error {
 	s.api.shutdowns++
 	if s.api.shutdownErr != nil {
 		return s.api.shutdownErr
@@ -100,6 +101,7 @@ func (f *fakeBackend) Probe(_ context.Context, _ Config, _ string) (Report, erro
 		r.Presented = true
 		r.PixelReadback = true
 		r.ImageSanitized = true
+		r.ImageShutdownAcknowledged = !f.shutdownAcknowledgementMissing
 	}
 	return r, f.probeErr
 }

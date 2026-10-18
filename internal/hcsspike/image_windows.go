@@ -463,3 +463,32 @@ func privateImageACL(acl *windows.ACL) error {
 	}
 	return nil
 }
+
+// This fixed command is sent only over the authenticated owned-guest transport.
+// It never executes through a host process launcher. Windows flushes the guest
+// filesystems before power-off; a forced native stop cannot pass exit validation.
+const imageShutdownScript = `param($data)
+$ErrorActionPreference='Stop'
+if($env:COMPUTERNAME -ine $data.name -or $env:USERNAME -ine $data.user){exit 1}
+$marker=Get-Content -LiteralPath 'C:\Windows\AppSandbox\hcs-spike-prepared.json' -Raw|ConvertFrom-Json
+if($marker.name -cne $data.name -or $marker.user -cne $data.user){exit 1}
+& 'C:\Windows\System32\shutdown.exe' @('/s','/t','5','/d','p:0:0') *> $null
+if($LASTEXITCODE){exit 1}
+[Console]::Out.Write('shutdown-scheduled');[Console]::Out.Flush()
+`
+
+func imageShutdownInput(c Config) ([]byte, error) {
+	return guestScriptInput(imageShutdownScript, map[string]string{"name": c.name(), "user": c.GuestUser})
+}
+func requestImageShutdown(ctx context.Context, client *ssh.Client, c Config) error {
+	input, err := imageShutdownInput(c)
+	if err != nil {
+		return errors.New("cannot encode fixed guest shutdown request")
+	}
+	defer clear(input)
+	out, _, err := runGuestSSH(ctx, client, desktopValidationCommand(), input)
+	if err != nil || string(out) != "shutdown-scheduled" {
+		return errors.New("guest clean shutdown acknowledgement unavailable")
+	}
+	return nil
+}

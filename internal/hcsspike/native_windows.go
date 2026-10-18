@@ -116,7 +116,7 @@ func (a *native) check() error {
 	if runtime.GOARCH != "amd64" {
 		return errors.New("HCS spike supports Windows amd64 only")
 	}
-	for _, name := range []string{"HcsCreateOperation", "HcsCloseOperation", "HcsWaitForOperationResult", "HcsCreateComputeSystem", "HcsOpenComputeSystem", "HcsCloseComputeSystem", "HcsGetComputeSystemProperties", "HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsModifyComputeSystem", "HcsTerminateComputeSystem", "HcsGrantVmAccess", "HcsCreateEmptyGuestStateFile", "HcsCreateEmptyRuntimeStateFile"} {
+	for _, name := range []string{"HcsCreateOperation", "HcsCloseOperation", "HcsWaitForOperationResult", "HcsCreateComputeSystem", "HcsOpenComputeSystem", "HcsCloseComputeSystem", "HcsGetComputeSystemProperties", "HcsStartComputeSystem", "HcsWaitForComputeSystemExit", "HcsModifyComputeSystem", "HcsTerminateComputeSystem", "HcsGrantVmAccess", "HcsCreateEmptyGuestStateFile", "HcsCreateEmptyRuntimeStateFile"} {
 		if err := a.dll.NewProc(name).Find(); err != nil {
 			return fmt.Errorf("required HCS export unavailable: %s", name)
 		}
@@ -174,11 +174,11 @@ func (a *native) wait(ctx context.Context, op uintptr, method string, wantResult
 	return boundedResult(result)
 }
 
-// Start/Shutdown/Terminate reserve their options argument and require NULL, not an
+// Start/Terminate reserve their options argument and require NULL, not an
 // empty JSON object or even a pointer to an empty UTF-16 string.
 func operationInput(method, document string) (*uint16, error) {
 	switch method {
-	case "HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsTerminateComputeSystem":
+	case "HcsStartComputeSystem", "HcsTerminateComputeSystem":
 		if document != "" {
 			return nil, errors.New("HCS lifecycle options must be absent")
 		}
@@ -314,10 +314,6 @@ func (s *nativeSystem) Start(ctx context.Context) error {
 }
 func (s *nativeSystem) GPU(ctx context.Context) error {
 	_, err := s.api.operation(ctx, "HcsModifyComputeSystem", s.handle, gpuDocument(), false)
-	return err
-}
-func (s *nativeSystem) Shutdown(ctx context.Context) error {
-	_, err := s.api.operation(ctx, "HcsShutDownComputeSystem", s.handle, "", false)
 	return err
 }
 func (s *nativeSystem) Terminate(ctx context.Context) error {
@@ -511,4 +507,47 @@ func copyDriverFile(src *os.Root, relative, destination string, size int64) erro
 		err = out.Sync()
 	}
 	return errors.Join(err, out.Close())
+}
+
+// Wait on the same held native handle. Absence or an error is never a clean-exit
+// signal, and polling bounds cancellation latency independently of guest timing.
+func (s *nativeSystem) WaitGracefulExit(ctx context.Context) error {
+	return waitGracefulExit(ctx, func(timeout uintptr) ([]byte, error) {
+		var result *uint16
+		r, _, _ := s.api.proc("HcsWaitForComputeSystemExit").Call(s.handle, timeout, uintptr(unsafe.Pointer(&result))) // #nosec G103 -- Documented HCS wait ABI; result allocation is released below.
+		if result != nil {
+			defer func() { _, _ = windows.LocalFree(windows.Handle(uintptr(unsafe.Pointer(result)))) }()
+		} // #nosec G103 -- Paired HCS allocation release.
+		if err := hresult("HcsWaitForComputeSystemExit", r); err != nil {
+			return nil, err
+		}
+		return boundedResult(result)
+	})
+}
+func waitGracefulExit(ctx context.Context, wait func(uintptr) ([]byte, error)) error {
+	for {
+		bound, err := operationTimeout(ctx)
+		if err != nil {
+			return err
+		}
+		data, err := wait(min(bound, 1000))
+		if err != nil {
+			var e *nativeError
+			if errors.As(err, &e) && (e.code == uint32(windows.HCS_E_OPERATION_TIMEOUT) || e.code == 0x80070102 || e.code == 0x800705b4) {
+				continue
+			}
+			return err
+		}
+		return validateGracefulExit(data)
+	}
+}
+func validateGracefulExit(data []byte) error {
+	var result struct {
+		Status   int32
+		ExitType string
+	}
+	if len(data) > 65536 || json.Unmarshal(data, &result) != nil || result.Status != 0 || result.ExitType != "GracefulExit" {
+		return errors.New("native graceful guest exit unconfirmed; image capture refused")
+	}
+	return nil
 }

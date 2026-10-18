@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1â€“6 ms, boot to guest agent 22â€“31 s, JIT to listening
-  5â€“10 s, teardown 1.3â€“1.8 s (power-off).
+- Timings: clone 1Ã¢â‚¬â€œ6 ms, boot to guest agent 22Ã¢â‚¬â€œ31 s, JIT to listening
+  5Ã¢â‚¬â€œ10 s, teardown 1.3Ã¢â‚¬â€œ1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -190,10 +190,12 @@ installations and driver copies, rotate the local credential and use fresh SSH
 keys. `trial --repetitions` runs sequential fresh clones with one session-scoped
 verification of pinned source/derived images. Publication/ownership checks,
 private image ACLs, synthetic VHD ancestry, extraction safety and credential
-gates have ordinary-token regression coverage. No manager integration or live
-prepared-image build/boot validation has occurred; boot-time improvement,
-cloned autologon, SSH host-key regeneration and sanitation remain unverified
-against a real guest. Production CI is unchanged.
+gates have ordinary-token regression coverage. Live factory setup, runner extraction, desktop rendering and sanitation pass.
+Publication was refused when the host shutdown API returned unsupported; the
+corrected path requires an authenticated guest shutdown acknowledgement and
+successful native `GracefulExit`. Capture and prepared cold boots remain
+unverified, including cloned autologon and SSH host-key regeneration. No manager
+integration or networking/isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

@@ -288,6 +288,13 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 				return report, err
 			}
 			report.ImageSanitized = true
+			if err = a.verify(ctx, c, runtimeID); err != nil {
+				return report, err
+			}
+			if err = requestImageShutdown(sshCtx, client, c); err != nil {
+				return report, err
+			}
+			report.ImageShutdownAcknowledged = true
 		}
 		return report, renderErr
 	}

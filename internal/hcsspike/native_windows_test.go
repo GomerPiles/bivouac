@@ -114,7 +114,7 @@ func TestPayloadProofDetectsACLChange(t *testing.T) {
 }
 
 func TestLifecycleOperationsUseNullOptions(t *testing.T) {
-	for _, method := range []string{"HcsStartComputeSystem", "HcsShutDownComputeSystem", "HcsTerminateComputeSystem"} {
+	for _, method := range []string{"HcsStartComputeSystem", "HcsTerminateComputeSystem"} {
 		p, err := operationInput(method, "")
 		if err != nil || p != nil {
 			t.Fatal("reserved lifecycle options must be a native NULL")
@@ -176,5 +176,37 @@ func TestDriverCopyRequiresExactObservedSize(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestImageExitRequiresNativeGracefulSuccess(t *testing.T) {
+	for _, data := range []string{`{}`, `{"ExitType":"ForcedExit"}`, `{"ExitType":"UnexpectedExit"}`, `{"ExitType":"Unknown"}`, `{"ExitType":"GracefulExit","Status":-1}`, `{"ExitType":"GracefulExit"} trailing`} {
+		if validateGracefulExit([]byte(data)) == nil {
+			t.Fatal("ambiguous/unclean exit accepted", data)
+		}
+	}
+	for _, data := range []string{`{"ExitType":"GracefulExit"}`, `{"ExitType":"GracefulExit","Status":0}`} {
+		if err := validateGracefulExit([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestImageExitWaitCancellationAndErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := waitGracefulExit(ctx, func(timeout uintptr) ([]byte, error) {
+		calls++
+		if timeout > 1000 {
+			t.Fatal("unbounded exit poll")
+		}
+		cancel()
+		return nil, hresult("wait", 0x80070102)
+	})
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatal("cancellation ignored", err, calls)
+	}
+	calls = 0
+	if waitGracefulExit(context.Background(), func(uintptr) ([]byte, error) { calls++; return nil, hresult("wait", 0x80070005) }) == nil || calls != 1 {
+		t.Fatal("terminal native wait retried")
 	}
 }

@@ -29,11 +29,11 @@ func imageBuildFixture(c Config) Config {
 	return c
 }
 func TestImageCaptureRequiresSanitationAndCleanShutdown(t *testing.T) {
-	for _, fault := range []string{"none", "sanitation", "shutdown"} {
+	for _, fault := range []string{"none", "sanitation", "shutdown", "acknowledgement"} {
 		t.Run(fault, func(t *testing.T) {
 			c, j := testJournal(t)
 			c = imageBuildFixture(c)
-			f := &fakeBackend{imageReady: fault != "sanitation"}
+			f := &fakeBackend{imageReady: fault != "sanitation", shutdownAcknowledgementMissing: fault == "acknowledgement"}
 			if fault == "shutdown" {
 				f.shutdownErr = errors.New("shutdown rejected")
 			}
@@ -383,5 +383,16 @@ func TestImageConfigurationExamples(t *testing.T) {
 	c.GuestComputerName = "prepared"
 	if c.Validate() == nil {
 		t.Fatal("prepared guest name accepted without provenance")
+	}
+}
+
+func TestGuestShutdownRequestStaysFixedAndBounded(t *testing.T) {
+	c := imageBuildFixture(exampleConfig())
+	input, err := imageShutdownInput(c)
+	if err != nil || len(input) > 1024 {
+		t.Fatal("guest-only shutdown frame exceeds transport bound", len(input), err)
+	}
+	if !strings.Contains(imageShutdownScript, `C:\Windows\System32\shutdown.exe`) || strings.Contains(imageShutdownScript, "/m") {
+		t.Fatal("shutdown is not local to the authenticated guest")
 	}
 }

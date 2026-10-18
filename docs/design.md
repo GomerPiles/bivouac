@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128â€“129 s in the crash tests). A job
+  GitHub expires the dead session (128Ã¢â‚¬â€œ129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet â€¦] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet Ã¢â‚¬Â¦] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -790,7 +790,8 @@ The image pipeline has a generalized source and a derived prepared runtime
 image. `build-image` completes specialization/OOBE, driver/service installation,
 the CI user's profile, optional pinned runner extraction and stable desktop once.
 It validates hardware rendering, sanitizes the guest, then requires successful
-HCS clean shutdown and native absence before capture. The prepared image is a
+acknowledged guest OS shutdown, a native successful `GracefulExit` and native
+absence before capture. The prepared image is a
 differencing disk over its recorded standalone generalized source, not generalized
 again. Both source and derived disk remain immutable. Each job trial uses a new
 child, native owner/runtime, firmware state and in-memory SSH client identity.

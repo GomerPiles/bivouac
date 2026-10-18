@@ -412,7 +412,7 @@ registration is involved in this experiment.
    The guarded guest must finish setup, profile creation and hardware rendering.
    Fixed sanitation refuses registered-runner/work state, removes cached answer
    files and SSH keys, randomizes the local password and configures fresh server
-   host keys at boot. Autologon uses an LSA secret. Only successful clean shutdown
+   host keys at boot. Autologon uses an LSA secret. Only acknowledged guest OS shutdown, a successful native `GracefulExit`
    and confirmed native absence permit copying the owned child into the exclusive
    image directory and publishing `manifest.json` last. The source child is then
    cleaned up. No baseline is mounted or modified by the builder.
@@ -508,3 +508,11 @@ First-logon commands are separately checked against their
 Windows OpenSSH initially uses [cmd.exe as its default shell](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-server-configuration).
 The small SSH launcher stays below its [command-line limit](https://learn.microsoft.com/en-us/troubleshoot/windows-client/shell-experience/command-line-string-limitation)
 without changing the guest or host shell configuration.
+
+Prepared-image shutdown uses a fixed authenticated guest-only command, followed
+by [`HcsWaitForComputeSystemExit`](https://learn.microsoft.com/virtualization/api/hcs/reference/hcswaitforcomputesystemexit)
+on the same held native handle. The bounded result must report zero status and
+`GracefulExit`; forced/unexpected/unknown exits, missing acknowledgements, timeout
+and native absence alone refuse capture. A live trial passed sanitation and
+rendering but returned `ERROR_NOT_SUPPORTED` for the host-initiated HCS shutdown
+API; the guest-requested path still requires live capture/cold-boot validation.

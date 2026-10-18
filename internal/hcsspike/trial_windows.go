@@ -56,6 +56,7 @@ type Report struct {
 	CredentialRotated          bool    `json:"credential_rotated"`
 	InstanceID                 string  `json:"instance_id,omitempty"`
 	ImageSanitized             bool    `json:"image_sanitized"`
+	ImageShutdownAcknowledged  bool    `json:"image_shutdown_acknowledged"`
 	CleanShutdown              bool    `json:"clean_shutdown"`
 	ImageBuilt                 bool    `json:"image_built"`
 	ImageSHA256                string  `json:"image_sha256,omitempty"`
@@ -315,8 +316,8 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	observed.NativeStarted = report.NativeStarted
 	observed.GPUAssigned = report.GPUAssigned
 	if err == nil && c.ImageRoot != "" {
-		shutdown, ok := s.(interface{ Shutdown(context.Context) error })
-		if !ok || !observed.ImageSanitized || !observed.GuestReady || !observed.HardwareD3D11 || !observed.PixelReadback {
+		shutdown, ok := s.(interface{ WaitGracefulExit(context.Context) error })
+		if !ok || !observed.ImageShutdownAcknowledged || !observed.ImageSanitized || !observed.GuestReady || !observed.HardwareD3D11 || !observed.PixelReadback {
 			return observed, errors.New("image shutdown requires sanitized, validated guest")
 		}
 		current, queryErr := s.Properties(probeCtx)
@@ -329,10 +330,10 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 		if current.State != "Running" {
 			return observed, errors.New("image guest stopped before clean shutdown dispatch")
 		}
-		if err = shutdown.Shutdown(probeCtx); err != nil {
+		if err = shutdown.WaitGracefulExit(probeCtx); err != nil {
 			return observed, err
 		}
-		// A successful asynchronous HCS operation acknowledges clean shutdown.
+		// The acknowledged guest OS request must produce a native GracefulExit.
 		// The same held handle binds this last verified identity. Properties may
 		// become unavailable during native object teardown; only absence releases
 		// its disk, so retain the verified identity for this close/absence check.
