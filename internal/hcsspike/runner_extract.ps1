@@ -2,7 +2,7 @@ param([string]$ArchivePath,[string]$Destination)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 try {
- $runner=$Destination
+ $runner=[IO.Path]::GetFullPath($Destination).TrimEnd([IO.Path]::DirectorySeparatorChar)
  if(Test-Path -LiteralPath $runner){exit 1}
  New-Item -ItemType Directory -Path $runner|Out-Null
  Add-Type -AssemblyName System.IO.Compression.FileSystem

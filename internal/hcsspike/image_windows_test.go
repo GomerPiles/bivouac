@@ -187,6 +187,16 @@ func TestImmutableDiskChainMetadata(t *testing.T) {
 	if err = verifyDiskChain(child, parent); err != nil {
 		t.Fatal(err)
 	}
+	alias := filepath.Join(dir, "parent-alias.vhdx")
+	if err = os.Link(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyDiskChain(child, alias); err != nil {
+		t.Fatal("same parent file under an alias was refused", err)
+	}
+	if err = vhd.CreateVhdx(filepath.Join(dir, "other.vhdx"), 1, 2); err != nil {
+		t.Fatal(err)
+	}
 	if verifyDiskChain(child, "") == nil || verifyDiskChain(child, filepath.Join(dir, "other.vhdx")) == nil {
 		t.Fatal("unrecorded ancestry accepted")
 	}

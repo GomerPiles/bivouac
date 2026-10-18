@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -91,7 +90,11 @@ func verifyDiskChain(path, parent string) error {
 		word := binary.LittleEndian.Uint16(info.Data[i : i+2])
 		if word == 0 {
 			actual := strings.TrimPrefix(windows.UTF16ToString(words), `\\?\`)
-			if !strings.EqualFold(filepath.Clean(actual), parent) {
+			// Windows may report a long path for a caller's 8.3 alias. File
+			// identity, rather than spelling, must match the pinned parent.
+			observed, actualErr := os.Stat(actual)
+			expected, parentErr := os.Stat(parent)
+			if actualErr != nil || parentErr != nil || !observed.Mode().IsRegular() || !expected.Mode().IsRegular() || !os.SameFile(observed, expected) {
 				return errors.New("prepared image resolves to a different source parent")
 			}
 			return nil
