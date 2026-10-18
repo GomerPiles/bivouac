@@ -3,7 +3,7 @@ description: Exercise official Actions archives and public release downloads on 
 inputs:
   mode:
     required: true
-    description: save, restore, fallback, outage, limited, or mixed
+    description: save, restore, fallback, outage, limited (requires store_uploads and max_object_mb below 24), or mixed
   nonce:
     required: true
     description: Unique identifier shared by save and restore dispatches

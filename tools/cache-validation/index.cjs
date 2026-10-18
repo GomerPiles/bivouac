@@ -164,6 +164,7 @@ async function main() {
   const before = await metrics();
   if (mode === 'fallback') check(!before, 'cache must be disabled for fallback validation');
   else check(before, 'cache integration missing');
+  if (mode === 'limited') check(storing, 'limited validation requires store_uploads');
   if (mode === 'outage') {
     stage = 'release-before-outage';
     await releases();
@@ -186,7 +187,8 @@ async function main() {
     await Promise.all(sizes.map((_, i) => archive('save', i)));
     console.log('Concurrent GitHub saves passed: archives=2');
     // A `limited` save exceeds the object limit, so it is relayed without a copy.
-    if (storing && (mode === 'save' || mode === 'limited')) await uploads(before, mode === 'save' ? 'stored' : 'skipped');
+    if (mode === 'limited') await uploads(before, 'skipped');
+    else if (storing && mode === 'save') await uploads(before, 'stored');
   }
   if (['restore', 'mixed', 'limited', 'fallback', 'outage'].includes(mode)) {
     stage = 'restore';
