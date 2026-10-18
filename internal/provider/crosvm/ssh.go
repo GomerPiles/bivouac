@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -172,10 +173,18 @@ exec /usr/bin/sha256sum -- /usr/local/libexec/bivouac-guest
 `
 
 func helperMatches(b []byte, want string) bool {
-	if len(b) > 256 || !digest(want) {
-		return false
+	return digest(want) && preparedHelperFingerprint(b) == want
+}
+
+func preparedHelperFingerprint(b []byte) string {
+	if len(b) > 256 {
+		return ""
 	}
-	return strings.TrimSpace(string(b)) == want+"  "+preparedHelper
+	hash, path, ok := strings.Cut(strings.TrimSpace(string(b)), "  ")
+	if !ok || !digest(hash) || path != preparedHelper {
+		return ""
+	}
+	return hash
 }
 func (g *SSHGuest) Ready(ctx context.Context, r Record) error {
 	return g.ready(ctx, r, g.opts.RequirePrepared)
@@ -202,6 +211,9 @@ func (g *SSHGuest) ready(ctx context.Context, r Record, preparedOnly bool) (resu
 	} else {
 		if preparedOnly {
 			return errors.New("prepared image helper reuse was not proven")
+		}
+		if preparedHelperFingerprint(probe) != "" {
+			slog.Warn("prepared Linux helper differs; uploading selected helper", "instance", r.Name)
 		}
 		stageStart := time.Now()
 		args, err = g.arguments(r, true)
