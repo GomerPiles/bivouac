@@ -23,19 +23,19 @@ const ownerPrefix = "bivouac-hcs-spike:"
 // A specialized image has the guest components already prepared; generalized
 // templates require the explicit pinned SetupAssets for disposable provisioning.
 type Config struct {
-	DisableFirstLogonAnimation bool          `json:"disable_first_logon_animation,omitempty"`
-	Root                       string        `json:"root"`
-	InstanceID                 string        `json:"instance_id"`
-	Baseline                   string        `json:"baseline"`
-	BaselineSHA256             string        `json:"baseline_sha256"`
-	GuestUser                  string        `json:"guest_user"`
-	CPU                        int           `json:"cpu"`
-	MemoryMB                   int           `json:"memory_mb"`
-	GPU                        bool          `json:"gpu"`
-	Drivers                    []DriverShare `json:"drivers,omitempty"`
-	TimeoutSeconds             int           `json:"timeout_seconds"`
-	SetupAssets                []SetupAsset  `json:"setup_assets,omitempty"`
-	RenderProbe                *PinnedFile   `json:"render_probe,omitempty"`
+	GuestComputerName string        `json:"guest_computer_name,omitempty"`
+	Root              string        `json:"root"`
+	InstanceID        string        `json:"instance_id"`
+	Baseline          string        `json:"baseline"`
+	BaselineSHA256    string        `json:"baseline_sha256"`
+	GuestUser         string        `json:"guest_user"`
+	CPU               int           `json:"cpu"`
+	MemoryMB          int           `json:"memory_mb"`
+	GPU               bool          `json:"gpu"`
+	Drivers           []DriverShare `json:"drivers,omitempty"`
+	TimeoutSeconds    int           `json:"timeout_seconds"`
+	SetupAssets       []SetupAsset  `json:"setup_assets,omitempty"`
+	RenderProbe       *PinnedFile   `json:"render_probe,omitempty"`
 }
 
 // PinnedFile is a bounded public executable/resource, never a credential.
@@ -120,6 +120,17 @@ func (c Config) Validate() error {
 	if len(c.GuestUser) < 1 || len(c.GuestUser) > 32 || strings.ContainsAny(c.GuestUser, "\x00\r\n\\/@ :\t") {
 		return errors.New("guest_user must name a local guest account")
 	}
+	if c.GuestComputerName != "" {
+		name := c.GuestComputerName
+		if len(c.SetupAssets) != 0 || len(name) > 15 || !asciiLetter(name[0]) || name[len(name)-1] == '-' {
+			return errors.New("guest_computer_name requires a prepared image and a 1-15 character name starting with a letter and ending with a letter or digit")
+		}
+		for _, b := range []byte(name) {
+			if !asciiLetter(b) && (b < '0' || b > '9') && b != '-' {
+				return errors.New("guest_computer_name must contain only ASCII letters, digits and hyphens")
+			}
+		}
+	}
 	if c.CPU < 1 || c.CPU > 4 || c.MemoryMB < 1024 || c.MemoryMB > 8192 || c.MemoryMB%2 != 0 || c.TimeoutSeconds < 30 || c.TimeoutSeconds > 600 {
 		return errors.New("spike bounds: 1-4 CPUs, 1024-8192 even MiB, 30-600 seconds")
 	}
@@ -135,6 +146,19 @@ func (c Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func asciiLetter(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
+// Guest naming is image metadata, not native ownership proof. Prepared images
+// retain their Windows name while each HCS owner/runtime and SSH key is fresh.
+func (c Config) guestName() string {
+	if c.GuestComputerName != "" {
+		return c.GuestComputerName
+	}
+	return c.name()
 }
 
 func (c Config) name() string {

@@ -29,7 +29,7 @@ const guestValidateBootstrap = `$ErrorActionPreference='Stop';function Write-Spi
 const guestValidateEntry = `param($data);$f=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-validate.ps1';if((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ine $data.script_sha256){exit 14};& $f $data`
 
 func desktopScriptInput(c Config) ([]byte, error) {
-	return guestScriptInput(guestValidateEntry, map[string]any{"name": c.name(), "user": c.GuestUser, "sha256": c.RenderProbe.SHA256, "script_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(guestValidate))), "require_setup": len(c.SetupAssets) != 0})
+	return guestScriptInput(guestValidateEntry, map[string]any{"name": c.guestName(), "user": c.GuestUser, "sha256": c.RenderProbe.SHA256, "script_sha256": fmt.Sprintf("%x", sha256.Sum256([]byte(guestValidate))), "require_setup": len(c.SetupAssets) != 0})
 }
 
 func desktopValidationCommand() string {

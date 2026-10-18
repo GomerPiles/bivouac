@@ -205,14 +205,14 @@ The earlier animation-off comparison improved total readiness by about four
 seconds, but one comparison is not evidence of a repeatable gain. These are
 existing-provider results, not newly measured direct-HCS startup times.
 
-`disable_first_logon_animation: true` is an explicit guest-only experiment. It
-requires `setup_assets` and sets `EnableFirstLogonAnimation=0` during the owned
-child's specialize pass, before first logon. False/omitted preserves the control.
-It changes no authentication, setup completion, console stability, rendering,
-resource admission or isolation checks. No speedup is claimed until paired live
-measurements pass. The modified timing/script build has passed ordinary-token
-checks, race tests, vet, lint and compilation; live timing remains pending an
-operator-approved UAC launch.
+First-logon animation is disabled during the owned child's specialize pass by
+default, before first logon. Only `EnableFirstLogonAnimation` is changed; existing
+policy values, authentication, setup completion, console stability, rendering,
+resource admission and isolation checks remain intact. Prepared runtime images
+bake this cosmetic policy during their one-time build. No speedup is claimed
+until live measurements pass. The modified timing/script build has passed
+ordinary-token checks, race tests, vet, lint and compilation; live timing remains
+pending an operator-approved UAC launch.
 
 Use separate fresh instance IDs and immutable parent images for each control
 and experiment. Keep CPU, RAM, selected host-matching GPU package and host load
@@ -231,11 +231,9 @@ The larger image-preparation candidates need separate validation:
 - Evaluate Sysprep `/mode:vm` and preserved device installation only for matching
   virtual hardware. A generalized image still specializes on its next boot;
   preinstallation does not mean that setup was already completed for the clone.
-- Compare a completed disposable guest's subsequent cold boot against its first
-  provisioning boot before designing a reusable completed-image path. Such a
-  path must preserve per-clone identity, fresh authentication and absence of
-  runner/job state. The current native-name/guest-name proof must remain valid;
-  simply omitting setup assets from an arbitrary completed disk is insufficient.
+- Build a prepared runtime image derived from the generalized source, as
+  described below, and compare its fresh-child cold boots against provisioning
+  boots. This changes the image used for jobs, rather than bypassing readiness.
 - A future long-lived provider could verify an immutable baseline once while
   retaining a read-only handle that denies writes/deletion, rather than hash the
   same large image for every trial. Current full verification remains intact.
@@ -243,6 +241,65 @@ The larger image-preparation candidates need separate validation:
 Microsoft documents [generalization and device preservation](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep--generalize--a-windows-installation?view=windows-11),
 [the next-boot specialize pass](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep-process-overview?view=windows-11)
 and the cosmetic [first-logon animation policy](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-windowslogon#enablefirstlogonanimation).
+
+## Generalized source and prepared runtime images
+
+Use two immutable artifacts with different purposes:
+
+| Image | Purpose | Setup on a job's boot |
+| --- | --- | --- |
+| Generalized source | Reproducible image building and recovery | Specialization/OOBE still required if booted directly |
+| Prepared runtime, derived from the source | Parent for disposable job disks | OS setup, package/driver installation and first profile creation already completed |
+
+The builder boots an independent disposable source clone once, installs the
+pinned guest components, matching GPU payload and public validation/runner
+files, creates the CI user's profile, disables cosmetic animation and validates
+a stable console and hardware rendering. It captures only after clean shutdown,
+before runner registration or any job, then pins the derived image and its build
+provenance. Do not generalize the derived runtime image again. Each job receives
+a fresh differencing disk; the prepared parent stays read-only and unchanged.
+This is a prepared disk image and ordinary cold boot, not a saved running VM
+containing reusable memory, sockets or credentials.
+
+The launcher now accepts an explicit `guest_computer_name` without `setup_assets`.
+The [prepared-image example](../tools/windows/hcs-spike-prepared.example.json)
+uses this path. The declared name is bounded ASCII image metadata, bound with
+the image hash in the protected configuration and journal. The guest check
+still requires that exact name and intended local user. The generated HCS VM
+name/owner and observed runtime ID remain fresh and ownership-checked; a common
+Windows name never authorizes stopping/deleting another native instance.
+Generalized provisioning continues assigning the generated native name, and
+refuses an explicit prepared name. No wildcard guest identity check is added.
+
+A prepared trial attaches no setup ISO, performs no offline answer staging, and
+needs no `setup_assets`. With matching drivers already in its HostDriverStore,
+it can omit `drivers` too, avoiding their host copy and guest installation. Its
+preinstalled validation script must match this host build's embedded script hash;
+the native probe must match its configured hash. Hash mismatch or incomplete
+setup/console/rendering still fails admission. Ordinary planning and fake-backed
+ownership tests cover this configuration; a prepared image has not yet been
+built, promoted or booted live by this spike.
+
+Per-job work is limited to a fresh owned disk/runtime, ephemeral SSH key handoff,
+readiness/isolation proof and new runner registration. Those are runtime
+admission steps, rather than Windows first-boot setup. Runner registration and
+networking remain outside this spike, so its desktop timing is not a CI listener
+time. Booting a VM and launching the console still take some time; seconds rather
+than minutes is a target requiring measurement, not an established result.
+
+Image promotion must remove runner registration, job files, authorized SSH keys
+and transient setup material; GitHub/JIT credentials and host-held private keys
+never enter the reusable image. Local Windows account/autologon state is retained
+by specialized images, so its factory credential handling and per-clone rotation
+must be designed and verified before any external NIC or job is admitted. A
+prepared image is rebuilt when its base, driver package or pinned helpers change.
+The builder/promotion and credential sanitation path is still required; this
+configuration support does not implement or certify that path.
+
+Microsoft describes [specialized images](https://learn.microsoft.com/azure/virtual-machines/shared-image-galleries#generalized-and-specialized-images)
+as already past first boot, with faster startup and retained account/computer-name
+state. That supports the two-image approach; the local HCS implementation still
+requires its own image and lifecycle validation.
 
 ## Elevated trial prerequisites
 

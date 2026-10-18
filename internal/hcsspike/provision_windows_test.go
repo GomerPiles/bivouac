@@ -518,35 +518,9 @@ func TestMalformedRenderReportDiagnosticsContainOnlyNumbers(t *testing.T) {
 	}
 }
 
-func TestEarlyAnimationExperimentRequiresExplicitProvisioning(t *testing.T) {
-	c := exampleConfig()
-	if specialization(c) != guestSpecialize {
-		t.Fatal("default provisioning enabled experiment")
-	}
-	c.DisableFirstLogonAnimation = true
-	if c.Validate() == nil {
-		t.Fatal("policy requested without a disposable setup pass")
-	}
-	c.SetupAssets = setupFixture(c)
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if specialization(c) != guestSpecialize+disableFirstLogonAnimation {
-		t.Fatal("experiment did not preserve base specialization")
-	}
-	data, err := json.Marshal(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := DecodeConfig(bytes.NewReader(data))
-	if err != nil || !recovered.DisableFirstLogonAnimation {
-		t.Fatal("journal/config lost explicit experiment selection")
-	}
-}
-
 // Shadow the registry cmdlets in a child PowerShell process. The real policy
 // fragment runs, but no host registry operation is possible in this fixture.
-func TestAnimationExperimentPreservesExistingPolicyKey(t *testing.T) {
+func TestLogonAnimationPolicyPreservesExistingPolicyKey(t *testing.T) {
 	sys, err := windows.GetSystemDirectory()
 	if err != nil {
 		t.Fatal(err)
@@ -576,5 +550,54 @@ if($state.written -ne 1 -or ($data.exists -and $state.created -ne 0) -or (!$data
 		if err != nil || string(out.data) != "ready" {
 			t.Fatal("cosmetic policy touched an existing key or unexpected setting")
 		}
+	}
+}
+
+func TestPreparedGuestNameDoesNotReplaceNativeOwnership(t *testing.T) {
+	c := exampleConfig()
+	c.GuestComputerName = "bivouac-ready"
+	c.RenderProbe = &PinnedFile{Source: `C:\Tests\render.exe`, SHA256: c.BaselineSHA256}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	nativeName, owner := c.name(), c.owner()
+	input, err := desktopScriptInput(c)
+	if err != nil || len(input) > 1024 {
+		t.Fatal("prepared desktop request exceeded bound")
+	}
+	var payload struct {
+		Data struct {
+			Name         string `json:"name"`
+			RequireSetup bool   `json:"require_setup"`
+			User         string `json:"user"`
+			SHA256       string `json:"sha256"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(input[4:], &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data.Name != c.GuestComputerName || payload.Data.RequireSetup || payload.Data.User != c.GuestUser || payload.Data.SHA256 != c.RenderProbe.SHA256 {
+		t.Fatal("prepared image name replaced identity/probe data or enabled setup")
+	}
+	plan, err := Plan(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := plan["VirtualMachine"].(map[string]any)["Devices"].(map[string]any)
+	attachments := devices["Scsi"].(map[string]any)["Primary"].(map[string]any)["Attachments"].(map[string]any)
+	if len(attachments) != 1 || plan["Owner"] != owner {
+		t.Fatal("prepared image attached setup media or changed native ownership")
+	}
+	c.InstanceID = "112233445566778899aabbccddeeff00"
+	if c.name() == nativeName || c.owner() == owner || c.guestName() != payload.Data.Name {
+		t.Fatal("native identity was reused or image identity changed")
+	}
+	foreign := properties{ID: nativeName, Owner: owner, SystemType: "VirtualMachine", RuntimeID: "12345678-1234-4234-8234-123456789abc"}
+	if proveNative(c, record{}, foreign) == nil {
+		t.Fatal("a shared guest name authorized a foreign native instance")
+	}
+	c.SetupAssets = setupFixture(c)
+	if c.Validate() == nil {
+		t.Fatal("prepared guest name accepted for generalized provisioning")
 	}
 }

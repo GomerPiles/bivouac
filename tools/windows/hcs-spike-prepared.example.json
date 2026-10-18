@@ -1,0 +1,16 @@
+{
+  "root": "C:\\HCSLab\\HCS-Spike",
+  "instance_id": "00112233445566778899aabbccddeeff",
+  "baseline": "C:\\HCSLab\\Images\\prepared.vhdx",
+  "baseline_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "guest_user": "ciuser",
+  "guest_computer_name": "bivouac-ready",
+  "cpu": 2,
+  "memory_mb": 4096,
+  "gpu": true,
+  "timeout_seconds": 180,
+  "render_probe": {
+    "source": "C:\\HCSLab\\Assets\\render.exe",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

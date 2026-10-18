@@ -54,9 +54,6 @@ func validateAssets(c Config) error {
 		}
 	}
 	if len(c.SetupAssets) == 0 {
-		if c.DisableFirstLogonAnimation {
-			return errors.New("first-logon animation experiment requires disposable setup assets")
-		}
 		return nil
 	}
 	required := map[string]bool{"APPSANDBOX-AGENT.EXE": false, "APPSANDBOX-INPUT.EXE": false, "APPSANDBOX-DISPLAYS.EXE": false, "APPSANDBOXVDD.DLL": false, "APPSANDBOXVDD.INF": false, "APPSANDBOXVDD.CAT": false, "DEVCON.EXE": false}
@@ -128,21 +125,13 @@ func unattended(c Config, password string) string {
 </component></settings></unattend>`, xmlText(c.name()), xmlText(c.GuestUser), xmlText(password), xmlText(c.GuestUser), xmlText(password), boot)
 }
 
-// This cosmetic policy is opt-in and runs only in the owned child's specialize
-// pass, before the first user logon. It changes no authentication, services,
-// setup flags, desktop proof or isolation checks.
+// Disable cosmetic animation during the owned child's specialize pass, before
+// first logon. Preserve all other policy values, authentication and readiness.
 const disableFirstLogonAnimation = `
 $policy='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 if(!(Test-Path -LiteralPath $policy)){New-Item -Path $policy | Out-Null}
 New-ItemProperty -Path $policy -Name EnableFirstLogonAnimation -Value 0 -PropertyType DWord -Force | Out-Null
 `
-
-func specialization(c Config) string {
-	if c.DisableFirstLogonAnimation {
-		return guestSpecialize + disableFirstLogonAnimation
-	}
-	return guestSpecialize
-}
 
 func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) error {
 	started := time.Now()
@@ -212,7 +201,7 @@ func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) er
 	}
 	password := "Bv!" + hex.EncodeToString(random[:])
 	clear(random[:])
-	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "specialize": specialization(c), "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
+	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "specialize": guestSpecialize + disableFirstLogonAnimation, "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
 	if err != nil {
 		return errors.New("cannot encode private setup input")
 	}

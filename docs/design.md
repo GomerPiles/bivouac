@@ -698,8 +698,11 @@ This outranks a cached template answer; nonempty directories, reparse paths and
 an explicit offline `SYSTEM\Setup\UnattendFile` pointer are refused. The
 pointer check uses the system offline-registry library read-only, without loading
 hives into the live registry. The child is detached before HCS starts. No baseline
-is mounted or modified by provisioning. A specialized image can omit setup
-assets. Removable-media discovery uses `Autounattend.xml`; the
+is mounted or modified by provisioning. A prepared runtime image omits setup
+assets and declares its expected `guest_computer_name`; when omitted, the guest
+name remains the generated native name. An explicit prepared name is rejected
+with generalized setup assets. Native ownership still requires the fresh HCS
+name, owner, runtime ID and journal, independently of the guest Windows name. Removable-media discovery uses `Autounattend.xml`; the
 ordinary-token media test inspects its name in the ISO's Joliet directory.
 
 An optional hash-pinned standalone native C++ probe runs only inside the guest,
@@ -777,12 +780,31 @@ preparation, HCS lifecycle, guest/SSH initialization, console/GPU waits and
 rendering. The validated-desktop milestone excludes cleanup; total includes it.
 Nested details overlap their lifecycle spans and are not additive. Numeric
 checkpoint receipt intervals include possible transport buffering. Guest wait
-budgets use monotonic stopwatches. An explicit `disable_first_logon_animation`
-experiment applies a cosmetic policy only in disposable-child specialization;
-it requires setup assets and leaves all readiness and ownership checks intact.
-Live timing and any performance gain remain unverified. A completed-image fast
-path still needs per-clone identity and authentication/state sanitation design;
-removing specialization is not an implicit shortcut in this spike.
+budgets use monotonic stopwatches. First-logon animation is disabled during
+disposable-child specialization by default, preserving every other policy value
+and all readiness checks. Prepared images bake the same setting during their
+build. Live timing and any performance gain remain unverified.
+
+The target image pipeline has two immutable artifacts: a generalized source
+for reproducible image builds, and a derived prepared runtime image for jobs.
+The derived image completes specialization/OOBE, driver/service installation,
+the CI user's profile and stable desktop once, then shuts down cleanly before
+capture. It is not generalized again. Each job uses a fresh differencing child
+of that prepared image and performs no unattended OS setup or package install.
+A prepared Windows name is image metadata; fresh native identity and ephemeral
+SSH authentication are per-instance. Readiness, hardware rendering and eventual
+network isolation remain admission checks, rather than installation steps.
+The image must be captured before runner registration or any job. Promotion
+requires bounded evidence of clean shutdown, exact parent/build provenance,
+setup completion, matching drivers, validation asset hashes and sanitized
+runner/authentication state. Local account/autologon state is machine-specific;
+the prepared-image builder must define its protection and per-clone credential
+rotation before external network or job admission. GitHub/JIT credentials,
+authorized SSH keys and host-held private SSH keys must never be baked in.
+Current configuration/planning supports the prepared guest name, but runtime
+image building/promotion, credential sanitation and live prepared-image boots
+are not implemented or validated. These gates prevent treating an arbitrary
+used CI disk as a reusable prepared image.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.
