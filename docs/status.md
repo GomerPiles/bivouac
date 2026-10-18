@@ -209,16 +209,22 @@ stress, race tests, vet, lint and cgo-free builds pass; hosted checks pass on al
 three platforms. Same-image live trials cap every native attempt at 3.000 s.
 Validated-desktop times are 49.991 s including 11.818 s initial image verification,
 then 35.272 s and 37.052 s. Agent connection is still 23.531-25.249 s over 7-8
-attempts; the remaining guest startup interval has not been attributed. All three
+attempts; instrumented results below attribute most delay before script entry. All three
 boots pass unique-key, credential, SSH, console, rendering and owned-cleanup
 gates. New bounded guest-uptime checkpoints distinguish task entry, key generation and
 SSH/agent service startup. The schema requires complete, ordered values within
 ten minutes, with no wall-clock timestamps or guest-controlled text. This keeps
 fresh keys, service ordering and every readiness check intact. Local race tests,
 vet, lint and script/report regressions pass. The instrumented image passes
-sanitation, acknowledged clean shutdown, publication and source cleanup. Cold-boot
-attribution remains pending: the live reserve guard canceled the first prepared
-clone before agent connection and confirmed native absence and owned cleanup. The installed provider and production CI are unchanged.
+sanitation, acknowledged clean shutdown, publication and source cleanup. Three
+instrumented cold boots pass: task entry is 21.875-23.875 s guest uptime; key
+generation takes 0.485-0.578 s, SSH startup 0.281-0.312 s and agent startup
+0.516-0.610 s. All identity/readiness/rendering/cleanup gates pass. Validated
+desktop times are 49.247 s including 11.714 s initial verification, then 39.694 s
+and 38.661 s. The large interval precedes script execution; OS boot, task dispatch
+and PowerShell initialization are not yet separated. Normal task priority (4)
+replaces default below-normal (7) as a targeted experiment; its live effect is
+unverified. The installed provider and production CI are unchanged.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

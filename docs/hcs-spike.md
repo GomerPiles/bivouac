@@ -285,8 +285,9 @@ Per-job work is limited to a fresh owned disk/runtime, ephemeral SSH key handoff
 readiness/isolation proof and new runner registration. Those are runtime
 admission steps, rather than Windows first-boot setup. Runner registration and
 networking remain outside this spike, so its desktop timing is not a CI listener
-time. Prepared trials reach the validated desktop in about 42 seconds after
-session image verification, with all console/rendering gates retained.
+time. Prepared trials after the connection fix reach the validated desktop in
+about 35-40 seconds after session image verification, with all console/rendering
+gates retained; host load and instrumentation vary between these batches.
 
 Image promotion must remove runner registration, job files, authorized SSH keys
 and transient setup material; GitHub/JIT credentials and host-held private keys
@@ -505,12 +506,27 @@ only fixed numeric fields, never key material or service/event log text.
 Key generation and the subsequent service starts have separate elapsed spans.
 Guest uptime and the host stopwatch have different origins, so do not directly
 subtract one from the other. Startup/security ordering and task priority are
-unchanged for the instrumented control. Local regression checks and instrumented
-image capture pass, including sanitation, acknowledged clean shutdown, publication
-and source cleanup. Three cold-boot measurements remain pending because the live
-reserve guard stopped the first prepared clone before agent connection; native
-absence and owned cleanup passed. Sanitation and validation pins require rebuilding
-the prepared image for the new fixed scripts.
+unchanged for the instrumented control. Instrumented capture and three cold boots
+pass every key, credential, SSH, console, rendering and owned-cleanup gate.
+
+| Guest uptime / elapsed stage | Boot 1 | Boot 2 | Boot 3 |
+| --- | --- | --- | --- |
+| First startup-script instruction (guest uptime) | 21.875 s | 23.875 s | 23.656 s |
+| Script entry through key-generation entry | 0.703 s | 0.828 s | 0.687 s |
+| Fresh server-key generation | 0.562 s | 0.578 s | 0.485 s |
+| Start SSH after key generation | 0.281 s | 0.312 s | 0.281 s |
+| Start agent after SSH | 0.516 s | 0.610 s | 0.531 s |
+| Agent connection (host span) | 24.519 s | 26.597 s | 26.160 s |
+| Validated desktop (host span) | 49.247 s | 39.694 s | 38.661 s |
+
+The first desktop span includes 11.714 s initial image verification. The dominant
+interval is before the script begins, not key generation or service starts. These
+metrics do not separate OS boot, task dispatch and PowerShell initialization.
+The next experiment requests [normal task priority](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-priority)
+(4), replacing the scheduler default below-normal priority (7). It preserves all
+key/security/service ordering and readiness gates; its live effect is unverified.
+Sanitation and validation pins require rebuilding the prepared image when the
+fixed scripts change.
 
 ## Desktop validation checkpoints
 

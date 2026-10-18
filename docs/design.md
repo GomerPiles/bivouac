@@ -804,7 +804,8 @@ Sanitation refuses runner registration/work/diagnostic state, removes the fixed
 probe output, cached answer files and authorized SSH keys, and removes server
 host keys and schedules shutdown in that same SSH operation; no new SSH exec
 may regenerate keys between sanitation and capture. A fixed guest SYSTEM startup
-task requires disabled/stopped sshd and guest agent, removes any residual server
+task runs at normal priority, requires disabled/stopped sshd and guest agent,
+removes any residual server
 keys, generates fresh ones, then enables/starts sshd followed by the guest agent.
 The upstream agent can re-enable sshd, so both services stay disabled until this
 ordering completes. Password authentication is disabled; SSH binds only loopback and
@@ -852,8 +853,11 @@ Three same-image cold boots pass with native attempts capped at 3.000 s,
 7-8 attempts per boot and 23.531-25.249 s until agent connection. Validated-desktop
 times are 49.991 s including 11.818 s initial image verification, then 35.272 s
 and 37.052 s with verification reused. Keys, credential rotation, SSH, hardware
-rendering and owned cleanup pass. The remaining agent-readiness interval still
-needs guest startup attribution. The fixed startup task now writes a bounded
+rendering and owned cleanup pass. Instrumented cold boots place startup-task
+entry at 21.875-23.875 s guest uptime, key generation at 0.485-0.578 s, SSH startup
+at 0.281-0.312 s and agent startup at 0.516-0.610 s. The main delay precedes the
+script, including OS boot, scheduler dispatch and PowerShell initialization. The
+fixed startup task writes a bounded
 numeric checkpoint file for task entry, key-generation entry/exit, sshd running
 and guest-agent running. The pinned validation script returns these with its
 current guest uptime. Ordered positive uptimes must fit the ten-minute cold-boot
@@ -862,7 +866,11 @@ readiness. Guest uptime has a different origin from host stopwatch spans: only
 within-guest stage differences are directly comparable. The source image contains
 no checkpoint file, and a pre-existing file refuses task startup. The image's
 sanitation/validation pins require a rebuild for this instrumentation. Its local
-regressions pass; instrumented live capture and boot measurement remain pending.
+regressions, instrumented capture and three cold boots pass, including distinct
+server keys, credential rotation, hardware rendering and owned cleanup. The task
+now requests normal priority (4), instead of the scheduler default below-normal
+priority (7); a new image and paired live measurements are still required to
+establish its effect. No security/service ordering or host CI setting changes.
 The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
