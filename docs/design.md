@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128Ã¢â‚¬â€œ129 s in the crash tests). A job
+  GitHub expires the dead session (128ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet Ã¢â‚¬Â¦] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -784,7 +784,8 @@ checkpoint receipt intervals include possible transport buffering. Guest wait
 budgets use monotonic stopwatches. First-logon animation is disabled during
 disposable-child specialization by default, preserving every other policy value
 and all readiness checks. Prepared images bake the same setting during their
-build. Live timing and any performance gain remain unverified.
+build. Live prepared-image cold boots and their stage timings pass; they do not
+establish a paired existing-provider speedup or Windows CI-listener latency.
 
 The image pipeline has a generalized source and a derived prepared runtime
 image. `build-image` completes specialization/OOBE, driver/service installation,
@@ -801,8 +802,10 @@ bounded expansion overflow; no runner executes during the build.
 
 Sanitation refuses runner registration/work/diagnostic state, removes the fixed
 probe output, cached answer files and authorized SSH keys, and removes server
-host keys. A fixed guest SYSTEM startup task generates fresh server keys before
-starting sshd. Password authentication is disabled; SSH binds only loopback and
+host keys and schedules shutdown in that same SSH operation; no new SSH exec
+may regenerate keys between sanitation and capture. A fixed guest SYSTEM startup
+task requires disabled/stopped sshd, removes any residual server keys, generates
+fresh ones, then enables and starts sshd. The agent cannot start sshd first. Password authentication is disabled; SSH binds only loopback and
 is reached through the owned runtime's HvSocket. The image retains a randomized
 local account credential with autologon stored as an LSA private secret, not a
 plaintext Winlogon value. Prepared storage is administrator/SYSTEM-only with VM
@@ -815,19 +818,27 @@ Publication uses an exclusive owned build directory under a protected sibling
 `HCS-Images` root. Only a clean, sanitized, validated and confirmed-absent source
 can be copied. The runtime config precedes an atomically published, hash-pinned
 manifest binding image, flat parent, build owner, guest identity and public asset
-hashes. Interrupted unpublished output is removable only with its exact owner
+hashes, including the exact sanitation implementation. Interrupted unpublished output is removable only with its exact owner
 marker; published images are never removed by trial cleanup. Parent resolution
 is checked through read-only virtdisk metadata. A session hashes and pins both
 image files once with handles denying writes/deletion until all trials finish.
 `trial --repetitions 1..5` runs sequential fresh clones, stopping on any error or
-retained state. Each report carries its instance ID and whether verification was
+retained state. Prepared repeats also require valid, distinct public SSH server-key
+fingerprints. Each report carries its instance ID and whether verification was
 reused; no persistent hash cache substitutes for an open immutable-file pin.
 
 Ordinary-token tests cover ancestry, pin lifetimes, bounded capture, graceful
 shutdown requirements, guest LSA binding compilation, extraction safety and
-credential/report gates. Prepared-image building, sanitation, cloned autologon,
-server-key renewal and cold boot timings still require explicit elevated live
-validation. The experiment is not wired into the manager/provider contract.
+credential/report gates. Live building, sanitation, acknowledged guest shutdown,
+native graceful exit, publication and three prepared cold boots pass, including
+cloned autologon, credential rotation, authenticated SSH, hardware rendering and
+owned cleanup. The report can compare public server-key fingerprints across
+clones and records numeric connect-attempt counts/latencies. That comparison
+found captured-key reuse in the earlier image; coordinated shutdown, disabled
+sshd ordering, sanitation provenance and duplicate-key rejection correct the
+implementation. Live validation of the corrected image remains pending.
+The experiment is
+not wired into the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

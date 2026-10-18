@@ -89,6 +89,9 @@ type Report struct {
 	GPUAssigned                bool    `json:"gpu_assigned"`
 	DisplayReady               bool    `json:"display_ready"`
 	SSHAuthenticated           bool    `json:"ssh_authenticated"`
+	SSHHostKeySHA256           string  `json:"ssh_host_key_sha256,omitempty"`
+	AgentDialAttempts          uint32  `json:"agent_dial_attempts,omitempty"`
+	AgentDialLongestMS         uint64  `json:"agent_dial_longest_ms,omitempty"`
 	SSHCommandReady            bool    `json:"ssh_command_ready"`
 	SSHStdinReady              bool    `json:"ssh_stdin_ready"`
 	Cleaned                    bool    `json:"cleaned"`

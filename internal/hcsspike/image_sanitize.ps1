@@ -53,8 +53,16 @@ try {
  [IO.File]::WriteAllText($sshdConfig,"ListenAddress 127.0.0.1`r`nPasswordAuthentication no`r`nKbdInteractiveAuthentication no`r`nPubkeyAuthentication yes`r`nStrictModes yes`r`nSubsystem sftp sftp-server.exe`r`nMatch Group administrators`r`n AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys`r`n",[Text.UTF8Encoding]::new($false))
  $startup='$ErrorActionPreference=''Stop''
 $ProgressPreference=''SilentlyContinue''
+$service=Get-Service sshd
+if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped''){exit 1}
+foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecdsa_key'',''ssh_host_ecdsa_key.pub'',''ssh_host_ed25519_key'',''ssh_host_ed25519_key.pub'')){
+ $path=Join-Path ''C:\ProgramData\ssh'' $name
+ if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
+}
 & ''C:\Program Files\OpenSSH\ssh-keygen.exe'' @(''-A'') *> $null
 if($LASTEXITCODE){exit 1}
+foreach($name in @(''ssh_host_rsa_key'',''ssh_host_ecdsa_key'',''ssh_host_ed25519_key'')){if(!(Test-Path -LiteralPath (Join-Path ''C:\ProgramData\ssh'' $name) -PathType Leaf)){exit 1}}
+Set-Service sshd -StartupType Manual
 Start-Service sshd
 '
  $startupPath=Join-Path $base 'hcs-spike-startup.ps1';Assert-Ordinary $startupPath
@@ -66,7 +74,7 @@ Start-Service sshd
  $trigger=New-ScheduledTaskTrigger -AtStartup
  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
  Register-ScheduledTask -TaskName $taskName -Principal $principal -Action $action -Trigger $trigger -Settings $settings|Out-Null
- Set-Service sshd -StartupType Manual
+ Set-Service sshd -StartupType Disabled
  foreach($name in @('ssh_host_rsa_key','ssh_host_rsa_key.pub','ssh_host_ecdsa_key','ssh_host_ecdsa_key.pub','ssh_host_ed25519_key','ssh_host_ed25519_key.pub')){
   $path=Join-Path $ssh $name;Assert-Ordinary $path
   if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -Force -LiteralPath $path}
@@ -75,6 +83,10 @@ Start-Service sshd
  if(Test-Path -LiteralPath $marker){exit 1}
  $metadata=[ordered]@{name=$data.name;user=$data.user;probe_sha256=$data.probe_sha256;validation_sha256=$data.validation_sha256;autologon_sha256=$data.autologon_sha256}
  [IO.File]::WriteAllText($marker,($metadata|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
- [Console]::Out.Write('sanitized');[Console]::Out.Flush()
+ # No further SSH process may run after removing host keys: OpenSSH can regenerate
+ # missing keys when it spawns another server process. Shutdown uses this session.
+ & 'C:\Windows\System32\shutdown.exe' @('/s','/t','5','/d','p:0:0') *> $null
+ if($LASTEXITCODE){exit 1}
+ [Console]::Out.Write('sanitized-shutdown-scheduled');[Console]::Out.Flush()
  exit 0
 }catch{exit 1}

@@ -209,10 +209,9 @@ First-logon animation is disabled during the owned child's specialize pass by
 default, before first logon. Only `EnableFirstLogonAnimation` is changed; existing
 policy values, authentication, setup completion, console stability, rendering,
 resource admission and isolation checks remain intact. Prepared runtime images
-bake this cosmetic policy during their one-time build. No speedup is claimed
-until live measurements pass. The modified timing/script build has passed
-ordinary-token checks, race tests, vet, lint and compilation; live timing remains
-pending an operator-approved UAC launch.
+bake this cosmetic policy during their one-time build. Ordinary-token checks,
+race tests, vet, lint and compilation pass. Prepared-image cold-boot measurements
+are recorded below; no paired existing-provider comparison has been run.
 
 Use separate fresh instance IDs and immutable parent images for each control
 and experiment. Keep CPU, RAM, selected host-matching GPU package and host load
@@ -278,26 +277,25 @@ it omits `drivers`, avoiding their host copy and guest installation. Its
 preinstalled validation script must match this host build's embedded script hash;
 the native probe must match its configured hash. Hash mismatch or incomplete
 setup/console/rendering still fails admission. Ordinary planning and fake-backed
-ownership tests cover this configuration; a prepared image has not yet been
-built, promoted or booted live by this spike.
+ownership tests cover this configuration. An independent image has now been
+built, cleanly captured and booted successfully in three fresh trials; it has
+not been promoted to production.
 
 Per-job work is limited to a fresh owned disk/runtime, ephemeral SSH key handoff,
 readiness/isolation proof and new runner registration. Those are runtime
 admission steps, rather than Windows first-boot setup. Runner registration and
 networking remain outside this spike, so its desktop timing is not a CI listener
-time. Booting a VM and launching the console still take some time; seconds rather
-than minutes is a target requiring measurement, not an established result.
+time. Prepared trials reach the validated desktop in about 42 seconds after
+session image verification, with all console/rendering gates retained.
 
 Image promotion must remove runner registration, job files, authorized SSH keys
 and transient setup material; GitHub/JIT credentials and host-held private keys
 never enter the reusable image. Local Windows account/autologon state is retained
 by specialized images, so its factory credential handling and per-clone rotation
 uses the protected LSA secret and per-clone rotation implemented below; both
-require live verification before any external NIC or job is admitted. A
-prepared image is rebuilt when its base, driver package or pinned helpers change.
-The builder/promotion and credential sanitation path is implemented but has
-not been exercised against a real guest. Configuration support alone does not
-certify a prepared image.
+pass live factory/cold-boot validation. A prepared image is rebuilt when its
+base, driver package or pinned helpers change. No external NIC or job is admitted
+by this spike; provider integration and network isolation remain separate gates.
 
 Microsoft describes [specialized images](https://learn.microsoft.com/azure/virtual-machines/shared-image-galleries#generalized-and-specialized-images)
 as already past first boot, with faster startup and retained account/computer-name
@@ -390,7 +388,7 @@ revalidates ownership and native absence before removing the child. Routine
 trials still clean up automatically, including on failure. Offline diagnostics
 must emit only bounded flags/codes, never raw setup logs or answer-file contents.
 
-## Prepared runtime images (live validation pending)
+## Prepared runtime images
 
 The image builder and runtime path are implemented here, separate from the
 production CI provider. Build once from an independent generalized source;
@@ -412,7 +410,9 @@ registration is involved in this experiment.
    The guarded guest must finish setup, profile creation and hardware rendering.
    Fixed sanitation refuses registered-runner/work state, removes cached answer
    files and SSH keys, randomizes the local password and configures fresh server
-   host keys at boot. Autologon uses an LSA secret. Only acknowledged guest OS shutdown, a successful native `GracefulExit`
+   host keys at boot before enabling sshd. Sanitation and shutdown run in one SSH
+   operation so another SSH process cannot recreate factory keys before capture.
+   Autologon uses an LSA secret. Only acknowledged guest OS shutdown, a successful native `GracefulExit`
    and confirmed native absence permit copying the owned child into the exclusive
    image directory and publishing `manifest.json` last. The source child is then
    cleaned up. No baseline is mounted or modified by the builder.
@@ -421,16 +421,18 @@ registration is involved in this experiment.
    [prepared example](../tools/windows/hcs-spike-prepared.example.json) shows its
    shape but uses placeholder hashes. Keep the published disk and its recorded
    generalized parent in place. Runtime configuration pins the manifest, which
-   binds image/parent hashes, guest identity, build owner and public helper hashes.
+   binds image/parent hashes, guest identity, build owner, public helper hashes and
+   the exact sanitation implementation.
 5. In a separately approved elevated context, run
    `hcs-spike.exe trial --config <generated-trial.json> --repetitions 3`.
    Repetitions (1-5) are sequential fresh cold boots, not saved-memory resumes.
    The session verifies both immutable disks once and keeps deny-write/delete
    handles open. Subsequent reports mark `baseline_reused`; only the first
    includes baseline verification time. Every clone gets fresh native identity,
-   SSH keys and local credential rotation, and still proves stable console,
+   SSH client identity and local credential rotation, and still proves stable console,
    hardware rendering and clean removal. Setup media, installations and driver
-   copies are absent. Any failure or retained storage prevents the next boot.
+   copies are absent. Prepared repetitions require distinct valid public server-key
+   fingerprints. Any failure or retained storage prevents the next boot.
 6. If `--retain-failed-storage` was explicitly selected, inspect only a stopped
    clone whose report confirms native absence. Match the report's `instance_id`
    to its journal/owner marker. After detaching, run
@@ -441,8 +443,35 @@ registration is involved in this experiment.
 Compare host-monotonic `timings_ms.to_validated_desktop` and its preparation,
 agent, SSH and console breakdown across cold boots. The build is a one-time cost;
 first-session hashing is separately visible. There is no runner-listening time
-in this offline spike, so it cannot yet establish clone-to-job latency. Do not
-claim a speedup until live builds and repeated prepared-image boots pass.
+in this offline spike, so it cannot yet establish clone-to-job latency.
+
+A live independent build completed in 183.904 s, including factory setup,
+rendering, sanitation, acknowledged guest shutdown, native `GracefulExit`,
+publication and source cleanup. Its initial prepared cold boots passed the
+desktop checks below; later fingerprint validation rejected this image for server-
+key reuse, so it must not be promoted:
+
+| Fresh boot | Validated desktop | Session image verification | Agent connection |
+| --- | --- | --- | --- |
+| 1 | 55.873 s | 11.960 s | 30.512 s |
+| 2 | 41.783 s | reused | 30.508 s |
+| 3 | 41.652 s | reused | 30.514 s |
+
+Every boot rotated its local credential and passed authenticated SSH, console,
+hardware D3D11, presentation and pixel checks. Setup-media, answer-staging and
+driver-copy times were zero. Native absence and owned cleanup passed after every
+boot. These are offline desktop timings, not Windows runner-listening/job times
+or a paired comparison with the existing provider. The repeatable 30.5-s agent
+connection plateau used two dial attempts per boot, with one taking about 30 s; the selected HvSocket
+implementation does not cancel its pending native connect when the attempt
+context expires. No extra sleep or weaker readiness gate is used to mask it.
+
+Read-only inspection confirmed the captured disk retained the server keys seen
+by all three clones. The correction combines sanitation and shutdown, requires
+sshd to stay disabled until a boot task replaces server keys, binds sanitation
+code in the image manifest, and rejects repeated server fingerprints. Local race,
+vet and lint checks pass; a new image build and three distinct-key cold boots
+remain the live validation gate. Old manifests fail the new sanitation pin.
 
 ## Desktop validation checkpoints
 
@@ -515,4 +544,5 @@ on the same held native handle. The bounded result must report zero status and
 `GracefulExit`; forced/unexpected/unknown exits, missing acknowledgements, timeout
 and native absence alone refuse capture. A live trial passed sanitation and
 rendering but returned `ERROR_NOT_SUPPORTED` for the host-initiated HCS shutdown
-API; the guest-requested path still requires live capture/cold-boot validation.
+API. The guest-requested path now passes live clean capture and repeated cold
+boots without treating forced termination or native absence alone as success.

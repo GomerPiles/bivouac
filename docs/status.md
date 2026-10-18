@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1Ã¢â‚¬â€œ6 ms, boot to guest agent 22Ã¢â‚¬â€œ31 s, JIT to listening
-  5Ã¢â‚¬â€œ10 s, teardown 1.3Ã¢â‚¬â€œ1.8 s (power-off).
+- Timings: clone 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“31 s, JIT to listening
+  5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -155,8 +155,7 @@ Production CI and the installed provider remain unchanged. The experiment still
 requires the App Sandbox guest service and signed display-driver components.
 Fake-backed lifecycle/ownership and guest-protocol tests pass without elevation.
 Local formatting, vet, lint, the full race-enabled test suite and cgo-disabled
-Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. The hosted workflow
-has not run for this spike.
+Windows amd64, Linux amd64 and macOS arm64/amd64 builds pass. Hosted Linux, macOS and Windows checks also pass for this spike.
 The ordinary-token DLL-export check passes on the Windows host; configuration
 planning also passes without opening any image or contacting the HCS service.
 An approved offline native-only trial reached HCS `Running` state, accepted
@@ -171,14 +170,15 @@ insufficient physical/commit memory, trial-volume space and CPU capacity. Checks
 run before staging and HCS creation. A two-second resource watcher cancels only
 the isolated trial if the live reserve is lost; cleanup remains independent.
 Boundary, pre-dispatch refusal and watcher cancellation tests pass without a VM.
-Guarded live trials complete with sufficient headroom; reserve-loss cancellation
-has not been exercised against a live guest.
+Guarded live trials complete with sufficient headroom. Live reserve-loss
+cancellation stopped only the isolated guest and completed owned cleanup.
 Host-monotonic stage timings and a cumulative validated-desktop milestone are
 implemented, including preparation, agent/SSH, console/GPU waits and cleanup.
 Guest wait budgets use monotonic stopwatches. First-logon animation is disabled
 by default during disposable provisioning, with other policies and all safety
 gates preserved. Ordinary-token tests, race tests, vet, lint and a cgo-free
-build pass. Fresh live timings and performance gains remain unverified.
+build pass. Prepared cold-boot timings are validated below; no paired existing-
+provider or clone-to-CI-listener comparison has been run.
 Supplied existing-provider evidence places about 87% of readiness in native
 startup plus console preflight; the latter observes console availability pending
 while setup/OOBE flags are already clear.
@@ -186,16 +186,28 @@ The prepared-image pipeline is implemented in the experimental executable:
 `build-image` prepares an unenrolled derived image, validates rendering,
 sanitizes authentication/runner state and requires clean shutdown/native absence
 before publishing pinned provenance. Runtime trials omit setup media, OS setup,
-installations and driver copies, rotate the local credential and use fresh SSH
-keys. `trial --repetitions` runs sequential fresh clones with one session-scoped
+installations and driver copies and rotate the local credential. SSH starts
+disabled until the boot task generates fresh server keys. `trial --repetitions` runs sequential fresh clones with one session-scoped
 verification of pinned source/derived images. Publication/ownership checks,
 private image ACLs, synthetic VHD ancestry, extraction safety and credential
-gates have ordinary-token regression coverage. Live factory setup, runner extraction, desktop rendering and sanitation pass.
-Publication was refused when the host shutdown API returned unsupported; the
-corrected path requires an authenticated guest shutdown acknowledgement and
-successful native `GracefulExit`. Capture and prepared cold boots remain
-unverified, including cloned autologon and SSH host-key regeneration. No manager
-integration or networking/isolation validation has occurred. Production CI is unchanged.
+gates have ordinary-token regression coverage. Live factory setup, runner
+extraction, desktop rendering, sanitation, acknowledged guest shutdown, native
+`GracefulExit`, image publication and owned source cleanup pass. Three fresh
+prepared cold boots then passed autologon, per-clone credential rotation,
+authenticated SSH, stable console, hardware D3D11, presentation/pixel checks and
+owned cleanup. Their validated-desktop times were 55.873 s (including 11.960 s
+session image verification), 41.783 s and 41.652 s. Setup media, offline answer
+staging and driver copies were zero on every prepared boot. Agent connection was
+30.5 s on all three boots; its transport wait remains a performance follow-up.
+A fingerprint comparison then found reused SSH server keys; read-only inspection
+confirmed keys remained in that captured disk. The corrected factory coordinates
+sanitation and shutdown in one SSH operation, pins sanitation code in provenance,
+and leaves sshd disabled until the boot task replaces server keys. Repeated
+prepared trials now refuse missing/reused public fingerprints. Local regression
+checks pass; corrected-image live validation remains pending. The earlier image
+is unsuitable for promotion and is rejected by the new sanitation pin.
+No Windows runner-listening/job timing, manager integration, input or networking/
+isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

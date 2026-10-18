@@ -33,6 +33,7 @@ var autologonSecret string
 // ImageManifest is public provenance, never credential or guest diagnostic data.
 // The runtime disk is an immutable differencing image with one pinned flat parent.
 type ImageManifest struct {
+	SanitationSHA256  string     `json:"sanitation_sha256"`
 	AutologonSHA256   string     `json:"autologon_sha256"`
 	BuildID           string     `json:"build_id"`
 	BuildOwner        string     `json:"build_owner"`
@@ -66,7 +67,7 @@ func (m ImageManifest) validate(c Config) error {
 	if validatePinned(c, m.Image) != nil || validatePinned(c, m.Parent) != nil || !strings.EqualFold(filepath.Base(imageRoot), "HCS-Images") || !strings.EqualFold(m.Image.Source, filepath.Join(imageRoot, m.BuildID, "disk.vhdx")) || within(imageRoot, m.Parent.Source) || within(c.Root, m.Parent.Source) {
 		return errors.New("prepared image provenance paths differ")
 	}
-	if c.PreparedImage == nil || !strings.EqualFold(c.PreparedImage.Source, filepath.Join(imageRoot, m.BuildID, "manifest.json")) || !strings.EqualFold(c.Baseline, m.Image.Source) || !strings.EqualFold(c.BaselineSHA256, m.Image.SHA256) || c.GuestComputerName != m.GuestComputerName || c.GuestUser != m.GuestUser || c.RenderProbe == nil || !strings.EqualFold(c.RenderProbe.SHA256, m.ProbeSHA256) || m.ValidationSHA256 != validationHash() || m.AutologonSHA256 != autologonHash() {
+	if c.PreparedImage == nil || !strings.EqualFold(c.PreparedImage.Source, filepath.Join(imageRoot, m.BuildID, "manifest.json")) || !strings.EqualFold(c.Baseline, m.Image.Source) || !strings.EqualFold(c.BaselineSHA256, m.Image.SHA256) || c.GuestComputerName != m.GuestComputerName || c.GuestUser != m.GuestUser || c.RenderProbe == nil || !strings.EqualFold(c.RenderProbe.SHA256, m.ProbeSHA256) || m.ValidationSHA256 != validationHash() || m.AutologonSHA256 != autologonHash() || m.SanitationSHA256 != sanitationHash() {
 		return errors.New("prepared image does not match runtime configuration/build")
 	}
 	buildName := (Config{InstanceID: m.BuildID}).name()
@@ -80,6 +81,11 @@ func (m ImageManifest) validate(c Config) error {
 		}
 	}
 	return nil
+}
+
+func sanitationHash() string {
+	h := sha256.Sum256([]byte(imageSanitize))
+	return hex.EncodeToString(h[:])
 }
 
 func autologonHash() string {
@@ -164,6 +170,7 @@ func runTrialSession(ctx context.Context, c Config, count int, run func(context.
 	if count < 1 || count > 5 {
 		return errors.New("repetitions must be 1-5")
 	}
+	hostKeys := make(map[string]struct{}, count)
 	for i := 0; i < count; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -178,6 +185,15 @@ func runTrialSession(ctx context.Context, c Config, count int, run func(context.
 		r, err := run(ctx, c, i)
 		r.InstanceID = c.InstanceID
 		r.BaselineReused = i > 0
+		if err == nil && c.PreparedImage != nil {
+			key, decodeErr := hex.DecodeString(r.SSHHostKeySHA256)
+			_, reused := hostKeys[r.SSHHostKeySHA256]
+			if decodeErr != nil || len(key) != sha256.Size || strings.ToLower(r.SSHHostKeySHA256) != r.SSHHostKeySHA256 || reused {
+				err = errors.New("prepared clone SSH host key missing, invalid or reused")
+			} else {
+				hostKeys[r.SSHHostKeySHA256] = struct{}{}
+			}
+		}
 		if outErr := emit(r); outErr != nil {
 			return errors.Join(err, outErr)
 		}
@@ -354,7 +370,7 @@ func publishImage(ctx context.Context, c Config, sourceJournal, imageJournal *jo
 			runnerHash = a.SHA256
 		}
 	}
-	m := ImageManifest{AutologonSHA256: autologonHash(), BuildID: c.InstanceID, BuildOwner: c.owner(), Image: PinnedFile{Source: dest, SHA256: hash}, Parent: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, GuestComputerName: c.name(), GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: runnerHash, CleanShutdown: true, Sanitized: true}
+	m := ImageManifest{SanitationSHA256: sanitationHash(), AutologonSHA256: autologonHash(), BuildID: c.InstanceID, BuildOwner: c.owner(), Image: PinnedFile{Source: dest, SHA256: hash}, Parent: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, GuestComputerName: c.name(), GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: runnerHash, CleanShutdown: true, Sanitized: true}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return errors.New("cannot encode prepared image provenance")
@@ -407,8 +423,8 @@ func sanitizeImageGuest(ctx context.Context, client *ssh.Client, c Config) error
 	}
 	defer clear(input)
 	out, _, err := runGuestSSH(ctx, client, desktopValidationCommand(), input)
-	if err != nil || string(out) != "sanitized" {
-		return errors.New("fixed image sanitation failed; image was not published")
+	if err != nil || string(out) != "sanitized-shutdown-scheduled" {
+		return errors.New("fixed image sanitation/shutdown acknowledgement failed; image was not published")
 	}
 	return nil
 }
@@ -460,35 +476,6 @@ func privateImageACL(acl *windows.ACL) error {
 		if !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) && !sid.IsWellKnown(windows.WinLocalSystemSid) && sid.String() != "S-1-5-83-0" {
 			return errors.New("prepared image grants non-administrator access")
 		}
-	}
-	return nil
-}
-
-// This fixed command is sent only over the authenticated owned-guest transport.
-// It never executes through a host process launcher. Windows flushes the guest
-// filesystems before power-off; a forced native stop cannot pass exit validation.
-const imageShutdownScript = `param($data)
-$ErrorActionPreference='Stop'
-if($env:COMPUTERNAME -ine $data.name -or $env:USERNAME -ine $data.user){exit 1}
-$marker=Get-Content -LiteralPath 'C:\Windows\AppSandbox\hcs-spike-prepared.json' -Raw|ConvertFrom-Json
-if($marker.name -cne $data.name -or $marker.user -cne $data.user){exit 1}
-& 'C:\Windows\System32\shutdown.exe' @('/s','/t','5','/d','p:0:0') *> $null
-if($LASTEXITCODE){exit 1}
-[Console]::Out.Write('shutdown-scheduled');[Console]::Out.Flush()
-`
-
-func imageShutdownInput(c Config) ([]byte, error) {
-	return guestScriptInput(imageShutdownScript, map[string]string{"name": c.name(), "user": c.GuestUser})
-}
-func requestImageShutdown(ctx context.Context, client *ssh.Client, c Config) error {
-	input, err := imageShutdownInput(c)
-	if err != nil {
-		return errors.New("cannot encode fixed guest shutdown request")
-	}
-	defer clear(input)
-	out, _, err := runGuestSSH(ctx, client, desktopValidationCommand(), input)
-	if err != nil || string(out) != "shutdown-scheduled" {
-		return errors.New("guest clean shutdown acknowledgement unavailable")
 	}
 	return nil
 }

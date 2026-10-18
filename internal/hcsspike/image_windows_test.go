@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -142,14 +143,14 @@ func TestPreparedManifestBindsBuildAssetsAndParent(t *testing.T) {
 	c.GuestComputerName = source.name()
 	c.Baseline = filepath.Join(source.ImageRoot, source.InstanceID, "disk.vhdx")
 	c.PreparedImage = &PinnedFile{Source: filepath.Join(source.ImageRoot, source.InstanceID, "manifest.json"), SHA256: strings.Repeat("b", 64)}
-	m := ImageManifest{AutologonSHA256: autologonHash(), BuildID: source.InstanceID, BuildOwner: source.owner(), Image: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, Parent: PinnedFile{Source: source.Baseline, SHA256: source.BaselineSHA256}, GuestComputerName: c.GuestComputerName, GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: strings.Repeat("c", 64), CleanShutdown: true, Sanitized: true}
+	m := ImageManifest{SanitationSHA256: sanitationHash(), AutologonSHA256: autologonHash(), BuildID: source.InstanceID, BuildOwner: source.owner(), Image: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, Parent: PinnedFile{Source: source.Baseline, SHA256: source.BaselineSHA256}, GuestComputerName: c.GuestComputerName, GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: strings.Repeat("c", 64), CleanShutdown: true, Sanitized: true}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.validate(c); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*ImageManifest){func(v *ImageManifest) { v.CleanShutdown = false }, func(v *ImageManifest) { v.Sanitized = false }, func(v *ImageManifest) { v.Parent.Source = v.Image.Source }, func(v *ImageManifest) { v.ValidationSHA256 = strings.Repeat("0", 64) }, func(v *ImageManifest) { v.RunnerSHA256 = "" }, func(v *ImageManifest) { v.GuestComputerName = "another" }, func(v *ImageManifest) { v.BuildID = "unknown" }} {
+	for _, mutate := range []func(*ImageManifest){func(v *ImageManifest) { v.SanitationSHA256 = "" }, func(v *ImageManifest) { v.CleanShutdown = false }, func(v *ImageManifest) { v.Sanitized = false }, func(v *ImageManifest) { v.Parent.Source = v.Image.Source }, func(v *ImageManifest) { v.ValidationSHA256 = strings.Repeat("0", 64) }, func(v *ImageManifest) { v.RunnerSHA256 = "" }, func(v *ImageManifest) { v.GuestComputerName = "another" }, func(v *ImageManifest) { v.BuildID = "unknown" }} {
 		bad := m
 		mutate(&bad)
 		if bad.validate(c) == nil {
@@ -411,13 +412,65 @@ func TestImageConfigurationExamples(t *testing.T) {
 	}
 }
 
-func TestGuestShutdownRequestStaysFixedAndBounded(t *testing.T) {
+func TestGuestSanitationShutdownStaysFixedAndBounded(t *testing.T) {
 	c := imageBuildFixture(exampleConfig())
-	input, err := imageShutdownInput(c)
+	input, err := imageSanitizeInput(c)
 	if err != nil || len(input) > 1024 {
 		t.Fatal("guest-only shutdown frame exceeds transport bound", len(input), err)
 	}
-	if !strings.Contains(imageShutdownScript, `C:\Windows\System32\shutdown.exe`) || strings.Contains(imageShutdownScript, "/m") {
+	if !strings.Contains(imageSanitize, `C:\Windows\System32\shutdown.exe`) || strings.Contains(imageSanitize, "/m") {
 		t.Fatal("shutdown is not local to the authenticated guest")
+	}
+}
+
+func TestPreparedTrialSessionRejectsMissingOrRepeatedServerKeys(t *testing.T) {
+	for _, kind := range []string{"fresh", "reused", "missing", "invalid"} {
+		t.Run(kind, func(t *testing.T) {
+			c := exampleConfig()
+			c.PreparedImage = &PinnedFile{}
+			calls, reports := 0, 0
+			err := runTrialSession(context.Background(), c, 3, func(_ context.Context, _ Config, i int) (Report, error) {
+				calls++
+				key := sha256.Sum256([]byte(strconv.Itoa(i)))
+				fingerprint := hex.EncodeToString(key[:])
+				switch kind {
+				case "reused":
+					fingerprint = strings.Repeat("a", 64)
+				case "missing":
+					fingerprint = ""
+				case "invalid":
+					fingerprint = strings.Repeat("g", 64)
+				}
+				return Report{SSHHostKeySHA256: fingerprint, Cleaned: true, NativeAbsent: true}, nil
+			}, func(Report) error { reports++; return nil })
+			wantCalls := 1
+			if kind == "fresh" {
+				wantCalls = 3
+			}
+			if kind == "reused" {
+				wantCalls = 2
+			}
+			if (err == nil) != (kind == "fresh") || calls != wantCalls || reports != calls {
+				t.Fatal("server-key renewal gate or final cleanup report differs", calls, reports, err)
+			}
+		})
+	}
+}
+
+func TestGuestStartupScriptParsesSeparately(t *testing.T) {
+	// Parse the nested startup task without running its privileged guest actions.
+	payload, _ := json.Marshal(map[string]string{"sanitizer": imageSanitize})
+	script := `$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseInput($d.sanitizer,[ref]$tokens,[ref]$errors)
+if($errors.Count){exit 1}
+$assignment=$ast.Find({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$startup'},$true)
+if(!$assignment){exit 2}
+$startup=$assignment.Right.SafeGetValue()
+[void][Management.Automation.Language.Parser]::ParseInput($startup,[ref]$tokens,[ref]$errors)
+if($errors.Count){exit 3}
+`
+	if err := runImageFixture(t, script, payload); err != nil {
+		t.Fatal("nested guest SSH key rotation task syntax invalid", err)
 	}
 }

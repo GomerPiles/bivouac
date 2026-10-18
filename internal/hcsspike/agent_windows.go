@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -183,13 +185,18 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	public := []byte(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 	started := time.Now()
 	var conn *winio.HvsockConn
+	var attempts uint32
+	var longestMS uint64
 	for {
 		if err = a.verify(ctx, c, runtimeID); err != nil {
 			return report, err
 		}
+		attempts++
+		dialStarted := time.Now()
 		dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		conn, err = winio.Dial(dialCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(1)})
 		cancel()
+		longestMS = max(longestMS, elapsedMS(dialStarted))
 		if err == nil {
 			break
 		}
@@ -204,6 +211,8 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	started = time.Now()
 	report, err = speakAgent(ctx, conn, c, public)
 	report.TimingsMS.Guest.AgentConnectMS = connectMS
+	report.AgentDialAttempts = attempts
+	report.AgentDialLongestMS = longestMS
 	report.TimingsMS.Guest.AgentInitializeMS = elapsedMS(started)
 	if err != nil {
 		return report, err
@@ -229,7 +238,16 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		User: c.GuestUser, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		// The first key is accepted only from the freshly owned runtime's
 		// fixed HvSocket endpoint. There is no network address or key reuse.
-		HostKeyCallback: func(_ string, _ net.Addr, _ ssh.PublicKey) error { return a.verify(sshCtx, c, runtimeID) },
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			if err := a.verify(sshCtx, c, runtimeID); err != nil {
+				return err
+			}
+			// A public-key fingerprint proves clone key renewal without exposing
+			// private material or accepting a key from another native runtime.
+			sum := sha256.Sum256(key.Marshal())
+			report.SSHHostKeySHA256 = hex.EncodeToString(sum[:])
+			return nil
+		},
 	}
 	clientConn, channels, requests, err := ssh.NewClientConn(transport, "hcs-spike", config)
 	if err != nil {
@@ -288,12 +306,6 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 				return report, err
 			}
 			report.ImageSanitized = true
-			if err = a.verify(ctx, c, runtimeID); err != nil {
-				return report, err
-			}
-			if err = requestImageShutdown(sshCtx, client, c); err != nil {
-				return report, err
-			}
 			report.ImageShutdownAcknowledged = true
 		}
 		return report, renderErr
