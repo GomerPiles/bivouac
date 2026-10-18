@@ -184,13 +184,17 @@ These host-monotonic stage sums exclude runner registration/listening. The
 prepared baseline also passed provider reopen/adoption and intentional recorded
 supervisor-loss cleanup. An independent manager reached real JIT listening in
 16.887 s (404 ms clone, 11.495 s readiness, 4.988 s registration/listening),
-then Off deregistered its idle runner and fully cleaned up. Actual job execution
-on the prepared baseline remains a promotion gate. The repository CI workflow
+then Off deregistered its idle runner and fully cleaned up. Two sequential smoke jobs in fresh prepared guests also passed in 18.975 s and
+18.046 s from clone through listening, with complete runner/guest cleanup. The repository CI workflow
 has an explicit `workflow_dispatch` input, `prepared_linux`, for two sequential
 smoke jobs on the dedicated `bivouac-linux-prepared-validation` label. Leave the
 input false for normal hosted checks. Provision that label only in an independent
 one-runner validation home; the smoke checks helper reuse, fresh sentinel state,
 GPU/CDI, Docker, DNS and public HTTPS without repository credentials or checkout.
+For a public repository, use a separate test runner group that permits public
+repositories and is restricted to the selected repository and exact trusted
+workflow/branch. Do not broaden an existing production group to run the fixture.
+Retire its runners and remove the temporary group after validation.
 The installed production image/provider remains unchanged.
 
 ## Isolated configuration
