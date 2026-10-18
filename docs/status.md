@@ -60,10 +60,30 @@ excluded failed verification attempt; successful samples all proved the intended
 helper mode and complete guest/record cleanup. Production configuration, mode
 and source image checks were unchanged.
 
-Tests only: JIT/listener stage timings, transport and partial-copy fault handling,
-cache failure fallback and optional container-pair reuse. Those paths were not
-part of the cold-boot trial. These changes are not deployed to the installed
-controller; no end-to-end registered-runner speedup has been established.
+The guest LaunchAgent now sets `ProcessType=Interactive`, targeting the
+low-priority I/O throttling observed before the agent reached Go main. Six
+interleaved cold-boot pairs (2 CPUs/4 GiB, full disk synchronization, identical
+agent binaries, equally prepared private image copies) reduced median
+boot-to-Aqua/script readiness from 44.16 s to 26.47 s: 17.69 s (40.1%).
+Interactive was faster in every pair; ranges were 39.92–48.97 s for default
+and 24.85–27.68 s for Interactive. Host disk caches were retained; registration
+and helper/cache preparation were outside those timings.
+[Individual measurements and methodology](macos-interactive-benchmark.json)
+retain every successful sample, including slower observations.
+
+Two additional fresh Interactive guests ran real ephemeral-runner smoke jobs:
+Aqua execution, fresh-guest state, child processes, exit propagation and file I/O
+passed. In both, the same official listener survived an agent restart, the
+start/completion hooks emitted numeric telemetry, and the listener exited zero
+after its job. All validation guests, records, image copies and registrations
+were removed; production configuration, mode and source image checks were
+unchanged. These smoke jobs do not establish complete workload performance.
+
+Tests only: manager JIT/listener stage logging, transport and partial-copy fault
+handling, cache failure fallback and optional container-pair reuse. Those paths
+were not part of the cold-boot comparison. These changes are not deployed to the
+installed controller or source baseline; no end-to-end registered-runner speedup
+has been established.
 
 Open:
 
@@ -77,8 +97,7 @@ Open:
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
-- The Aqua session check, process-group launch, and cache bind to
-  `guest_host` are untested on a real host.
+- The cache bind to `guest_host` is untested on a real host.
 
 ## Windows: App Sandbox (Windows guests)
 
@@ -170,6 +189,6 @@ invalidation and upstream change.
 
 Host and guest CPU, memory, disk, and (Windows) commit summaries appear in
 controller logs and job hooks as numeric-only reports. Validated live on
-Windows and Linux guests. On macOS a live job's report contains valid CPU and
-memory samples; completion summaries and cache hit/miss readback are not yet
-observed.
+Windows and Linux guests. On macOS real smoke jobs emitted numeric start and
+completion CPU, memory and disk summaries; cache hit/miss readback remains
+unverified.

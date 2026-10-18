@@ -373,7 +373,11 @@ in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
 automatically; the agent runs only in that Aqua session. Shut the baseline
 down cleanly. To replace the agent binary, write a new file and `mv` it over
 the old one; overwriting the running binary in place corrupts it. Reinstall
-it only when its protocol version changes.
+the binary when its protocol version changes. The guest plist also needs updating
+when its launch policy changes: it sets `ProcessType=Interactive` to avoid
+launchd's default low-priority I/O throttling. Install the updated plist during
+offline image preparation and shut down cleanly before importing the image;
+rebuilding the host binary does not update existing baseline LaunchAgents.
 
 **Startup timing and helper reuse.** The daemon writes `macos startup stage`
 records to its normal redacted log, with provider, guest name, `stage`,

@@ -457,6 +457,10 @@ path fits `sun_path` whatever the name.
   10 s after the command exits is reported as a failure, never as success.
   The agent accepts only the host's context ID, and its LaunchAgent abandons
   its process group, so an agent restart leaves a started runner alone.
+  Its LaunchAgent uses `ProcessType=Interactive`: the default process class
+  throttles low-priority I/O during boot, delaying agent startup and inherited
+  runner commands. The agent and runner remain in the auto-login user's Aqua
+  session with the same permissions and VM resource limits.
 - Ready: the agent runs `true`. Only an unreachable agent is retried; an
   agent of another protocol version names its own, and readiness fails at
   once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and

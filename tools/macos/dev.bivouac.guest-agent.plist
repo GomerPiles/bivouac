@@ -14,6 +14,10 @@
 	</array>
 	<key>LimitLoadToSessionType</key>
 	<string>Aqua</string>
+	<!-- Avoid launchd's default low-priority I/O throttling during boot and
+	     keep the runner and its children responsive in the Aqua session. -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
