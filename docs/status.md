@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1Ã¢â‚¬â€œ6 ms, boot to guest agent 22Ã¢â‚¬â€œ31 s, JIT to listening
-  5Ã¢â‚¬â€œ10 s, teardown 1.3Ã¢â‚¬â€œ1.8 s (power-off).
+- Timings: clone 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“31 s, JIT to listening
+  5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -138,12 +138,17 @@ with a profile repair and 32 ms without writes. These are warm same-boot bootstr
 observations, not a paired cold-boot speedup or a new clone-to-listening result.
 Owned native processes, overlay, SSH pin and instance records were removed.
 Windows and Linux/WSL regressions cover helper fallback, DNS refusal/repair,
-bounded reports and factory sanitation. Explicit clean capture also passed: acknowledged guest shutdown, natural exit
-code zero, recorded native absence, one-time raw conversion, durable provenance
-and owned source cleanup. The following cold validation was refused before VM
-creation because physical memory was below its admission reserve. Cold prepared
-boots and actual identity/SSH-key renewal remain unverified. The independent
-captured image is retained for these checks. No production image, binary or
+bounded reports and factory sanitation. Explicit clean capture also passed:
+acknowledged guest shutdown, natural exit code zero, recorded native absence,
+one-time raw conversion, durable provenance and owned source cleanup. Three
+sequential fresh prepared cold boots then passed at 12.313 s, 10.738 s and
+10.884 s from clone through guest readiness (host-monotonic stage sums).
+Each required exact helper/DNS reuse, new machine and SSH-host-key fingerprints,
+runner/GPU/CDI readiness and complete owned cleanup. These are credential-free
+readiness measurements, not clone-to-listening or job timings. The independent
+captured image also passed live provider reopen/adoption and intentional recorded
+supervisor-loss cleanup. Registered-runner validation of this prepared baseline
+remains a deployment gate. No production image, binary or
 configuration changed, and no service was disabled solely from a boot timestamp.
 
 

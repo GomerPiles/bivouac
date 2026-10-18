@@ -174,10 +174,15 @@ if physical availability falls below 6 GiB or commit headroom below 2 GiB.
 
 One isolated 2-CPU/2-GiB trial observed 3.182 s upload bootstrap versus 0.962 s
 prepared reuse in the same VM; DNS was 121 ms with a repair versus 32 ms without
-writes. Those numbers do not establish a cold-start speedup. A subsequent explicit build passed clean shutdown/native absence and captured a
-new raw image with published provenance; its source clone was removed. The next
-cold trial was refused before VM creation because host physical memory was below
-the admission reserve. Cold boot and actual identity/key renewal remain pending.
+writes. Those numbers do not establish a cold-start speedup. A subsequent explicit
+build passed clean shutdown/native absence and captured a new raw image with
+published provenance; its source clone was removed. Three sequential fresh
+prepared cold boots passed in 12.313 s, 10.738 s and
+10.884 s through guest readiness. Each proved exact helper/DNS reuse, distinct
+machine and SSH-host-key fingerprints, runner/GPU/CDI readiness and cleanup.
+These host-monotonic stage sums exclude runner registration/listening. The
+prepared baseline also passed provider reopen/adoption and intentional recorded
+supervisor-loss cleanup. Registered-runner validation remains a promotion gate.
 The installed production image/provider remains unchanged.
 
 ## Isolated configuration
