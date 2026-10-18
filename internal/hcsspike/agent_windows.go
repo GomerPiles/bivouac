@@ -181,6 +181,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		return report, errors.New("cannot create ephemeral SSH identity")
 	}
 	public := []byte(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
+	started := time.Now()
 	var conn *winio.HvsockConn
 	for {
 		if err = a.verify(ctx, c, runtimeID); err != nil {
@@ -199,13 +200,18 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		}
 	}
 	defer func() { _ = conn.Close() }()
+	connectMS := elapsedMS(started)
+	started = time.Now()
 	report, err = speakAgent(ctx, conn, c, public)
+	report.TimingsMS.Guest.AgentConnectMS = connectMS
+	report.TimingsMS.Guest.AgentInitializeMS = elapsedMS(started)
 	if err != nil {
 		return report, err
 	}
 	if err = a.verify(ctx, c, runtimeID); err != nil {
 		return report, err
 	}
+	started = time.Now()
 	sshCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
 	transport, err := winio.Dial(sshCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(7)})
@@ -231,15 +237,24 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
 	defer func() { _ = client.Close() }()
+	report.TimingsMS.Guest.SSHAuthenticateMS = elapsedMS(started)
 	report.SSHAuthenticated = true
-	if err = checkSSHExecution(sshCtx, client, &report); err != nil {
+	started = time.Now()
+	err = checkSSHExecution(sshCtx, client, &report)
+	report.TimingsMS.Guest.SSHChecksMS = elapsedMS(started)
+	if err != nil {
 		return report, err
 	}
 	if c.RenderProbe != nil {
 		if err = a.verify(ctx, c, runtimeID); err != nil {
 			return report, err
 		}
+		started = time.Now()
 		observed, renderErr := validateDesktop(sshCtx, client, c)
+		report.TimingsMS.Guest.DesktopValidateMS = elapsedMS(started)
+		report.TimingsMS.Guest.ConsoleWaitMS = observed.consoleWaitMS
+		report.TimingsMS.Guest.GPUDeviceWaitMS = observed.gpuDeviceWaitMS
+		report.TimingsMS.Guest.InteractiveProbeMS = observed.interactiveProbeMS
 		report.GuestValidationStep = observed.ValidationStep
 		report.GuestReady = observed.GuestReady
 		report.DesktopReady = observed.DesktopReady

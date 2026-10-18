@@ -517,3 +517,64 @@ func TestMalformedRenderReportDiagnosticsContainOnlyNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestEarlyAnimationExperimentRequiresExplicitProvisioning(t *testing.T) {
+	c := exampleConfig()
+	if specialization(c) != guestSpecialize {
+		t.Fatal("default provisioning enabled experiment")
+	}
+	c.DisableFirstLogonAnimation = true
+	if c.Validate() == nil {
+		t.Fatal("policy requested without a disposable setup pass")
+	}
+	c.SetupAssets = setupFixture(c)
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if specialization(c) != guestSpecialize+disableFirstLogonAnimation {
+		t.Fatal("experiment did not preserve base specialization")
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := DecodeConfig(bytes.NewReader(data))
+	if err != nil || !recovered.DisableFirstLogonAnimation {
+		t.Fatal("journal/config lost explicit experiment selection")
+	}
+}
+
+// Shadow the registry cmdlets in a child PowerShell process. The real policy
+// fragment runs, but no host registry operation is possible in this fixture.
+func TestAnimationExperimentPreservesExistingPolicyKey(t *testing.T) {
+	sys, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, exists := range []bool{false, true} {
+		script := `param($data)
+$ErrorActionPreference='Stop'
+$state=@{created=0;written=0}
+function Test-Path {[CmdletBinding()]param([string]$LiteralPath);if($LiteralPath -cne 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'){throw 'path'};return $data.exists}
+function New-Item {[CmdletBinding()]param([string]$Path);if($data.exists -or $Path -cne 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'){throw 'existing key replaced'};$state.created++}
+function New-ItemProperty {[CmdletBinding()]param([string]$Path,[string]$Name,[int]$Value,[string]$PropertyType,[switch]$Force);if($Path -cne 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -or $Name -cne 'EnableFirstLogonAnimation' -or $Value -ne 0 -or $PropertyType -cne 'DWord' -or !$Force){throw 'unexpected policy mutation'};$state.written++}
+` + disableFirstLogonAnimation + `
+if($state.written -ne 1 -or ($data.exists -and $state.created -ne 0) -or (!$data.exists -and $state.created -ne 1)){exit 1}
+[Console]::Out.Write('ready');exit 0`
+		input, err := guestScriptInput(script, map[string]bool{"exists": exists})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(ctx, filepath.Join(sys, "cmd.exe"), "/d", "/s", "/c", desktopValidationCommand())
+		cmd.Stdin = bytes.NewReader(input)
+		var out boundedOutput
+		cmd.Stdout = &out
+		cmd.Stderr = io.Discard
+		err = cmd.Run()
+		cancel()
+		if err != nil || string(out.data) != "ready" {
+			t.Fatal("cosmetic policy touched an existing key or unexpected setting")
+		}
+	}
+}

@@ -46,35 +46,36 @@ type backend interface {
 // interactive probe checks hardware D3D11, presentation and two-color GPU/desktop
 // pixel readback; it does not test keyboard/mouse input.
 type Report struct {
-	NativeAbsent               bool   `json:"native_absent"`
-	StorageRetained            bool   `json:"storage_retained"`
-	GuestReady                 bool   `json:"guest_ready"`
-	DesktopReady               bool   `json:"desktop_ready"`
-	HardwareD3D11              bool   `json:"hardware_d3d11"`
-	Presented                  bool   `json:"presented"`
-	PixelReadback              bool   `json:"pixel_readback"`
-	GuestValidationStep        uint32 `json:"guest_validation_step,omitempty"`
-	RenderStage                uint32 `json:"render_stage,omitempty"`
-	RenderHRESULT              uint32 `json:"render_hresult,omitempty"`
-	RenderVendorID             uint32 `json:"render_vendor_id,omitempty"`
-	RenderDeviceID             uint32 `json:"render_device_id,omitempty"`
-	RenderAdapterCount         uint32 `json:"render_adapter_count,omitempty"`
-	RenderHardwareAdapterCount uint32 `json:"render_hardware_adapter_count,omitempty"`
-	RenderDefaultVendorID      uint32 `json:"render_default_vendor_id,omitempty"`
-	RenderDefaultDeviceID      uint32 `json:"render_default_device_id,omitempty"`
-	GPUDeviceDiagnosticsValid  bool   `json:"gpu_device_diagnostics_valid"`
-	DisplayDeviceCount         uint32 `json:"display_device_count,omitempty"`
-	VirtualRenderDeviceCount   uint32 `json:"virtual_render_device_count,omitempty"`
-	VirtualRenderProblemCode   uint32 `json:"virtual_render_problem_code,omitempty"`
-	GPUFilesCopied             uint32 `json:"gpu_files_copied,omitempty"`
-	NativeStarted              bool   `json:"native_started"`
-	AgentConnected             bool   `json:"agent_connected"`
-	GPUAssigned                bool   `json:"gpu_assigned"`
-	DisplayReady               bool   `json:"display_ready"`
-	SSHAuthenticated           bool   `json:"ssh_authenticated"`
-	SSHCommandReady            bool   `json:"ssh_command_ready"`
-	SSHStdinReady              bool   `json:"ssh_stdin_ready"`
-	Cleaned                    bool   `json:"cleaned"`
+	TimingsMS                  Timings `json:"timings_ms"`
+	NativeAbsent               bool    `json:"native_absent"`
+	StorageRetained            bool    `json:"storage_retained"`
+	GuestReady                 bool    `json:"guest_ready"`
+	DesktopReady               bool    `json:"desktop_ready"`
+	HardwareD3D11              bool    `json:"hardware_d3d11"`
+	Presented                  bool    `json:"presented"`
+	PixelReadback              bool    `json:"pixel_readback"`
+	GuestValidationStep        uint32  `json:"guest_validation_step,omitempty"`
+	RenderStage                uint32  `json:"render_stage,omitempty"`
+	RenderHRESULT              uint32  `json:"render_hresult,omitempty"`
+	RenderVendorID             uint32  `json:"render_vendor_id,omitempty"`
+	RenderDeviceID             uint32  `json:"render_device_id,omitempty"`
+	RenderAdapterCount         uint32  `json:"render_adapter_count,omitempty"`
+	RenderHardwareAdapterCount uint32  `json:"render_hardware_adapter_count,omitempty"`
+	RenderDefaultVendorID      uint32  `json:"render_default_vendor_id,omitempty"`
+	RenderDefaultDeviceID      uint32  `json:"render_default_device_id,omitempty"`
+	GPUDeviceDiagnosticsValid  bool    `json:"gpu_device_diagnostics_valid"`
+	DisplayDeviceCount         uint32  `json:"display_device_count,omitempty"`
+	VirtualRenderDeviceCount   uint32  `json:"virtual_render_device_count,omitempty"`
+	VirtualRenderProblemCode   uint32  `json:"virtual_render_problem_code,omitempty"`
+	GPUFilesCopied             uint32  `json:"gpu_files_copied,omitempty"`
+	NativeStarted              bool    `json:"native_started"`
+	AgentConnected             bool    `json:"agent_connected"`
+	GPUAssigned                bool    `json:"gpu_assigned"`
+	DisplayReady               bool    `json:"display_ready"`
+	SSHAuthenticated           bool    `json:"ssh_authenticated"`
+	SSHCommandReady            bool    `json:"ssh_command_ready"`
+	SSHStdinReady              bool    `json:"ssh_stdin_ready"`
+	Cleaned                    bool    `json:"cleaned"`
 }
 
 type record struct {
@@ -177,6 +178,7 @@ func absent(ctx context.Context, api backend, name string) error {
 }
 
 func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, retainFailed bool) (report Report, result error) {
+	trialStarted := time.Now()
 	if err := c.Validate(); err != nil {
 		return report, err
 	}
@@ -201,7 +203,9 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		defer cancel()
+		cleanupStarted := time.Now()
 		err := cleanupHeld(cleanupCtx, c, j, api, created, retainFailed && result != nil)
+		report.TimingsMS.Lifecycle.CleanupMS = elapsedMS(cleanupStarted)
 		_, childErr := j.root.Stat(c.InstanceID)
 		_, recordErr := j.root.Stat(recordName(c))
 		report.StorageRetained = childErr == nil || recordErr == nil
@@ -215,14 +219,19 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	if err = j.write(markerName(c), c, true); err != nil {
 		return report, err
 	}
-	if err = api.Prepare(ctx, c); err != nil {
+	stageStarted := time.Now()
+	err = api.Prepare(ctx, c)
+	report.TimingsMS.Lifecycle.PrepareMS = elapsedMS(stageStarted)
+	if err != nil {
 		return report, err
 	}
 	r.Attempted = true
 	if err = j.write(recordName(c), r, false); err != nil {
 		return report, err
 	}
+	stageStarted = time.Now()
 	s, settled, err := api.Create(ctx, c)
+	report.TimingsMS.Lifecycle.CreateMS = elapsedMS(stageStarted)
 	if s != nil {
 		if err == nil {
 			created = s
@@ -246,7 +255,10 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	if err = proveNative(c, r, p); err != nil {
 		return report, err
 	}
-	if err = s.Start(ctx); err != nil {
+	stageStarted = time.Now()
+	err = s.Start(ctx)
+	report.TimingsMS.Lifecycle.StartMS = elapsedMS(stageStarted)
+	if err != nil {
 		return report, err
 	}
 	p, err = s.Properties(ctx)
@@ -265,7 +277,10 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 		return report, err
 	}
 	if c.GPU {
-		if err = s.GPU(ctx); err != nil {
+		stageStarted = time.Now()
+		err = s.GPU(ctx)
+		report.TimingsMS.Lifecycle.GPUAssignMS = elapsedMS(stageStarted)
+		if err != nil {
 			return report, err
 		}
 		report.GPUAssigned = true
@@ -275,7 +290,13 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
+	stageStarted = time.Now()
 	observed, err := api.Probe(probeCtx, c, p.RuntimeID)
+	observed.TimingsMS.Lifecycle = report.TimingsMS.Lifecycle
+	observed.TimingsMS.Lifecycle.ProbeMS = elapsedMS(stageStarted)
+	if err == nil && observed.GuestReady && observed.DesktopReady && observed.HardwareD3D11 && observed.Presented && observed.PixelReadback {
+		observed.TimingsMS.ToValidatedDesktopMS = elapsedMS(trialStarted)
+	}
 	observed.NativeStarted = report.NativeStarted
 	observed.GPUAssigned = report.GPUAssigned
 	return observed, err

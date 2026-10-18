@@ -24,10 +24,11 @@ import (
 )
 
 type native struct {
-	dll           *windows.LazyDLL
-	preparedOwner string
-	payloads      []payloadProof
-	resourceCheck func(Config) error
+	preparationTimings PreparationTimings
+	dll                *windows.LazyDLL
+	preparedOwner      string
+	payloads           []payloadProof
+	resourceCheck      func(Config) error
 }
 
 // HcsGrantVmAccess deliberately adds the owned VM account to payload ACLs.
@@ -356,6 +357,7 @@ func pinBaseline(c Config) (*os.File, error) {
 func (a *native) Prepare(ctx context.Context, c Config) error {
 	a.preparedOwner = ""
 	a.payloads = nil
+	a.preparationTimings = PreparationTimings{}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -367,12 +369,15 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 	}
 	// CreateDiffVhd creates only the new child. Optional setup then mounts only
 	// that child; the baseline remains pinned read-only with unchanged ACLs.
-	if err := vhd.CreateDiffVhd(c.disk(), c.Baseline, 0); err != nil {
+	started := time.Now()
+	cloneErr := vhd.CreateDiffVhd(c.disk(), c.Baseline, 0)
+	a.preparationTimings.CloneMS = elapsedMS(started)
+	if cloneErr != nil {
 		return errors.New("cannot create spike differencing VHDX")
 	}
 	paths := []string{c.disk()}
 	if len(c.SetupAssets) != 0 {
-		if err := makeSetupISO(ctx, c); err != nil {
+		if err := makeSetupISO(ctx, c, &a.preparationTimings); err != nil {
 			return err
 		}
 		paths = append(paths, filepath.Join(c.directory(), "setup-private"), filepath.Join(c.directory(), "setup-private", "setup.iso"))
@@ -390,7 +395,13 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 		paths = append(paths, path)
 	}
 	if len(c.Drivers) != 0 {
-		if err := copyDrivers(ctx, c); err != nil {
+		started = time.Now()
+		driverErr := copyDrivers(ctx, c)
+		a.preparationTimings.DriverCopyMS = elapsedMS(started)
+		if driverErr != nil {
+			return driverErr
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		// Grant on each copied file as well as its directory; do not depend
@@ -410,6 +421,8 @@ func (a *native) Prepare(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	started = time.Now()
+	defer func() { a.preparationTimings.PayloadGrantsMS = elapsedMS(started) }()
 	proofs := make([]payloadProof, 0, len(paths))
 	for _, path := range paths {
 		if err := appsandbox.CheckProtectedFile(path); err != nil {

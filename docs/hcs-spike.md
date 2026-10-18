@@ -168,6 +168,82 @@ Windows completed OOBE or that a desktop is usable. `native_started` reports
 HCS running state only. The full trial requires either the specialized image or the explicit pinned
 setup assets described below. Boot-only mode never claims guest readiness or authentication.
 
+## Boot and readiness measurements
+
+The spike emits numeric `timings_ms` in its report. Durations use the host's
+monotonic clock, so guest setup changing its wall clock cannot change them.
+`to_validated_desktop` measures from immediately before baseline verification
+through successful setup, SSH, console and hardware-rendering validation. It
+excludes host cleanup and is zero if those checks did not all pass. `total`
+includes cleanup. Neither includes CLI/configuration validation and admission
+before baseline verification. These are desktop prerequisites, **not** a time
+to a registered/listening CI runner: this executable has no networking or runner
+registration integration.
+
+| Group | Durations (milliseconds) |
+| --- | --- |
+| `baseline_verify` | Read-only image hash verification |
+| `lifecycle` | Preparation, HCS creation/start, GPU assignment, full guest probe, cleanup |
+| `preparation` | Child clone, setup assets, ISO creation, offline answer staging, driver copy, payload permission grants |
+| `guest` | Agent connection/initialization, SSH authentication/command checks, full desktop validation |
+| `guest` checkpoint details | Console wait, GPU device wait, interactive native probe |
+
+Preparation and guest details subdivide lifecycle spans; do not add the groups
+again to calculate total. Checkpoint details measure the interval between host
+receipt of fixed numeric markers, including possible SSH buffering/scheduling;
+they are not guest CPU times. Zero can mean an unvisited/incomplete stage or a
+stage shorter than one millisecond. Guest wait budgets also use a monotonic
+stopwatch, with the same console/setup, GPU and interactive-task bounds.
+
+The supplied existing-provider measurements show that cloning is inexpensive
+(about 1.3 seconds), whereas native agent/SSH readiness takes 42-46 seconds and
+console preflight 40-44 seconds. Together native startup and console preflight
+account for about 87% of readiness in the original run. The inner console check
+reported setup/OOBE flags already clear and console availability still pending;
+its five 500-ms stability observations are only about two seconds of that wait.
+The earlier animation-off comparison improved total readiness by about four
+seconds, but one comparison is not evidence of a repeatable gain. These are
+existing-provider results, not newly measured direct-HCS startup times.
+
+`disable_first_logon_animation: true` is an explicit guest-only experiment. It
+requires `setup_assets` and sets `EnableFirstLogonAnimation=0` during the owned
+child's specialize pass, before first logon. False/omitted preserves the control.
+It changes no authentication, setup completion, console stability, rendering,
+resource admission or isolation checks. No speedup is claimed until paired live
+measurements pass. The modified timing/script build has passed ordinary-token
+checks, race tests, vet, lint and compilation; live timing remains pending an
+operator-approved UAC launch.
+
+Use separate fresh instance IDs and immutable parent images for each control
+and experiment. Keep CPU, RAM, selected host-matching GPU package and host load
+comparable; run sequentially with the reserve guard, never by pausing production
+CI. Collect repeated paired trials and report range/median with the individual
+results. Retain only bounded numeric/boolean evidence. Every run must still
+prove readiness/rendering and complete owned cleanup. Failed or cancelled runs
+are failures, not fast samples.
+
+The larger image-preparation candidates need separate validation:
+
+- Preinstall the pinned agent, OpenSSH, display/input helpers, matching GPU
+  payloads and public validation/runner files during an isolated image build.
+  Measure avoided installation, copy and Plug and Play work. Keep credentials,
+  runner registration, jobs and caches out of the reusable image.
+- Evaluate Sysprep `/mode:vm` and preserved device installation only for matching
+  virtual hardware. A generalized image still specializes on its next boot;
+  preinstallation does not mean that setup was already completed for the clone.
+- Compare a completed disposable guest's subsequent cold boot against its first
+  provisioning boot before designing a reusable completed-image path. Such a
+  path must preserve per-clone identity, fresh authentication and absence of
+  runner/job state. The current native-name/guest-name proof must remain valid;
+  simply omitting setup assets from an arbitrary completed disk is insufficient.
+- A future long-lived provider could verify an immutable baseline once while
+  retaining a read-only handle that denies writes/deletion, rather than hash the
+  same large image for every trial. Current full verification remains intact.
+
+Microsoft documents [generalization and device preservation](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep--generalize--a-windows-installation?view=windows-11),
+[the next-boot specialize pass](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/sysprep-process-overview?view=windows-11)
+and the cosmetic [first-logon animation policy](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-windowslogon#enablefirstlogonanimation).
+
 ## Elevated trial prerequisites
 
 Prepare and review the following before requesting an elevated launch. Keep
@@ -272,6 +348,7 @@ entry into a stage, not its completion.
 | 20 | Wait for stable setup/console readiness |
 | 21 | Create and protect the private probe directory |
 | 22 | Write and verify the pinned native probe |
+| 26 / 27 | Start / finish the bounded read-only GPU device readiness wait |
 | 23 | Register the interactive guest task |
 | 24 | Start the task and wait for its bounded report |
 | 25 | Read and return fixed report fields |

@@ -173,6 +173,16 @@ the isolated trial if the live reserve is lost; cleanup remains independent.
 Boundary, pre-dispatch refusal and watcher cancellation tests pass without a VM.
 Guarded live trials complete with sufficient headroom; reserve-loss cancellation
 has not been exercised against a live guest.
+Host-monotonic stage timings and a cumulative validated-desktop milestone are
+implemented, including preparation, agent/SSH, console/GPU waits and cleanup.
+Guest wait budgets use monotonic stopwatches. An opt-in animation policy applies
+before first logon in the disposable child; defaults and all safety gates remain
+unchanged. Ordinary-token tests, race tests, vet, lint and a cgo-free build pass.
+Fresh live timings and performance gains are unverified; no UAC launch or image
+change occurred during timing preparation. Supplied existing-provider evidence
+places about 87% of readiness in native startup plus console preflight; the latter
+observes console availability pending while setup/OOBE flags are already clear.
+A preinstalled generalized image still incurs specialization on each fresh clone.
 See [`hcs-spike.md`](hcs-spike.md).
 
 ## Windows: Crosvm (Linux GPU guests)

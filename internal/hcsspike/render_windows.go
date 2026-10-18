@@ -37,6 +37,9 @@ func desktopValidationCommand() string {
 }
 
 type renderResult struct {
+	consoleWaitMS             uint64
+	gpuDeviceWaitMS           uint64
+	interactiveProbeMS        uint64
 	ValidationStep            uint32 `json:"-"`
 	GuestReady                bool   `json:"guest_ready"`
 	DesktopReady              bool   `json:"desktop_ready"`
@@ -101,15 +104,15 @@ func validateRenderReport(b []byte) (renderResult, error) {
 
 // A timed-out SSH request closes the owned client, including requests that
 // have not yet acknowledged session/command creation. No command is replayed.
-func runGuestSSH(ctx context.Context, client *ssh.Client, command string, input []byte) ([]byte, uint32, error) {
+func runGuestSSH(ctx context.Context, client *ssh.Client, command string, input []byte) ([]byte, validationProgress, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, 0, err
+		return nil, validationProgress{}, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stop()
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, 0, err
+		return nil, validationProgress{}, err
 	}
 	defer func() { _ = session.Close() }()
 	var out boundedOutput
@@ -118,7 +121,7 @@ func runGuestSSH(ctx context.Context, client *ssh.Client, command string, input 
 	var progress validationProgress
 	session.Stderr = &progress
 	err = session.Run(command)
-	return out.data, progress.step, err
+	return out.data, progress, err
 }
 
 func guestScriptInput(script string, data any) ([]byte, error) {
@@ -171,8 +174,14 @@ func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderR
 	// seconds; leave transfer/startup headroom while keeping the trial deadline.
 	validationCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	out, step, err := runGuestSSH(validationCtx, client, desktopValidationCommand(), data)
-	r.ValidationStep = step
+	out, progress, err := runGuestSSH(validationCtx, client, desktopValidationCommand(), data)
+	setProgress := func() {
+		r.ValidationStep = progress.step
+		r.consoleWaitMS = progress.spanMS(20, 21)
+		r.gpuDeviceWaitMS = progress.spanMS(26, 27)
+		r.interactiveProbeMS = progress.spanMS(24, 25)
+	}
+	setProgress()
 	if err != nil {
 		if validationCtx.Err() != nil {
 			return r, errors.New("fixed guest desktop validation timed out")
@@ -180,13 +189,13 @@ func validateDesktop(ctx context.Context, client *ssh.Client, c Config) (renderR
 		var exit *ssh.ExitError
 		if errors.As(err, &exit) {
 			switch code := exit.ExitStatus(); code {
-			case 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25:
+			case 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27:
 				return r, fmt.Errorf("fixed guest desktop validation failed at step %d", code)
 			}
 		}
 		return r, errors.New("fixed guest desktop validation failed")
 	}
 	r, err = validateRenderReport(out)
-	r.ValidationStep = step
+	setProgress()
 	return r, err
 }

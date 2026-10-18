@@ -23,18 +23,19 @@ const ownerPrefix = "bivouac-hcs-spike:"
 // A specialized image has the guest components already prepared; generalized
 // templates require the explicit pinned SetupAssets for disposable provisioning.
 type Config struct {
-	Root           string        `json:"root"`
-	InstanceID     string        `json:"instance_id"`
-	Baseline       string        `json:"baseline"`
-	BaselineSHA256 string        `json:"baseline_sha256"`
-	GuestUser      string        `json:"guest_user"`
-	CPU            int           `json:"cpu"`
-	MemoryMB       int           `json:"memory_mb"`
-	GPU            bool          `json:"gpu"`
-	Drivers        []DriverShare `json:"drivers,omitempty"`
-	TimeoutSeconds int           `json:"timeout_seconds"`
-	SetupAssets    []SetupAsset  `json:"setup_assets,omitempty"`
-	RenderProbe    *PinnedFile   `json:"render_probe,omitempty"`
+	DisableFirstLogonAnimation bool          `json:"disable_first_logon_animation,omitempty"`
+	Root                       string        `json:"root"`
+	InstanceID                 string        `json:"instance_id"`
+	Baseline                   string        `json:"baseline"`
+	BaselineSHA256             string        `json:"baseline_sha256"`
+	GuestUser                  string        `json:"guest_user"`
+	CPU                        int           `json:"cpu"`
+	MemoryMB                   int           `json:"memory_mb"`
+	GPU                        bool          `json:"gpu"`
+	Drivers                    []DriverShare `json:"drivers,omitempty"`
+	TimeoutSeconds             int           `json:"timeout_seconds"`
+	SetupAssets                []SetupAsset  `json:"setup_assets,omitempty"`
+	RenderProbe                *PinnedFile   `json:"render_probe,omitempty"`
 }
 
 // PinnedFile is a bounded public executable/resource, never a credential.

@@ -17,9 +17,9 @@ public static class SpikeConsole {
 "@
  $step=20
  Write-SpikeStep 20
- $until=[DateTime]::UtcNow.AddMinutes(3)
+ $consoleBudget=[Diagnostics.Stopwatch]::StartNew()
  $stable=0
- while([DateTime]::UtcNow -lt $until) {
+ while($consoleBudget.Elapsed.TotalSeconds -lt 180) {
   $session=[SpikeConsole]::WTSGetActiveConsoleSessionId()
   $matched=$false;$buffer=[IntPtr]::Zero;$size=0
   if($session -ne 0 -and $session -ne [uint32]::MaxValue) {
@@ -47,8 +47,10 @@ public static class SpikeConsole {
  if((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ine $data.sha256){exit 14}
  # Read only fixed display/GPU-PV readiness facts. Never emit PnP identities,
  # device names, driver paths, or arbitrary WMI/PowerShell diagnostics.
+ $step=26
+ Write-SpikeStep 26
  $gpuStatus=[ordered]@{valid=$false;display_count=0;virtual_count=0;problem_code=0}
- $gpuUntil=[DateTime]::UtcNow.AddSeconds(30)
+ $gpuBudget=[Diagnostics.Stopwatch]::StartNew()
  do {
   try {
    $nodes=@(Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPClass='Display'" -OperationTimeoutSec 10)
@@ -65,7 +67,9 @@ public static class SpikeConsole {
   }catch{$gpuStatus=[ordered]@{valid=$false;display_count=0;virtual_count=0;problem_code=0};break}
   if($gpuStatus.virtual_count -gt 0 -and $gpuStatus.problem_code -eq 0){break}
   Start-Sleep -Milliseconds 500
- }while([DateTime]::UtcNow -lt $gpuUntil)
+ }while($gpuBudget.Elapsed.TotalSeconds -lt 30)
+ $step=27
+ Write-SpikeStep 27
  $step=23
  Write-SpikeStep 23
  $task='bivouac-hcs-spike-render'
@@ -79,8 +83,8 @@ public static class SpikeConsole {
   Write-SpikeStep 24
   Start-ScheduledTask -TaskName $task
   $result=Join-Path $base 'render.json'
-  $until=[DateTime]::UtcNow.AddSeconds(50)
-  while(!(Test-Path -LiteralPath $result)) {if([DateTime]::UtcNow -gt $until){exit 16};Start-Sleep -Milliseconds 200}
+  $probeBudget=[Diagnostics.Stopwatch]::StartNew()
+  while(!(Test-Path -LiteralPath $result)) {if($probeBudget.Elapsed.TotalSeconds -gt 50){exit 16};Start-Sleep -Milliseconds 200}
   $step=25
   Write-SpikeStep 25
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json

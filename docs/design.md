@@ -772,6 +772,17 @@ only byte counts and numeric offsets. Forced termination can leave the stopped
 disk without files already observed live; read-only inspection does not override
 a completed live check. Input, process-loss recovery and networking/isolation
 remain unverified.
+Trial reports include host-monotonic stage timings for baseline verification,
+preparation, HCS lifecycle, guest/SSH initialization, console/GPU waits and
+rendering. The validated-desktop milestone excludes cleanup; total includes it.
+Nested details overlap their lifecycle spans and are not additive. Numeric
+checkpoint receipt intervals include possible transport buffering. Guest wait
+budgets use monotonic stopwatches. An explicit `disable_first_logon_animation`
+experiment applies a cosmetic policy only in disposable-child specialization;
+it requires setup assets and leaves all readiness and ownership checks intact.
+Live timing and any performance gain remain unverified. A completed-image fast
+path still needs per-clone identity and authentication/state sanitation design;
+removing specialization is not an implicit shortcut in this spike.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template
 copy. It does not establish that Windows completed setup or entered a desktop.

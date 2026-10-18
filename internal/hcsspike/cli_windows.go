@@ -110,16 +110,27 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		}
 		return json.NewEncoder(out).Encode(Report{Cleaned: true, NativeAbsent: true})
 	}
+	trialStarted := time.Now()
+	baselineStarted := time.Now()
 	baseline, err := pinBaseline(c)
+	baselineMS := elapsedMS(baselineStarted)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = baseline.Close() }()
 	trialCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds+120)*time.Second)
 	defer cancel()
+	var beforeTrialMS uint64
 	report, trialErr := guardTrialResources(trialCtx, c, func(guarded context.Context) (Report, error) {
+		beforeTrialMS = elapsedMS(trialStarted)
 		return trial(guarded, c, j, api, *bootOnly, *retainFailed)
 	})
+	if report.TimingsMS.ToValidatedDesktopMS != 0 {
+		report.TimingsMS.ToValidatedDesktopMS += beforeTrialMS
+	}
+	report.TimingsMS.TotalMS = elapsedMS(trialStarted)
+	report.TimingsMS.BaselineVerifyMS = baselineMS
+	report.TimingsMS.Preparation = api.preparationTimings
 	if err = json.NewEncoder(out).Encode(report); err != nil {
 		return errors.Join(trialErr, fmt.Errorf("write spike report: %w", err))
 	}

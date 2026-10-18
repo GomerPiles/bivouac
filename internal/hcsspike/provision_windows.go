@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf16"
 
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
@@ -53,6 +54,9 @@ func validateAssets(c Config) error {
 		}
 	}
 	if len(c.SetupAssets) == 0 {
+		if c.DisableFirstLogonAnimation {
+			return errors.New("first-logon animation experiment requires disposable setup assets")
+		}
 		return nil
 	}
 	required := map[string]bool{"APPSANDBOX-AGENT.EXE": false, "APPSANDBOX-INPUT.EXE": false, "APPSANDBOX-DISPLAYS.EXE": false, "APPSANDBOXVDD.DLL": false, "APPSANDBOXVDD.INF": false, "APPSANDBOXVDD.CAT": false, "DEVCON.EXE": false}
@@ -123,7 +127,31 @@ func unattended(c Config, password string) string {
 <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><Description>Initialize disposable HCS guest</Description><CommandLine>powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s</CommandLine><RequiresUserInput>false</RequiresUserInput></SynchronousCommand></FirstLogonCommands>
 </component></settings></unattend>`, xmlText(c.name()), xmlText(c.GuestUser), xmlText(password), xmlText(c.GuestUser), xmlText(password), boot)
 }
-func makeSetupISO(ctx context.Context, c Config) error {
+
+// This cosmetic policy is opt-in and runs only in the owned child's specialize
+// pass, before the first user logon. It changes no authentication, services,
+// setup flags, desktop proof or isolation checks.
+const disableFirstLogonAnimation = `
+$policy='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+if(!(Test-Path -LiteralPath $policy)){New-Item -Path $policy | Out-Null}
+New-ItemProperty -Path $policy -Name EnableFirstLogonAnimation -Value 0 -PropertyType DWord -Force | Out-Null
+`
+
+func specialization(c Config) string {
+	if c.DisableFirstLogonAnimation {
+		return guestSpecialize + disableFirstLogonAnimation
+	}
+	return guestSpecialize
+}
+
+func makeSetupISO(ctx context.Context, c Config, timings *PreparationTimings) error {
+	started := time.Now()
+	assetsDone := false
+	defer func() {
+		if !assetsDone {
+			timings.SetupAssetsMS = elapsedMS(started)
+		}
+	}()
 	private := filepath.Join(c.directory(), "setup-private")
 	if err := os.Mkdir(private, 0700); err != nil {
 		return err
@@ -184,18 +212,26 @@ func makeSetupISO(ctx context.Context, c Config) error {
 	}
 	password := "Bv!" + hex.EncodeToString(random[:])
 	clear(random[:])
-	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "specialize": guestSpecialize, "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
+	data, err := json.Marshal(map[string]string{"assets": folder, "destination": filepath.Join(private, "setup.iso"), "unattend": unattended(c, password), "specialize": specialization(c), "disk": c.disk(), "root": c.Root, "instance_id": c.InstanceID})
 	if err != nil {
 		return errors.New("cannot encode private setup input")
 	}
 	defer clear(data)
-	if err = runPrivateSetup(ctx, makeISO, data); err != nil {
+	timings.SetupAssetsMS = elapsedMS(started)
+	assetsDone = true
+	isoStarted := time.Now()
+	err = runPrivateSetup(ctx, makeISO, data)
+	timings.SetupISOMS = elapsedMS(isoStarted)
+	if err != nil {
 		return errors.New("disposable setup ISO creation failed")
 	}
 	if err = appsandbox.CheckProtectedFile(c.disk()); err != nil {
 		return errors.New("new child disk lost protection before offline setup")
 	}
-	if err = runPrivateSetup(ctx, stageSetup, data); err != nil {
+	offlineStarted := time.Now()
+	err = runPrivateSetup(ctx, stageSetup, data)
+	timings.OfflineAnswerMS = elapsedMS(offlineStarted)
+	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			if code := exitErr.ExitCode(); code > 10000 && code <= 75535 {
