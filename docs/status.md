@@ -201,8 +201,13 @@ D3D11, presentation/pixel checks and owned cleanup, with three distinct server
 keys, all different from the factory key. Validated-desktop times were 54.666 s
 (including 11.664 s session image verification), 41.753 s and 42.474 s. Setup media,
 offline answer staging and driver copies were zero. Each boot used two agent
-dial attempts; one spent about 30 s in the pending native connect. That transport
-wait remains a performance and bounded-cancellation follow-up.
+dial attempts; one spent about 30 s in the earlier transport's pending native
+connect. The spike now owns cancellable event-based overlapped I/O, with native
+cancellation drained before unpinning buffers or closing handles. The three-second
+agent attempt budget, remaining SSH guest budget and all safety/readiness checks
+are preserved. Ordinary-token native cancellation/deadline/close regressions,
+race tests, vet, lint and cgo-free builds pass. New cold-boot measurements remain
+pending.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

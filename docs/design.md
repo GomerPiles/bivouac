@@ -837,8 +837,18 @@ cloned autologon, credential rotation, authenticated SSH, hardware rendering and
 owned cleanup. Three fresh corrected-image boots presented distinct public SSH
 server keys, all different from the factory key. Reports retain only their public
 fingerprints and numeric connect-attempt counts/latencies. Each prepared boot
-used two attempts, including one approximately 30-s native pending connect;
-transport cancellation remains a follow-up. The experiment is not wired into
+used two attempts, including one approximately 30-s native pending connect in
+the earlier transport. The spike now owns event-based Winsock overlapped I/O:
+agent dial attempts retain the three-second context budget, while the SSH dial
+uses the remaining guest budget. Context, close and deadline changes wake the
+native wait; cancellation calls `CancelIoEx` and drains completion before freeing
+pinned buffers or events. Socket submission and close share a lock so cancellation
+cannot race ahead of submission. Each connection owns its socket, Winsock/DLL
+references and events; close joins all admitted I/O before releasing them. No
+background dial survives timeout, and no dependency or production provider is
+patched. Native private-loopback regressions cover cancellation, changed
+deadlines, stream/EOF, close races and cancellation before wait registration.
+Live timing of this transport remains pending. The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only
 HCS running state, GPU assignment and cleanup against an independent template

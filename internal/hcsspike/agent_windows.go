@@ -184,7 +184,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	}
 	public := []byte(strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 	started := time.Now()
-	var conn *winio.HvsockConn
+	var conn net.Conn
 	var attempts uint32
 	var longestMS uint64
 	for {
@@ -194,7 +194,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 		attempts++
 		dialStarted := time.Now()
 		dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		conn, err = winio.Dial(dialCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(1)})
+		conn, err = dialHVSocket(dialCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(1)})
 		cancel()
 		longestMS = max(longestMS, elapsedMS(dialStarted))
 		if err == nil {
@@ -223,7 +223,7 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 	started = time.Now()
 	sshCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
-	transport, err := winio.Dial(sshCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(7)})
+	transport, err := dialHVSocket(sshCtx, &winio.HvsockAddr{VMID: vmID, ServiceID: serviceID(7)})
 	if err != nil {
 		return report, errors.New("offline HvSocket SSH connection failed")
 	}

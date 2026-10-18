@@ -463,10 +463,16 @@ boot. These are offline desktop timings, not Windows runner-listening/job times
 or a paired comparison with the existing provider.
 
 The repeatable 30.5-s agent connection plateau used two dial attempts per boot,
-with one taking about 30 s. The selected HvSocket implementation does not cancel
-its pending native connect when the attempt context expires. This remains a
-performance and bounded-cancellation follow-up; no extra sleep or weaker
-readiness gate masks it.
+with one taking about 30 s. The earlier HvSocket implementation did not cancel
+its pending native connect when the attempt context expired. The spike now owns
+event-based overlapped Winsock transport for both agent and SSH connections.
+Timeout, close and changed deadlines wake the wait. Cancellation requests
+`CancelIoEx` and drains completion before releasing pinned buffers and events;
+close waits for admitted operations before closing the socket and owned native
+references. The agent attempt remains three seconds, and the SSH dial remains
+within the guest budget. No background attempt is abandoned, no dependency or
+production transport is patched, and no readiness check is removed. Ordinary-
+token native socket regressions pass; new cold-boot timings remain pending.
 
 Sanitation and shutdown run in one SSH operation to avoid recreating factory
 keys through another SSH process. The boot task keeps both sshd and the guest
@@ -509,9 +515,11 @@ and [SSH proxy](https://github.com/jamesstringer90/appsandbox/blob/v0.1.9/src/ba
 No upstream binaries, drivers, images or keys are vendored. Microsoft's
 [HCS overview](https://learn.microsoft.com/en-us/virtualization/api/hcs/overview)
 defines the ephemeral compute-system lifecycle. The pure-Go
-[`go-winio`](https://github.com/microsoft/go-winio/tree/v0.6.2) dependency handles
-HvSocket transport and the VHDX ABI, reusing the version already selected by the
-existing dependency graph. The spike adds no cgo requirement. Start/terminate pass native NULL for the
+[`go-winio`](https://github.com/microsoft/go-winio/tree/v0.6.2) dependency supplies
+HvSocket address types and the VHDX ABI at its already-selected version. The
+spike's transport uses documented [ConnectEx](https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_connectex)
+and [CancelIoEx](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelioex)
+with explicit operation/buffer lifetimes. It adds no cgo requirement. Start/terminate pass native NULL for the
 reserved options parameter, as required by Microsoft's
 [start](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsstartcomputesystem)
 and [terminate](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsterminatecomputesystem)
