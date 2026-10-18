@@ -875,6 +875,18 @@ image verification are 36.225/39.224/40.077 s for control and
 entry can be offset by slower subsequent work. OS boot, task dispatch and
 PowerShell initialization still require finer attribution before replacing the
 startup path. Security/service ordering and host CI settings are unchanged.
+An opt-in `trial --boot-events` reads existing guest kernel boot, fixed-task
+start/process/action and correlated PowerShell engine/console events after all
+readiness gates pass. It does not enable logs, change startup, or rebuild images.
+The native backend owns this per-run option; it is absent from image provenance
+and durable configuration. Absolute boot markers and process identity stay in
+memory solely to bind the two responses. Public output contains only availability
+flags and bounded numeric offsets. Different boots, clock-change records or
+unavailable/overflowing channels suppress uncertain offsets. This event-clock
+view is separate from monotonic guest checkpoints and host timings. A monotonic
+readiness milestone precedes collection, whose duration is reported separately;
+normal trials are unchanged. Local synthetic correlation/privacy tests pass;
+live attribution from these events is pending.
 The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only

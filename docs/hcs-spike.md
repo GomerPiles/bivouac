@@ -547,6 +547,31 @@ requires finer startup tracing before changing the boot mechanism.
 Sanitation and validation pins require rebuilding the prepared image when the
 fixed scripts change.
 
+## Read-only boot event attribution
+
+`trial --boot-events` reuses an existing compatible prepared image, proves normal
+readiness first, then reads existing event logs through the same authenticated
+owned-VM SSH connection. It enables no channels and changes no startup or service
+settings. Each fixed query has a 128-record/output bound and the combined SSH
+collection has a 30-second deadline within the guest budget. Commands encode only
+embedded source and stay below the remote command-size limit.
+
+`boot_events` projects kernel-start-relative task start (100), process creation
+(129), action start (200), and the matching PowerShell engine (400) and console
+startup (40961/40962) records. Task identity and the engine's process ID are used
+only in memory to reject unrelated events. Absolute timestamps, process IDs,
+arguments, context strings and raw log text never enter the report. The two
+responses must bind the same boot. Kernel time-change records invalidate event
+subtraction; missing/disabled logs, incomplete queries and missing events stay
+explicit flags or absent offsets. These event-clock offsets are not subtracted
+from guest TickCount or host stopwatches.
+
+The validated-desktop milestone is captured before collection. Collection has a
+separate `timings_ms.guest.boot_events` span and remains included in total/probe
+time. All normal readiness, reserve and owned-cleanup requirements remain active.
+Local synthetic tests cover foreign tasks/processes, clock changes, unavailable
+logs, overflow and redaction; live event attribution remains pending.
+
 ## Desktop validation checkpoints
 
 `guest_validation_step` retains only an allowlisted number from the SSH stderr

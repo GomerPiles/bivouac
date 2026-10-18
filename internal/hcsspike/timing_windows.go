@@ -36,6 +36,7 @@ type PreparationTimings struct {
 }
 
 type GuestTimings struct {
+	BootEventsMS      uint64 `json:"boot_events,omitempty"`
 	AgentConnectMS    uint64 `json:"agent_connect"`
 	AgentInitializeMS uint64 `json:"agent_initialize"`
 	SSHAuthenticateMS uint64 `json:"ssh_authenticate"`

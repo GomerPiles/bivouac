@@ -24,6 +24,7 @@ import (
 )
 
 type native struct {
+	bootEvents         bool
 	preparationTimings PreparationTimings
 	dll                *windows.LazyDLL
 	preparedOwner      string

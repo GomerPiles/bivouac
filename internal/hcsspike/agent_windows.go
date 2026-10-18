@@ -299,6 +299,12 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 			report.SSHCommandReady = true
 			report.SSHStdinReady = true
 		}
+		if renderErr == nil && a.bootEvents {
+			report.validatedAt = time.Now()
+			traceStarted := time.Now()
+			report.BootEvents, renderErr = a.collectBootEvents(sshCtx, client, c, runtimeID)
+			report.TimingsMS.Guest.BootEventsMS = elapsedMS(traceStarted)
+		}
 		if renderErr == nil && c.ImageRoot != "" {
 			if err = a.verify(ctx, c, runtimeID); err != nil {
 				return report, err

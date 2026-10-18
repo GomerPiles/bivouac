@@ -32,11 +32,12 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 	fs.SetOutput(io.Discard)
 	path := fs.String("config", "", "spike configuration JSON")
 	retainFailed := fs.Bool("retain-failed-storage", false, "retain stopped failed-trial storage for explicit offline inspection")
+	bootEvents := fs.Bool("boot-events", false, "read fixed guest boot events after validated readiness")
 	bootOnly := fs.Bool("boot-only", false, "test native lifecycle without guest initialization")
 	repetitions := fs.Int("repetitions", 1, "sequential fresh clones sharing one immutable-image verification")
 	instanceID := fs.String("instance-id", "", "matching retained instance identity for cleanup")
-	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || *repetitions < 1 || *repetitions > 5 || (*bootOnly && args[0] != "trial") || (*retainFailed && args[0] != "trial" && args[0] != "build-image") || (*repetitions != 1 && args[0] != "trial") || (*instanceID != "" && args[0] != "cleanup") {
-		return errors.New("provide --config; repetitions 1-5/boot-only require trial; instance-id requires cleanup")
+	if fs.Parse(args[1:]) != nil || *path == "" || fs.NArg() != 0 || *repetitions < 1 || *repetitions > 5 || (*bootOnly && args[0] != "trial") || (*bootEvents && (args[0] != "trial" || *bootOnly)) || (*retainFailed && args[0] != "trial" && args[0] != "build-image") || (*repetitions != 1 && args[0] != "trial") || (*instanceID != "" && args[0] != "cleanup") {
+		return errors.New("provide --config; repetitions 1-5/boot-only require trial; boot-events requires guest trial; instance-id requires cleanup")
 	}
 	// Refuse before reading configuration or creating any file. Never prompt,
 	// invoke runas, install a service/task, or use the existing elevated broker.
@@ -67,6 +68,9 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		if err = c.Validate(); err != nil {
 			return err
 		}
+	}
+	if *bootEvents && c.PreparedImage == nil {
+		return errors.New("boot-events requires a prepared-image trial")
 	}
 	if args[0] == "build-image" && c.ImageRoot == "" {
 		return errors.New("build-image requires image_root and complete build assets")
@@ -111,7 +115,7 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer func() { _ = j.root.Close() }()
-	api := &native{dll: windows.NewLazySystemDLL("computecore.dll")}
+	api := &native{dll: windows.NewLazySystemDLL("computecore.dll"), bootEvents: *bootEvents}
 	if err = api.check(); err != nil {
 		return err
 	}

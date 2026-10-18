@@ -229,6 +229,12 @@ desktop spans excluding image verification are 36.225/39.224/40.077 s for contro
 and 36.535/42.138/44.436 s for normal priority. Default task priority (7) is
 retained; no startup speedup is claimed from the earlier script entry. The
 installed provider and production CI are unchanged.
+A read-only `trial --boot-events` collector targets the unaccounted pre-script
+interval using existing kernel, fixed-task process/action and correlated
+PowerShell engine/console events. It preserves image pins and normal startup;
+missing channels and clock changes remain explicit unknowns. Local bounded-output,
+clock-change, identity-correlation and readiness-milestone tests pass. Live event
+attribution is pending; no further optimization is claimed.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

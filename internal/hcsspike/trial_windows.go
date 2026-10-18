@@ -76,6 +76,9 @@ func (t GuestBootTimings) valid() bool {
 }
 
 type Report struct {
+	// Diagnostic queries run after readiness; preserve its monotonic milestone.
+	validatedAt                time.Time
+	BootEvents                 *BootEvents       `json:"boot_events,omitempty"`
 	Boot                       *GuestBootTimings `json:"boot,omitempty"`
 	CredentialRotated          bool              `json:"credential_rotated"`
 	InstanceID                 string            `json:"instance_id,omitempty"`
@@ -339,6 +342,9 @@ func trial(ctx context.Context, c Config, j *journal, api backend, bootOnly, ret
 	observed.TimingsMS.Lifecycle.ProbeMS = elapsedMS(stageStarted)
 	if err == nil && observed.GuestReady && observed.DesktopReady && observed.HardwareD3D11 && observed.Presented && observed.PixelReadback {
 		observed.TimingsMS.ToValidatedDesktopMS = elapsedMS(trialStarted)
+		if !observed.validatedAt.IsZero() {
+			observed.TimingsMS.ToValidatedDesktopMS = durationMS(observed.validatedAt.Sub(trialStarted))
+		}
 	}
 	observed.NativeStarted = report.NativeStarted
 	observed.GPUAssigned = report.GPUAssigned
