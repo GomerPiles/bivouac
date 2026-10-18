@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“31 s, JIT to listening
-  5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“1.8 s (power-off).
+- Timings: clone 1ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ6 ms, boot to guest agent 22ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ31 s, JIT to listening
+  5ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ10 s, teardown 1.3ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -147,9 +147,13 @@ Each required exact helper/DNS reuse, new machine and SSH-host-key fingerprints,
 runner/GPU/CDI readiness and complete owned cleanup. These are credential-free
 readiness measurements, not clone-to-listening or job timings. The independent
 captured image also passed live provider reopen/adoption and intentional recorded
-supervisor-loss cleanup. Registered-runner validation of this prepared baseline
-remains a deployment gate. No production image, binary or
-configuration changed, and no service was disabled solely from a boot timestamp.
+supervisor-loss cleanup. A separate manager with a unique validation label also
+reached a real JIT runner-listening state: clone 404 ms, boot/readiness 11.495 s,
+registration/listening 4.988 s (16.887 s total). Off then deregistered the idle
+runner and removed its guest, native processes, SSH pin and instance record.
+This validates listening and graceful idle retirement; executing an isolated job
+on the prepared baseline remains a promotion gate. No production image, binary
+or configuration changed, and no service was disabled solely from a boot timestamp.
 
 
 Open: private peers, NIC reconfiguration and dynamic interfaces, a cleanup

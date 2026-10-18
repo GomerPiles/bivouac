@@ -182,7 +182,15 @@ prepared cold boots passed in 12.313 s, 10.738 s and
 machine and SSH-host-key fingerprints, runner/GPU/CDI readiness and cleanup.
 These host-monotonic stage sums exclude runner registration/listening. The
 prepared baseline also passed provider reopen/adoption and intentional recorded
-supervisor-loss cleanup. Registered-runner validation remains a promotion gate.
+supervisor-loss cleanup. An independent manager reached real JIT listening in
+16.887 s (404 ms clone, 11.495 s readiness, 4.988 s registration/listening),
+then Off deregistered its idle runner and fully cleaned up. Actual job execution
+on the prepared baseline remains a promotion gate. The repository CI workflow
+has an explicit `workflow_dispatch` input, `prepared_linux`, for two sequential
+smoke jobs on the dedicated `bivouac-linux-prepared-validation` label. Leave the
+input false for normal hosted checks. Provision that label only in an independent
+one-runner validation home; the smoke checks helper reuse, fresh sentinel state,
+GPU/CDI, Docker, DNS and public HTTPS without repository credentials or checkout.
 The installed production image/provider remains unchanged.
 
 ## Isolated configuration
