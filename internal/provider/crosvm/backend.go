@@ -632,7 +632,7 @@ func (b *NativeBackend) Stop(ctx context.Context, name string, _ time.Duration) 
 // overlay, logs, journals and any temporary file an interrupted writeJSON left.
 // native.json goes last, so a stalled supervisor still sees a used launch.
 func instanceFiles() []string {
-	return []string{"disk.qcow2", "stop", "serial.log", "native.log", "daemon.lock", "launch.intent", "dispatch.json",
+	return []string{"image-shutdown.json", "image-shutdown.json.new", "disk.qcow2", "stop", "serial.log", "native.log", "daemon.lock", "launch.intent", "dispatch.json",
 		"launch.intent.new", "dispatch.json.new", "native.json.new", "owner.json.new", ".bivouac-owner.json.new", "native.json"}
 }
 

@@ -102,13 +102,17 @@ func (p *Provider) lookup(ctx context.Context, name string) (Record, provider.St
 	}
 	return r, s, nil
 }
-func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
+func (p *Provider) Create(ctx context.Context, spec provider.Spec) (result error) {
+	started := time.Now()
+	defer func() { logStartup(spec.Name, "clone", started, result) }()
 	if !p.managed(spec.Name) || spec.Meta.ControllerID != p.opts.ControllerID {
 		return provider.ErrNotOwned
 	}
 	return p.backend.Create(ctx, spec)
 }
-func (p *Provider) Start(ctx context.Context, name string, out io.Writer) error {
+func (p *Provider) Start(ctx context.Context, name string, out io.Writer) (result error) {
+	started := time.Now()
+	defer func() { logStartup(name, "native_start", started, result) }()
 	if _, _, err := p.lookup(ctx, name); err != nil {
 		return err
 	}
@@ -118,7 +122,9 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if _, _, err := p.lookup(ctx, name); err != nil {
 		return err
 	}
+	started := time.Now()
 	r, err := p.backend.WaitReady(ctx, name)
+	logStartup(name, "ssh_available", started, err)
 	if err != nil {
 		return err
 	}

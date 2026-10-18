@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
-	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/redact"
 )
 
@@ -137,63 +137,27 @@ func listener(cfg GuestConfig) (guestProcess, bool, error) {
 // unconfigured official runner, Git, Docker and generic virtio/CDI runtime.
 func RunLinuxGuest(ctx context.Context, mode string, input io.Reader, out io.Writer) error {
 	self, err := os.Executable()
-	if err != nil || (filepath.Base(self) != "bivouac-guest" && self != filepath.Join(guestRoot, "helper")) {
+	if err != nil || (filepath.Base(self) != "bivouac-guest" && self != runtimeHelper) {
 		return errors.New("linux adapter must run from its disposable guest installation")
+	}
+	if mode == "prepare-image" {
+		return prepareLinuxImage(ctx, self, input, out)
 	}
 	if os.Getuid() == 0 {
 		return errors.New("linux runner must use its dedicated non-root user")
 	}
 	if mode == "prepare" {
-		var cfg GuestConfig
-		decoder := json.NewDecoder(io.LimitReader(input, 65537))
-		decoder.DisallowUnknownFields()
-		if decoder.Decode(&cfg) != nil || decoder.Decode(new(any)) != io.EOF || !identifier(cfg.Name, 63) || !strings.HasPrefix(cfg.Name, "bivouac-") ||
-			!identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" || cfg.BootID != "" {
-			return errors.New("invalid bounded guest bootstrap")
-		}
-		if _, err := os.Stat(guestRoot); err == nil {
-			return errors.New("guest bootstrap state already exists")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Mkdir(guestRoot, 0o700); err != nil {
-			return err
-		}
-		boot, err := bootIdentity()
-		if err != nil {
-			return err
-		}
-		cfg.BootID = boot
-		for _, name := range []string{".runner", ".credentials"} {
-			if _, err := os.Stat(filepath.Join(cfg.RunnerDir, name)); !errors.Is(err, os.ErrNotExist) {
-				return errors.New("baseline has configured runner state or cannot be inspected")
-			}
-		}
-		if _, err := os.Stat(filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener")); err != nil {
-			return errors.New("generic official runner is missing")
-		}
-		if cfg.GPU {
-			data, err := readBounded("/sys/class/drm/renderD128/device/vendor", 128)
-			if err != nil || strings.TrimSpace(string(data)) != "0x1af4" {
-				return errors.New("generic virtio GPU is unavailable")
-			}
-			if _, err := os.Stat("/etc/cdi/ci-gpu.json"); err != nil {
-				return errors.New("generic GPU CDI runtime is missing")
-			}
-		}
-		if err := persistentPublicDNS(ctx); err != nil {
-			return err
-		}
-		if err := guestWrite("config.json", cfg); err != nil {
-			return err
-		}
-		return json.NewEncoder(out).Encode(cfg)
+		return prepareLinuxGuest(ctx, self, input, out)
 	}
 	cfg, err := guestConfig()
 	if err != nil {
 		return err
 	}
 	switch mode {
+	case "image-identity":
+		return json.NewEncoder(out).Encode(cfg)
+	case "boot-report":
+		return linuxBootReport(ctx, out)
 	case "cache-setup":
 		data, err := io.ReadAll(io.LimitReader(input, 32<<10+1))
 		if err != nil {
@@ -278,37 +242,38 @@ func RunLinuxGuest(ctx context.Context, mode string, input io.Reader, out io.Wri
 	}
 }
 
-func persistentPublicDNS(ctx context.Context) error {
+func persistentPublicDNS(ctx context.Context) (dnsPreparation, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	// Writing through systemd-resolved's symlink is temporary: DHCP can replace
-	// it with a private Slirp resolver after startup. Persist the public choice
-	// in the disposable clone's active profile before starting the listener.
-	if _, err := os.Stat("/usr/bin/nmcli"); err == nil {
-		data, err := exec.CommandContext(ctx, "/usr/bin/nmcli", "-t", "-f", "UUID,DEVICE", "connection", "show", "--active").Output()
-		if err != nil {
-			return errors.New("inspect generic guest network profile")
-		}
-		profile, err := uplinkProfile(data)
-		if err != nil {
-			return err
-		}
-		args := []string{"-n", "/usr/bin/nmcli", "connection", "modify", "uuid", profile, "ipv4.ignore-auto-dns", "yes", "ipv4.dns", "1.1.1.1,8.8.8.8", "ipv6.ignore-auto-dns", "yes"}
-		if exec.CommandContext(ctx, "/usr/bin/sudo", args...).Run() != nil {
-			return errors.New("persist public guest DNS")
-		}
-		if exec.CommandContext(ctx, "/usr/bin/sudo", "-n", "/usr/bin/nmcli", "device", "reapply", "eth0").Run() != nil {
-			return errors.New("apply public guest DNS without changing addresses")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	} else {
-		info, err := os.Lstat("/etc/resolv.conf")
-		if err != nil || !info.Mode().IsRegular() {
-			return errors.New("generic image needs NetworkManager or a static unmanaged resolver file")
+	_, err := os.Stat("/usr/bin/nmcli")
+	nm := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return dnsPreparation{}, err
+	}
+	if !nm {
+		info, e := os.Lstat("/etc/resolv.conf")
+		if e != nil || !info.Mode().IsRegular() {
+			return dnsPreparation{}, errors.New("generic image needs NetworkManager or a static unmanaged resolver file")
 		}
 	}
-	return engine.PublicDNS(ctx)
+	return configurePublicDNS(ctx, nm, func() ([]byte, error) { return readBounded("/etc/resolv.conf", 65536) }, appsandbox.NativeCommands{})
+}
+func installRuntimeHelper(self string) error {
+	if self == preparedHelper {
+		return os.Symlink(preparedHelper, runtimeHelper)
+	}
+	source, err := os.Open(self)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = source.Close() }()
+	// #nosec G302 -- This private guest-only executable must be owner-executable.
+	destination, err := os.OpenFile(runtimeHelper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(destination, source)
+	return errors.Join(err, destination.Close())
 }
 
 func linuxDiagnostics(cfg GuestConfig, out io.Writer) error {
@@ -429,27 +394,8 @@ func linuxListener(ctx context.Context, cfg GuestConfig) error {
 	if err := os.Remove(filepath.Join(guestRoot, "jit")); err != nil {
 		return err
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	const hook = "#!/bin/sh\nexec /tmp/bivouac-runner/helper guest linux hook\n"
 	const completedHook = "#!/bin/sh\n/tmp/bivouac-runner/helper guest linux hook-completed\nexit 0\n"
-	source, err := os.Open(self)
-	if err != nil {
-		return err
-	}
-	// #nosec G302 -- This private guest-only executable must be owner-executable.
-	destination, err := os.OpenFile(filepath.Join(guestRoot, "helper"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
-	if err != nil {
-		_ = source.Close()
-		return err
-	}
-	_, err = io.Copy(destination, source)
-	err = errors.Join(err, source.Close(), destination.Close())
-	if err != nil {
-		return err
-	}
 	// #nosec G306 -- The official runner executes this fixed private guest hook.
 	if err := os.WriteFile(filepath.Join(guestRoot, "job-started.sh"), []byte(hook), 0o700); err != nil {
 		return err
@@ -552,4 +498,86 @@ func linuxStatus(cfg GuestConfig) (provider.RunnerStatus, error) {
 		return status, err
 	}
 	return status, nil
+}
+
+func prepareLinuxGuest(ctx context.Context, self string, input io.Reader, out io.Writer) (result error) {
+	stage := uint32(1)
+	defer func() {
+		if result != nil {
+			var fault *dnsError
+			var dnsStage uint32
+			if errors.As(result, &fault) {
+				dnsStage = fault.stage
+			}
+			result = json.NewEncoder(out).Encode(GuestPreparation{FailedStage: stage, DNSFailure: dnsStage})
+		}
+	}()
+
+	started := time.Now()
+	var observation GuestPreparation
+	var cfg GuestConfig
+	decoder := json.NewDecoder(io.LimitReader(input, 65537))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&cfg) != nil || decoder.Decode(new(any)) != io.EOF || !identifier(cfg.Name, 63) || !strings.HasPrefix(cfg.Name, "bivouac-") ||
+		!identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" || cfg.BootID != "" {
+		return errors.New("invalid bounded guest bootstrap")
+	}
+	stage = 2
+	if _, err := os.Stat(guestRoot); err == nil {
+		return errors.New("guest bootstrap state already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Mkdir(guestRoot, 0o700); err != nil {
+		return err
+	}
+	stage = 3
+	boot, err := bootIdentity()
+	if err != nil {
+		return err
+	}
+	cfg.BootID = boot
+	stage = 4
+	for _, name := range []string{".runner", ".credentials"} {
+		if _, err := os.Stat(filepath.Join(cfg.RunnerDir, name)); !errors.Is(err, os.ErrNotExist) {
+			return errors.New("baseline has configured runner state or cannot be inspected")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener")); err != nil {
+		return errors.New("generic official runner is missing")
+	}
+	stage = 5
+	if cfg.GPU {
+		data, err := readBounded("/sys/class/drm/renderD128/device/vendor", 128)
+		if err != nil || strings.TrimSpace(string(data)) != "0x1af4" {
+			return errors.New("generic virtio GPU is unavailable")
+		}
+		if _, err := os.Stat("/etc/cdi/ci-gpu.json"); err != nil {
+			return errors.New("generic GPU CDI runtime is missing")
+		}
+	}
+	stage = 6
+	dnsStarted := time.Now()
+	dns, err := persistentPublicDNS(ctx)
+	observation.DNSMS = time.Since(dnsStarted).Milliseconds()
+	if err != nil {
+		return err
+	}
+	observation.DNSReused = dns.Reused
+	observation.DNSProfileChanged = dns.ProfileChanged
+	observation.DNSResolverChanged = dns.ResolverChanged
+	stage = 7
+	helperStarted := time.Now()
+	if err = installRuntimeHelper(self); err != nil {
+		return err
+	}
+	observation.HelperInstallMS = time.Since(helperStarted).Milliseconds()
+	stage = 8
+	if err := guestWrite("config.json", cfg); err != nil {
+		return err
+	}
+	observation.Config = cfg
+	observation.TotalMS = time.Since(started).Milliseconds()
+	return json.NewEncoder(out).Encode(observation)
+
 }
