@@ -4,6 +4,31 @@ param(
     [string]$HomeDirectory=$PSScriptRoot
 )
 $ErrorActionPreference='Stop'
+
+function Assert-ManagerLaunchContext {
+    # Hidden windows and redirected streams do not detach a child from its
+    # parent's Windows job. Closing an IDE/agent can otherwise kill the manager
+    # while its native Windows guests remain alive and consume host resources.
+    if (!('BivouacManagerContext' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class BivouacManagerContext {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+}
+'@
+    }
+    $inJob=$false
+    $self=[Diagnostics.Process]::GetCurrentProcess().Handle
+    if (![BivouacManagerContext]::IsProcessInJob($self,[IntPtr]::Zero,[ref]$inJob)) {
+        throw 'Cannot verify an independent manager launch context; run CI On from its desktop shortcut'
+    }
+    if ($inJob) {
+        throw 'Cannot start a persistent manager inside a Windows process job; run CI On from its desktop shortcut, or use the explicitly installed login task'
+    }
+}
+
 $HomeDirectory=[IO.Path]::GetFullPath($HomeDirectory)
 $manifest=Get-Content -LiteralPath (Join-Path $HomeDirectory 'portable.json') -Raw | ConvertFrom-Json
 $binary=[IO.Path]::GetFullPath((Join-Path $HomeDirectory $manifest.binary))
@@ -35,6 +60,9 @@ if (Test-Path -LiteralPath $recordPath) {
     }
 }
 if (!$live) {
+    # Check before doctor, mode changes, stale-PID archival, or process launch.
+    # A live manager can still receive mode commands from a contained shell.
+    Assert-ManagerLaunchContext
     # Prove the actual manager lock is free; a stale/reused PID is not authority.
     $lockPath=Join-Path $HomeDirectory 'state\daemon.lock'
     $lock=[IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite)

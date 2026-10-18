@@ -53,11 +53,10 @@ type Engine struct {
 	net           NativeNetwork
 	records       *Records
 	checkBaseline func(context.Context) error
-	// unhealthy records that the last guard pass was incomplete (for example
-	// App Sandbox was unavailable); a later full successful pass clears it.
-	// policyFailed records a failed policy proof and lasts until restart.
-	unhealthy    bool
-	policyFailed bool
+	// unhealthy blocks admission after an incomplete guard pass or policy loss.
+	// Retained quarantines/cleanup keep each later pass unhealthy until removed;
+	// a full successful pass then clears it without restarting the broker.
+	unhealthy bool
 }
 
 func NewEngine(opts EngineOptions, api NativeAPI, network NativeNetwork, records *Records, checkBaseline func(context.Context) error) (*Engine, error) {
@@ -81,9 +80,6 @@ func (e *Engine) validate(r CloneRecord) error {
 func (e *Engine) Create(ctx context.Context, r CloneRecord) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.policyFailed {
-		return errors.New("broker isolation guard failed; cleanup and restart are required")
-	}
 	if e.unhealthy {
 		return errors.New("broker isolation guard incomplete; admission resumes after a full successful guard pass")
 	}
@@ -458,10 +454,15 @@ func (e *Engine) Root() string { return filepath.Clean(e.records.path) }
 
 // Guard checks policy independently of the normal-user manager. A failed
 // proof quarantines the guest; a failed port block also stops the owned VM.
-// It never repairs or silently resumes a running guest.
+// It never repairs or silently resumes a running guest. Admission recovers only
+// after quarantined records are cleaned up and a full guard pass succeeds.
 func (e *Engine) Guard(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		e.unhealthy = true
+		return err
+	}
 	all, err := e.records.All()
 	if err != nil {
 		e.unhealthy = true
@@ -469,7 +470,16 @@ func (e *Engine) Guard(ctx context.Context) error {
 	}
 	var failures []error
 	for _, r := range all {
-		if r.Network == nil || r.Phase == "native_deleted" || r.Phase == "network_deleted" {
+		if r.Network == nil {
+			continue
+		}
+		// A stopped/absent VM is not completed cleanup: its protected record
+		// can still reserve a switch, port, storage, or a pending deletion.
+		// Derive this gate from durable state so broker restart cannot clear it.
+		if r.Phase == "quarantined" || r.Phase == "native_deleted" || r.Phase == "network_deleted" {
+			failures = append(failures, errors.New("retained native network requires cleanup before admission"))
+		}
+		if r.Phase == "native_deleted" || r.Phase == "network_deleted" {
 			continue
 		}
 		l, lookupErr := e.lookup(ctx, r.Clone.RunnerName, true)
@@ -489,7 +499,6 @@ func (e *Engine) Guard(ctx context.Context) error {
 		if verifyErr == nil {
 			continue
 		}
-		e.policyFailed = true
 		blockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		blockErr := e.net.Block(blockCtx, r)
 		if blockErr != nil && lookupErr == nil {
@@ -499,9 +508,9 @@ func (e *Engine) Guard(ctx context.Context) error {
 		r.Phase = "quarantined"
 		failures = append(failures, verifyErr, blockErr, e.records.Put(r))
 	}
-	err = errors.Join(failures...)
-	// An incomplete pass blocks admission until a later pass succeeds in full;
-	// policyFailed stays set regardless.
+	err = errors.Join(append(failures, ctx.Err())...)
+	// Keep the cleanup API available while unhealthy. Once all retained
+	// failures are gone, new guests build and verify current host policy.
 	e.unhealthy = err != nil
 	return err
 }

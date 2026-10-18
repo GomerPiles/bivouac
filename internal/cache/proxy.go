@@ -326,7 +326,8 @@ func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token str
 	defer cancel()
 	response, err := s.client.Do(head.WithContext(ctx)) // #nosec G704 -- release host/path admission above; publicClient rejects private DNS targets and unsafe redirects.
 	if err != nil {
-		s.log.Info("release cache bypass", "reason", "upstream_head_unavailable")
+		reason, _ := failureDetails(upstreamFailure(err))
+		s.log.Info("release cache bypass", "reason", reason)
 		return false
 	}
 	_ = response.Body.Close()
@@ -346,20 +347,24 @@ func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token str
 		get.Header.Set("If-Match", etag)
 		fetched, e := s.client.Do(get) // #nosec G704 -- source is the validated HEAD result; publicClient revalidates DNS and redirects for this fetch.
 		if e != nil {
-			return errors.New("release fill unavailable")
+			return upstreamFailure(e)
 		}
 		defer func() { _ = fetched.Body.Close() }()
 		if !reusableResponse(fetched, s.store.maxObject) || fetched.Header.Get("ETag") != etag || fetched.ContentLength != response.ContentLength {
-			return errors.New("release identity changed")
+			return &fault{reason: "upstream_identity_or_policy", status: fetched.StatusCode}
 		}
 		n, e := io.Copy(out, fetched.Body)
-		if e != nil || n != response.ContentLength {
-			return errors.New("incomplete release download")
+		if e != nil {
+			return bodyFailure(ctx, e)
+		}
+		if n != response.ContentLength {
+			return failure("length_mismatch")
 		}
 		return nil
 	})
 	if err != nil {
-		s.log.Info("release cache bypass", "reason", "fill_unavailable")
+		reason, status := failureDetails(err)
+		s.log.Info("release cache bypass", "object", s.store.label(key), "reason", reason, "status", status, "bytes", response.ContentLength)
 		return false
 	}
 	defer func() { _ = object.Close() }()
@@ -368,9 +373,16 @@ func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token str
 	for key, values := range response.Header {
 		w.Header()[key] = values
 	}
-	s.log.Info("cache object served", "kind", "github_release", "hit", hit, "bytes", response.ContentLength)
+	s.log.Info("cache object served", "kind", "github_release", "object", s.store.label(key), "hit", hit, "bytes", response.ContentLength)
 	w.WriteHeader(http.StatusOK)
 	n, copyErr := io.Copy(w, object)
+	if copyErr != nil || n != response.ContentLength {
+		reason := deliveryFailure(copyErr)
+		if r.Context().Err() != nil {
+			reason = deliveryFailure(r.Context().Err())
+		}
+		s.log.Warn("cache response incomplete", "kind", "github_release", "object", s.store.label(key), "reason", reason, "expected_bytes", response.ContentLength, "delivered_bytes", n)
+	}
 	outcome := cacheMiss
 	if hit {
 		outcome = cacheHit

@@ -12,9 +12,9 @@ func TestContainerPairCapacityAndFrozenReservation(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) {
 		c.Budget.ReserveCPU = 2
 		p := c.Providers["macos"]
-		p.Tart.CPU = 4
-		p.Tart.MemoryGB = 8
-		p.Tart.Containers = &config.Containers{Engine: "docker", Baseline: "ci-linux-engine", CPU: 2, MemoryGB: 4, Helper: "/opt/bivouac/linux-arm64"}
+		p.VZ.CPU = 4
+		p.VZ.MemoryGB = 8
+		p.VZ.Containers = &config.Containers{Engine: "docker", Baseline: "ci-linux-engine", CPU: 2, MemoryGB: 4, Helper: "/opt/bivouac/linux-arm64"}
 		c.Providers["macos"] = p
 	})
 	if n, _ := h.m.rawCapacity(context.Background(), "macos"); n != 1 {
@@ -26,8 +26,8 @@ func TestContainerPairCapacityAndFrozenReservation(t *testing.T) {
 	}
 	// Smaller config for future jobs must not erase a live pair's reservation.
 	p := h.m.o.Config.Providers["macos"]
-	p.Tart.CPU = 1
-	p.Tart.Containers.CPU = 2
+	p.VZ.CPU = 1
+	p.VZ.Containers.CPU = 2
 	h.m.o.Config.Providers["macos"] = p
 	if n, _ := h.m.rawCapacity(context.Background(), "macos"); n != 0 {
 		t.Fatalf("live pair reservation was recomputed: %d", n)
@@ -51,7 +51,7 @@ func TestRetainedPairRejectsTopologyChanges(t *testing.T) {
 		t.Fatal("disabled container topology accepted with retained pair")
 	}
 	p := h.m.o.Config.Providers["macos"]
-	p.Tart.Containers = &config.Containers{Engine: "podman"}
+	p.VZ.Containers = &config.Containers{Engine: "podman"}
 	h.m.o.Config.Providers["macos"] = p
 	if err := h.m.Reconcile(context.Background()); err == nil {
 		t.Fatal("changed container engine accepted with retained pair")

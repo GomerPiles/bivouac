@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,14 +32,14 @@ func readObject(t *testing.T, s *Store, key string, size int64, fetch func(conte
 
 func TestStoreRestartCorruptionAndEviction(t *testing.T) {
 	dir := t.TempDir()
-	s, e := Open(dir, 10, 6)
+	s, e := Open(dir, 10, 6, slog.New(slog.DiscardHandler))
 	if e != nil {
 		t.Fatal(e)
 	}
 	if readObject(t, s, "first", 5, fill("aaaaa")) {
 		t.Fatal("unexpected initial hit")
 	}
-	s, e = Open(dir, 10, 6)
+	s, e = Open(dir, 10, 6, slog.New(slog.DiscardHandler))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -62,7 +63,7 @@ func TestStoreRestartCorruptionAndEviction(t *testing.T) {
 }
 
 func TestStoreConcurrentFillAndCancellation(t *testing.T) {
-	s, e := Open(t.TempDir(), 100, 50)
+	s, e := Open(t.TempDir(), 100, 50, slog.New(slog.DiscardHandler))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -113,7 +114,7 @@ func TestStoreConcurrentFillAndCancellation(t *testing.T) {
 
 func TestStoreLimitsPinsAndInterruptedFill(t *testing.T) {
 	dir := t.TempDir()
-	s, e := Open(dir, 20, 10)
+	s, e := Open(dir, 20, 10, slog.New(slog.DiscardHandler))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -136,7 +137,7 @@ func TestStoreLimitsPinsAndInterruptedFill(t *testing.T) {
 	if e = os.WriteFile(filepath.Join(dir, "fill-interrupted"), []byte("partial"), 0o600); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = Open(dir, 20, 10); e != nil {
+	if _, e = Open(dir, 20, 10, slog.New(slog.DiscardHandler)); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = os.Stat(filepath.Join(dir, "fill-interrupted")); !errors.Is(e, os.ErrNotExist) {
@@ -160,7 +161,7 @@ func TestStoreRefusesSymlinks(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, strings.Repeat("a", 64))); err != nil {
 		t.Skip("symlinks unavailable")
 	}
-	if _, err := Open(dir, 20, 10); err == nil {
+	if _, err := Open(dir, 20, 10, slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("accepted symlink")
 	}
 	data, _ := os.ReadFile(target)
@@ -170,7 +171,7 @@ func TestStoreRefusesSymlinks(t *testing.T) {
 }
 
 func TestActiveReaderRetainsDiskBudget(t *testing.T) {
-	s, err := Open(t.TempDir(), 10, 6)
+	s, err := Open(t.TempDir(), 10, 6, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func TestActiveReaderRetainsDiskBudget(t *testing.T) {
 }
 
 func TestStoreReservesExactSizeAndEvictsOnlyWhatIsNeeded(t *testing.T) {
-	s, err := Open(t.TempDir(), 20, 10)
+	s, err := Open(t.TempDir(), 20, 10, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +240,7 @@ func TestStoreReservesExactSizeAndEvictsOnlyWhatIsNeeded(t *testing.T) {
 }
 
 func TestStoreEvictsNothingWhenRoomIsImpossible(t *testing.T) {
-	s, err := Open(t.TempDir(), 10, 6)
+	s, err := Open(t.TempDir(), 10, 6, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

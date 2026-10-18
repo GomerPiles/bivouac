@@ -1,9 +1,21 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestMachineOptionsParse(t *testing.T) {
+	text := strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }\n# disk_sync = \"none\"", "[providers.macos.vz.machine]\ndisplay = { width = 1920, height = 1080, ppi = 144 }\ndisk_sync = \"none\"", 1)
+	c, err := Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := c.Providers["macos"].VZ.Machine; m != (Machine{Display: Display{Width: 1920, Height: 1080, PPI: 144}, DiskSync: "none"}) {
+		t.Fatalf("machine = %+v", m)
+	}
+}
 
 func TestExampleParses(t *testing.T) {
 	c, err := Parse([]byte(Example))
@@ -11,8 +23,8 @@ func TestExampleParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := c.Providers["macos"]
-	if p.Tart.Binary != "tart" || p.Tart.HostVMLimit != 2 {
-		t.Fatalf("defaults not applied: %+v", p.Tart)
+	if p.VZ.HostVMLimit != 2 {
+		t.Fatalf("defaults not applied: %+v", p.VZ)
 	}
 	if c.Budget.JobTimeout.Hours() != 2 {
 		t.Fatalf("job_timeout = %s", c.Budget.JobTimeout)
@@ -21,39 +33,32 @@ func TestExampleParses(t *testing.T) {
 
 func TestIsolatedContainersConfiguration(t *testing.T) {
 	for _, engine := range []string{"docker", "podman"} {
-		c, err := Parse([]byte(Example + "\n[providers.macos.tart.containers]\nengine = \"" + engine + "\"\nbaseline = \"ci-linux-engine\"\ncpu = 2\nmemory_gb = 2\nhelper = \"/opt/bivouac/linux-arm64\"\n"))
+		c, err := Parse([]byte(Example + "\n[providers.macos.vz.containers]\nengine = \"" + engine + "\"\nbaseline = \"ci-linux-engine\"\ncpu = 2\nmemory_gb = 2\nhelper = \"/opt/bivouac/linux-arm64\"\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		p := c.Providers["macos"]
-		for _, a := range []string{"--dir=/tmp:ro", "--disk=/dev/disk1", "--net-host", "--net-softnet-allow=0.0.0.0/0", "--net-softnet-block=127.0.0.0/8", "--net-bridged=en0", "--net-softnet-expose=2375:2375", "--rosetta=host", "--nested"} {
-			p.Tart.ExtraArgs = []string{a}
-			if c.Validate() == nil {
-				t.Fatalf("accepted isolation override %q", a)
-			}
-		}
-		p.Tart.ExtraArgs = nil
-		p.Tart.BootstrapShare = "/tmp"
+		p.VZ.BootstrapShare = "/tmp"
 		if c.Validate() == nil {
 			t.Fatal("accepted host share")
 		}
-		p.Tart.BootstrapShare = ""
+		p.VZ.BootstrapShare = ""
 		c.Cache = Cache{Enabled: true, GuestHost: "192.168.64.1", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 1}
 		if c.Validate() == nil {
 			t.Fatal("accepted gateway cache exception")
 		}
 		c.Cache = Cache{}
-		p.Tart.Containers.Engine = "host"
+		p.VZ.Containers.Engine = "host"
 		if c.Validate() == nil {
 			t.Fatal("accepted host engine")
 		}
-		p.Tart.Containers.Engine = engine
-		p.Tart.Containers.Baseline = "bivouac-linux"
+		p.VZ.Containers.Engine = engine
+		p.VZ.Containers.Baseline = "bivouac-linux"
 		if c.Validate() == nil {
 			t.Fatal("accepted owned prefix baseline")
 		}
-		p.Tart.Containers.Baseline = "ci-linux-engine"
-		p.Tart.CPU = 0
+		p.VZ.Containers.Baseline = "ci-linux-engine"
+		p.VZ.CPU = 0
 		if c.Validate() == nil {
 			t.Fatal("accepted unknown pair resource size")
 		}
@@ -65,14 +70,16 @@ func TestRejects(t *testing.T) {
 		"unknown key":      strings.Replace(Example, "reserve_cpu", "reserve_cpus", 1),
 		"baseline prefix":  strings.Replace(Example, `baseline = "ci-macos"`, `baseline = "bivouac-base"`, 1),
 		"scaleset prefix":  strings.Replace(Example, `scaleset = "bivouac-macos-experimental"`, `scaleset = "macos"`, 1),
-		"shell string arg": strings.Replace(Example, `"--no-audio"`, `"--no-audio --no-clipboard"`, 1),
 		"foreign slots":    strings.Replace(Example, `foreign_slots = 1`, `foreign_slots = 2`, 1),
 		"missing key":      strings.Replace(Example, `private_key_secret = "github-app-key"`, ``, 1),
 		"bad url":          strings.Replace(Example, `https://github.com/example-org`, `http://github.com/example-org`, 1),
 		"negative timeout": strings.Replace(Example, `job_timeout = "2h"`, `job_timeout = "-2h"`, 1),
 		"negative idle":    strings.Replace(Example, `idle_timeout = "10m"`, `idle_timeout = "-1s"`, 1),
-		"tart cpu":         strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
-		"tart memory":      strings.Replace(Example, `memory_gb = 8`+"\n"+`extra_args`, `memory_gb = 4096`+"\n"+`extra_args`, 1),
+		"vz cpu":           strings.Replace(Example, `cpu = 6`, `cpu = -1`, 1),
+		"vz memory":        strings.Replace(Example, `memory_gb = 8`+"\n"+`host_vm_limit`, `memory_gb = 4096`+"\n"+`host_vm_limit`, 1),
+		"vz runner_dir":    strings.Replace(Example, `memory_gb = 8`+"\n", `memory_gb = 8`+"\n"+`runner_dir = "/Users/admin/actions-runner"`+"\n", 1),
+		"machine display":  strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }", "[providers.macos.vz.machine]\ndisplay = { width = 1920 }", 1),
+		"machine sync":     strings.Replace(Example, "# [providers.macos.vz.machine]\n# display = { width = 1920, height = 1080, ppi = 144 }\n# disk_sync = \"none\"", "[providers.macos.vz.machine]\ndisk_sync = \"unsafe\"", 1),
 	}
 	for name, text := range cases {
 		if _, err := Parse([]byte(text)); err == nil {
@@ -138,15 +145,36 @@ func TestCacheConfiguration(t *testing.T) {
 	}
 }
 
-func TestTartSerialArgumentRejected(t *testing.T) {
-	for _, a := range []string{"--serial", "--serial=/tmp/console"} {
-		cfg, err := Parse([]byte(Example))
-		if err != nil {
-			t.Fatal(err)
-		}
-		cfg.Providers["macos"].Tart.ExtraArgs = []string{"--no-audio", a}
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "--serial") {
-			t.Fatalf("%s accepted: %v", a, err)
+func TestNestedVirtualizationParses(t *testing.T) {
+	text := Example + "\n[providers.macos.vz.machine]\nnested_virtualization = true\n"
+	c, err := Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Providers["macos"].VZ.Machine.NestedVirtualization {
+		t.Fatal("nested_virtualization not parsed")
+	}
+}
+
+func TestScaleSetLabels(t *testing.T) {
+	cfg, err := Parse([]byte(Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.Providers["macos"]
+	p.ScaleSetLabels = []string{"self-hosted", "bivouac-lt-a"}
+	cfg.Providers["macos"] = p
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ScaleSetLabelNames(); !slices.Equal(got, []string{"bivouac-macos-experimental", "self-hosted", "bivouac-lt-a"}) {
+		t.Fatalf("labels %q", got)
+	}
+	for _, labels := range [][]string{{""}, {" padded"}, {"BIVOUAC-MACOS-EXPERIMENTAL"}, {"a", "A"}, slices.Repeat([]string{"x"}, 100)} {
+		p.ScaleSetLabels = labels
+		cfg.Providers["macos"] = p
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("accepted invalid scale set labels: %q", labels)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package github
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/actions/scaleset"
@@ -31,5 +32,15 @@ func TestRunnerRemovalError(t *testing.T) {
 				t.Fatalf("cleanup failure discarded: got %v, want %v", got, tc.err)
 			}
 		})
+	}
+}
+
+func TestLabelDiff(t *testing.T) {
+	missing, extra := LabelDiff([]string{"bivouac-x", "Self-Hosted", "bivouac-lt-a"}, []string{"BIVOUAC-X", "self-hosted", "bivouac-lt-b"})
+	if !slices.Equal(missing, []string{"bivouac-lt-a"}) || !slices.Equal(extra, []string{"bivouac-lt-b"}) {
+		t.Fatalf("missing %q, extra %q", missing, extra)
+	}
+	if missing, extra := LabelDiff([]string{"a", "B"}, []string{"b", "A"}); missing != nil || extra != nil {
+		t.Fatalf("equal sets differ: %q, %q", missing, extra)
 	}
 }

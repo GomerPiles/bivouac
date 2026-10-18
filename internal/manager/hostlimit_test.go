@@ -11,13 +11,13 @@ import (
 	"github.com/GomerPiles/bivouac/internal/state"
 )
 
-// Apple's two-guest limit is per host. Guests of one Tart provider, and
-// owned guests without a record, use slots every Tart provider sees.
-func TestTartHostLimitSpansProviders(t *testing.T) {
+// Apple's two-guest limit is per host. Guests of one vz provider, and
+// owned guests without a record, use slots every vz provider sees.
+func TestVZHostLimitSpansProviders(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) { c.Budget.MaxInstances = 4 })
 	p := h.m.o.Config.Providers["macos"]
-	tc := *p.Tart
-	p.Tart = &tc
+	tc := *p.VZ
+	p.VZ = &tc
 	p.ScaleSet = "bivouac-studio"
 	h.m.o.Config.Providers["studio"] = p
 	h.m.o.Providers["studio"] = fake.New("studio", "ctl-test")

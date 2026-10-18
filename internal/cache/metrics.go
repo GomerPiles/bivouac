@@ -84,6 +84,9 @@ func (s *Service) LogSummary() {
 	snapshot := s.Snapshot()
 	logCounters(s.log, "controller_session", "archives", snapshot.Archives)
 	logCounters(s.log, "controller_session", "release_proxy", snapshot.Releases)
+	d := s.store.Diagnostics()
+	objects, used, reserved := s.store.Stats()
+	s.log.Info("cache store summary", "objects", objects, "stored_bytes", used, "reserved_bytes", reserved, "evictions", d.Evictions, "evicted_bytes", d.EvictedBytes, "invalidations", d.Invalidations, "startup_discarded_files", d.StartupDiscardedFiles)
 }
 
 func (s *Service) serveMetrics(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +110,7 @@ type transferWriter struct {
 	bytes  int64
 	failed bool
 	status int
+	reason string
 }
 
 func (w *transferWriter) WriteHeader(status int) {
@@ -117,6 +121,9 @@ func (w *transferWriter) Write(data []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(data)
 	w.bytes += int64(n)
 	w.failed = w.failed || err != nil || n != len(data)
+	if err != nil || n != len(data) {
+		w.reason = deliveryFailure(err)
+	}
 	return n, err
 }
 
@@ -125,5 +132,8 @@ func (w *transferWriter) ReadFrom(input io.Reader) (int64, error) {
 	n, err := io.Copy(w.ResponseWriter, input)
 	w.bytes += n
 	w.failed = w.failed || err != nil
+	if err != nil {
+		w.reason = deliveryFailure(err)
+	}
 	return n, err
 }

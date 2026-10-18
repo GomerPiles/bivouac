@@ -1,0 +1,15 @@
+# bivouac guest agent for Linux baselines. Install the linux/arm64 bivouac
+# binary at /usr/local/bin/bivouac, this unit in /etc/systemd/system, and
+# enable it.
+[Unit]
+Description=bivouac guest agent
+
+[Service]
+ExecStart=/usr/local/bin/bivouac guest-agent
+Restart=always
+RestartSec=1
+# Commands' background children (the engine helper) outlive an agent restart.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

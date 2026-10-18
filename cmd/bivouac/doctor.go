@@ -5,15 +5,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/github"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 type check struct {
@@ -99,11 +102,11 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			}
 			continue
 		}
-		if p.Type != "tart" {
+		if p.Type != "vz" {
 			add("WARN", "provider "+name, "type "+p.Type+" is not implemented on this host")
 			continue
 		}
-		e.doctorTart(ctx, name, p, host, cfg, add)
+		e.doctorVZ(ctx, name, p, host, cfg, add)
 	}
 
 	if cfg.Budget.ReserveCPU >= host.CPUs {
@@ -146,11 +149,16 @@ func (e env) doctor(ctx context.Context, args []string) error {
 		default:
 			for _, name := range cfg.ProviderNames() {
 				ss := cfg.Providers[name].ScaleSet
-				id, err := gh.Ensure(ctx, ss, cfg.GitHub.RunnerGroup)
-				if err != nil {
+				labels := cfg.Providers[name].ScaleSetLabelNames()
+				got, err := gh.Ensure(ctx, ss, cfg.GitHub.RunnerGroup, labels)
+				missing, extra := github.LabelDiff(labels, got.Labels)
+				switch {
+				case err != nil:
 					add("FAIL", "scale set "+ss, err.Error())
-				} else {
-					add("PASS", "scale set "+ss, fmt.Sprintf("id %d in runner group %q", id, cfg.GitHub.RunnerGroup))
+				case len(missing)+len(extra) > 0:
+					add("FAIL", "scale set "+ss, fmt.Sprintf("id %d has labels %q, config wants %q; GitHub fixes labels at creation, so delete the scale set to change them", got.ID, got.Labels, labels))
+				default:
+					add("PASS", "scale set "+ss, fmt.Sprintf("id %d in runner group %q, labels %q", got.ID, cfg.GitHub.RunnerGroup, got.Labels))
 				}
 			}
 		}
@@ -160,41 +168,33 @@ func (e env) doctor(ctx context.Context, args []string) error {
 	return report(checks)
 }
 
-func (e env) doctorTart(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
-	t := p.Tart
-	bin, err := exec.LookPath(t.Binary)
-	if err != nil {
-		add("FAIL", "tart "+name, fmt.Sprintf("binary %q not found", t.Binary))
-		return
-	}
-	v, err := tartVersion(ctx, bin)
-	if err != nil {
-		add("FAIL", "tart "+name, fmt.Sprintf("%s --version: %v", bin, err))
-		return
-	}
-	add("PASS", "tart "+name, bin+" version "+v)
-	out, err := exec.CommandContext(ctx, bin, "list", "--source", "local", "--quiet").Output()
-	if err != nil {
-		add("FAIL", "tart "+name, "tart list: "+err.Error())
-		return
-	}
-	names := strings.Fields(string(out))
-	found := false
-	for _, n := range names {
-		if n == t.Baseline {
-			found = true
-		}
-	}
-	if !found {
-		add("FAIL", "baseline "+name, fmt.Sprintf("%q is not a local VM (have: %s)", t.Baseline, strings.Join(names, ", ")))
+func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
+	t := p.VZ
+	if exe, err := os.Executable(); err != nil {
+		add("FAIL", "vm "+name, err.Error())
+	} else if err := vm.CheckEntitlement(ctx, exe); err != nil {
+		add("FAIL", "vm "+name, err.Error())
 	} else {
-		add("PASS", "baseline "+name, t.Baseline)
+		add("PASS", "vm "+name, "executable signed with "+vm.Entitlement)
+	}
+	if err := vm.Store(e.layout.VMs).CheckSocketPath(); err != nil {
+		add("FAIL", "vm store "+name, err.Error())
+	}
+	if m, err := vz.CheckBaseline(e.layout.VMs, t.Baseline, "darwin"); err != nil {
+		add("FAIL", "baseline "+name, err.Error())
+	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {
+		add("FAIL", "machine "+name, err.Error())
+	} else {
+		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s: guest agent protocol %d, runner in %s", t.Baseline, e.layout.VMs, m.Guest.AgentVersion, m.Guest.RunnerDir))
+	}
+	if err := vz.CheckNested(*t); err != nil {
+		add("FAIL", "machine "+name, err.Error())
 	}
 	cpu, mem := t.CPU, t.MemoryGB
-	if e := t.Containers; e != nil {
-		cpu += e.CPU
-		mem += e.MemoryGB
-		tp, err := tart.New(name, *t, "doctor", nil)
+	if c := t.Containers; c != nil {
+		cpu += c.CPU
+		mem += c.MemoryGB
+		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}

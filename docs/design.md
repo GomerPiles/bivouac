@@ -10,7 +10,9 @@ security model, and durable decisions. Keep it aligned with the code.
 ```
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
-internal/provider    provider contract; tart/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
+internal/provider    provider contract; vz/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
+internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
+internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
 internal/github      scale set client wrapper (actions/scaleset) and test fake
 internal/state       durable instance records and controller ID (atomic JSON)
@@ -66,12 +68,15 @@ The optional LaunchAgent has `RunAtLoad` and `KeepAlive.SuccessfulExit=false`: a
 login the daemon starts, reconciles, and exits at once if the mode is off.
 `on` kickstarts it. So `off` leaves nothing running. The agent runs with
 `ProcessType` Interactive: as a Background process launchd throttled the
-`tart run` children so much that guests never answered the agent in time.
+VM children so much that guests never answered the agent in time.
 One daemon holds an exclusive lock in the state directory; a second copy
 exits after retrying for 2 s, longer than any liveness probe holds its
-shared lock. `tart cleanup` holds the same lock while it runs.
-`AbandonProcessGroup=true` prevents launchd from killing Tart children
+shared lock. `vz cleanup` holds the same lock while it runs.
+`AbandonProcessGroup=true` prevents launchd from killing VM helpers
 when the controller crashes, so reconciliation can adopt the live guest.
+The LaunchAgent has one label and runs the default layout, so with
+`BIVOUAC_HOME` set, macOS install, uninstall, and kickstart refuse; such a
+home runs in the foreground only.
 
 On Windows the optional Task Scheduler entry uses the installing user's
 interactive token and `LeastPrivilege`, a user-specific logon trigger, no
@@ -84,6 +89,15 @@ environment inheritance differs from a shell. The login entry refuses an elevate
 manager. Removing it does not stop an active manager or VM. Privileged App Sandbox
 and its broker remain explicit operator prerequisites; this task never installs
 or launches an elevated engine, service, or broker.
+
+The portable Windows `Control.ps1` launcher checks native process-job membership
+before starting an absent manager. A hidden window is not an independent
+lifetime: a manager inherits its launcher's Windows job, and a development app
+can close that job while native App Sandbox guests survive. A contained or
+unverifiable launch is refused before prerequisite checks, stale-PID archival,
+or mode changes. Use the ordinary desktop shortcut or the explicitly installed
+login task. Mode commands to an already running manager remain available from
+contained shells. No startup task or elevated process is installed implicitly.
 
 ## Demand: runner scale sets
 
@@ -119,6 +133,10 @@ while sessions fail; one successful poll resets the delay.
   returned, across replacement sessions, and despite idle sweep runners.
   The 65 s poll bound did not fix this; logs showed normal ~50 s empty
   responses. Reporting nonzero total capacity fixed fresh-job routing.
+- (2026-10-17) A scale set created with extra labels received `JobAssigned`
+  for arrays its labels cover, with or without `self-hosted` and without
+  naming the scale set; an array with a label it lacked stayed queued.
+  Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
   GitHub expires the dead session (128–129 s in the crash tests). A job
@@ -134,8 +152,13 @@ an assignment received while it boots. A sweep
 that finds nothing retires after `sweep_idle_timeout` (default 90 s);
 one that ran a job is followed by another sweep.
 
-Scale set labels: on github.com a scale set's name is its only label, so
-workflows use `runs-on: <scaleset name>` rather than a label array.
+Scale set labels: the name is always a label. Optional `scaleset_labels`
+add labels, including `self-hosted`, so workflows can use a `runs-on` array
+instead of the name. GitHub fixes labels when it creates a scale set and
+silently ignores later updates, so bivouac never updates them. It reads the
+labels back after creation; any difference from the config is logged at
+session open and fails `doctor --github`. To change labels, delete the scale
+set while off; the next session creates it again.
 
 ## Demand: REST JIT fallback
 
@@ -191,7 +214,7 @@ report cancellation. The worker itself can spend 7.5 s on SIGINT and
 allows its result to reach GitHub. Guest deletion proceeds even if that grace expires.
 Failed deletion or deregistration keeps the record and retries every 5 s,
 including after restart. A recorded name whose guest lacks our metadata
-(Tart's `Exists && !Owned`, or `ErrNotOwned` from App Sandbox and Crosvm)
+(macOS `Exists && !Owned`, or `ErrNotOwned` from App Sandbox and Crosvm)
 retries with backoff up to 5 min and does not hold drain, stop, or off;
 its record stays for a later start. After the provider confirms VM absence, persist
 `deregistering` and `guest_deleted_at` before releasing VM, CPU, and memory
@@ -212,7 +235,7 @@ Budgets end an instance early: `job_timeout` from creation, `idle_timeout`
 listening without a job, surplus retirement from statistics.
 
 Runner status probes are bounded to 15 s. After a typed guest transport
-failure (SSH, or a failed `tart exec` against a running owned Tart VM), the
+failure (SSH, or a failed guest agent command against a running owned macOS VM), the
 listening/active watcher retains the guest for at most 60 s from
 the start of the first failed probe. Retry delays start at the normal 2 s poll
 interval, double to at most 10 s, and are clipped to the remaining grace and
@@ -290,14 +313,14 @@ startup intact. No detached logging process, extra service, host endpoint or
 workflow change is needed. Hook output on a lost guest may be unavailable, while
 its last retained report remains eligible for normal diagnostics.
 
-Tart copies the native manager binary into each disposable clone as a private
+The macOS provider copies the native manager binary into each disposable clone as a private
 helper, independently of whether caching is enabled. Its listener wrapper starts
 the official runner in the same Aqua session, records the actual listener PID
 for existing cancellation, preserves its exit code and joins sampling at exit.
 The existing shell hook still records job identity; the helper's job marker only
 starts numeric sampling. Partial helper installation is removed before falling
 back to the official listener. Optional telemetry errors cannot fail a job.
-Tart archives the optional report alongside its runner log; extraction validates
+It archives the optional report alongside the runner log; extraction validates
 and re-encodes numeric fields, skipping malformed reports while retaining logs.
 
 Disk space uses read-only filesystem queries on the controller's state directory
@@ -326,9 +349,10 @@ read failure or CPU topology changes reset the applicable CPU baseline/averages.
 
 Capacity per provider is the minimum of: host `max_instances` minus active;
 provider `max_instances`; the engine's host limit (Apple: two macOS guests)
-minus running guests bivouac does not own, or `foreign_slots`, whichever
-is larger, and minus every guest of ours on any Tart provider (Tart
-providers must agree on both settings); CPU and memory left after `reserve_*` and the guests already
+minus running unowned guests in bivouac's VM store, or `foreign_slots`,
+whichever is larger, and minus every guest of ours on any vz provider (vz
+providers must agree on both settings). Other tools' guests are invisible to
+bivouac, so `foreign_slots` reserves their slots; CPU and memory left after `reserve_*` and the guests already
 running. A foreign guest named like an active record (an unprovable App
 Sandbox or Crosvm record) counts once, through its record, and is not
 reported as unmanaged. New provisioning pauses at `budget.max_pending_cleanup` deleted
@@ -360,7 +384,7 @@ running; the next start adopts or cleans them.
 
 ## Provider contract
 
-`provider.Provider` is designed against the Tart CLI and the App Sandbox
+`provider.Provider` is designed against the macOS VM runtime and the App Sandbox
 headless API. Launch options are argument arrays or structured fields,
 never shell strings. Capabilities are explicit: GPU mode, desktop session,
 display transport, engine host limit.
@@ -375,37 +399,87 @@ file, never argv), `RunnerStatus`, `Status`, `Stop` (graceful then forced),
 `Delete` (refuses without our metadata), `List` (owned and foreign),
 `CollectDiagnostics`.
 
-### Tart (macOS)
+### macOS (`vz` provider)
 
-- Clone: `tart clone <baseline> <name>` (APFS copy-on-write, tens of ms),
-  then `bivouac.json` with controller and instance IDs in the VM directory,
-  then `tart set` for CPU and memory. `TART_NO_AUTO_PRUNE=1` always.
-- Run: `tart run --no-graphics [--dir=bivouac:<share>:ro] <extra_args...> <name>`.
-  The process is not bound to the daemon's lifetime and has its own process
-  group, so a terminal interrupt does not reach it. Its output is the
-  launch log file, written by Tart directly (`--serial` is refused); the
-  exact command line is recorded in state and diagnostics.
-- Ready: `tart exec <name> true` answers (the Tart guest agent). The
-  bootstrap script is then copied to `/tmp/bivouac-guest` with `tart exec -i`,
-  and its `session` mode must report `Aqua`, or readiness fails.
-- Every `tart` call caps stdout (status 4 KiB) and stderr (8 KiB) and fails
-  when a cap is exceeded. Errors never include guest stderr.
+Each VM is a directory in bivouac's VM store
+(`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`):
+`disk.img`, `nvram.bin`, and `vm.json`, bivouac's versioned manifest. The
+manifest is the core model: the machine (OS, CPU and memory with their
+minimums, MAC, default display, macOS hardware model and machine identifier)
+and the guest contract (guest agent protocol version, runner directory,
+passwordless sudo). `bivouac vz import` turns a Tart-format VM into one,
+cloning its disk and NVRAM and converting `config.json`; the operator vouches
+for the guest contract. Other sources only need to write a manifest. Clones
+live beside their baseline so APFS can share blocks. Agent sockets live in
+the store's hidden `.run` directory, named by a hash of the VM name, so their
+path fits `sun_path` whatever the name.
+
+- Baseline check: Create, the container preflight and `doctor` refuse a
+  baseline without a manifest, of the wrong OS, without a runner directory
+  (runner guests), or whose agent protocol differs from this binary's.
+- Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
+  manifest with a fresh locally administered MAC and the configured CPU and
+  memory (at least the manifest's minimums), then a rename into place
+  (milliseconds). Then `bivouac.json` with controller and instance IDs.
+- Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
+  [--input] [--share <dir>] [--softnet …] [--display WxH[@PPI]]
+  [--disk-sync full|fsync|none]`, from the executable signed with
+  `com.apple.security.virtualization`. The helper builds the VM with purego
+  bindings to Virtualization.framework (graphics device, virtio disk, NAT or
+  Softnet network, entropy, balloon, vsock; keyboard and pointer for runner
+  guests; no console, audio, or clipboard). It holds an fcntl lock on the
+  manifest for the VM's life and reads the manifest only through it; the
+  provider reads running state and the helper's PID from that lock. A
+  manifest is never rewritten once its VM is in place. The
+  helper is not bound to the daemon's lifetime and has its own process
+  group; its output is the launch log file. The exact command line is in
+  the launch log and diagnostics.
+- Guest agent: the helper serves its agent socket (0600) and
+  proxies each connection to the guest's vsock port, where
+  `bivouac guest-agent` runs one command per connection: request, stdin
+  frames, stdout frames, exit status. Guest stderr is dropped. A closed
+  connection kills the command. Output still held open by a background child
+  10 s after the command exits is reported as a failure, never as success.
+  The agent accepts only the host's context ID, and its LaunchAgent abandons
+  its process group, so an agent restart leaves a started runner alone.
+- Ready: the agent runs `true`. Only an unreachable agent is retried; an
+  agent of another protocol version names its own, and readiness fails at
+  once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
+  its `session` mode must report `Aqua`, or readiness fails.
+- Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
+  when the cap is exceeded. Errors never include guest output.
 - Every guest operation first checks the prefix and our marker.
-- Runner: `tart exec -i <name> /tmp/bivouac-guest start <runner_dir>` with the
-  JIT config on stdin. The guest agent is a LaunchAgent in the user's GUI
-  session, so the runner starts in Aqua (`launchctl managername` = Aqua;
-  SSH logins land in Background). The script exports
-  `ACTIONS_RUNNER_INPUT_JITCONFIG` and runs the preinstalled official
-  `bin/Runner.Listener run` once, retaining its PID for bounded cancellation.
+- Runner: `/tmp/bivouac-guest start <runner_dir>` with the JIT config on
+  stdin. The guest agent is a LaunchAgent limited to the auto-login user's
+  Aqua session, so the runner starts there (SSH logins land in Background).
+  The script exports `ACTIONS_RUNNER_INPUT_JITCONFIG` and runs the
+  preinstalled official `bin/Runner.Listener run` once, retaining its PID
+  for bounded cancellation.
 - Status: the script reports `absent`, `starting`, `listening`, `running`,
-  or `exited <code>` from the pid and the runner log. A failed status exec
+  or `exited <code>` from the pid and the runner log. A failed status command
   is a retryable transport failure while the VM runs; only `absent` or a
   stopped or missing VM confirms exit.
-- Diagnostics: `_diag` and the runner log stream out as tar over `tart exec`,
-  are redacted before reaching disk, and are capped at 1024 entries and
-  128 MiB extracted.
+- Stop: only a lock holder whose arguments are `vm run --dir <this VM>` is
+  signalled; any other holder is refused. SIGTERM powers the VM off at
+  once: a macOS guest ignores a shutdown request, and the clone is deleted
+  anyway. SIGKILL after the timeout ends a hung helper, and the framework
+  ends a VM whose owning process exits. Clones refuse a running baseline.
+- Machine options: `[providers.*.vz.machine]` (runner guests) and
+  `[providers.*.vz.containers.machine]` (the engine VM) hold typed, validated
+  options mapped to framework settings: `display` (width, height, optional
+  ppi; macOS guests), `disk_sync` (`full`, `fsync`, or `none`, which ignores
+  guest flushes and suits only disposable clones), and
+  `nested_virtualization`. There is no raw passthrough. Options are checked
+  against the baseline's OS when a guest is created: the framework offers
+  nesting only to Linux guests (today the engine VM, giving its containers
+  `/dev/kvm` inside the VM boundary), never to macOS guests. The daemon and
+  `doctor` refuse nesting on a host without it (it needs an M3 or newer chip
+  and macOS 15).
+- Diagnostics: `_diag` and the runner log stream out as tar through the
+  agent, are redacted before reaching disk, and are capped at 1024 entries
+  and 128 MiB extracted.
 - Delete: requires the `bivouac-` prefix, a name different from the
-  baseline, and a marker whose controller ID matches.
+  baseline, a marker whose controller ID matches, and no lock holder.
 
 The runner package is baked into the baseline; `doctor` reports its version.
 A host-cached package copied at boot is a later option if baseline updates
@@ -513,10 +587,14 @@ status. An independent ten-second broker guard quarantines policy failures,
 blocks the owned port, and stops the owned VM if blocking fails. It verifies
 and blocks journalled ports even when App Sandbox is unavailable, but stops
 only a VM whose identity it proved. An incomplete pass blocks admission until
-the next fully successful pass; a policy failure blocks it until the broker
-restarts. It does not repair or resume a failed guest. Interface-change handling is polled rather
-than atomic: dynamic-interface, private-peer, MAC-change and host-reboot
-behavior are still live validation gates. Existing manual prototype results
+the next fully successful pass. Quarantined guests and retained network-cleanup
+records keep admission blocked, including after their VM has stopped or vanished.
+Once normal owned cleanup removes those records, a successful guard pass restores
+admission automatically in the same broker. Fresh guests build and verify the
+current host-interface policy; failed guests are never repaired or resumed.
+Canceled or unreadable guard passes cannot clear the admission gate.
+Interface-change handling is polled rather than atomic: dynamic-interface,
+private-peer, MAC-change and host-reboot behavior are still live validation gates. Existing manual prototype results
 do not establish that the new Go adapter passes those gates.
 
 System OpenSSH connects only through the native owned VM's loopback HvSocket
@@ -701,12 +779,12 @@ See [`hcs-spike.md`](hcs-spike.md) for prerequisites and the elevated trial gate
 
 ## Optional containers on macOS
 
-`providers.<name>.tart.containers` opts a macOS runner into a disposable
-Linux/arm64 Tart engine VM for the same job. The host selects a local Linux
-baseline, Docker or Podman, explicit CPU/memory, and a built Linux/arm64
-bivouac helper. Tart is the initial backend: it already provides clone,
-ownership metadata, process lifetime control, and guest execution independent
-of guest IP connectivity. Lima, Docker Desktop, Podman machine, and QEMU are
+`providers.<name>.vz.containers` opts a macOS runner into a disposable
+Linux/arm64 engine VM, from a Tart-format baseline, for the same job. The
+host selects a local Linux baseline, Docker or Podman, explicit CPU/memory,
+and a built Linux/arm64 bivouac helper. The macOS runtime already provides
+clone, ownership metadata, process lifetime control, and guest execution
+independent of guest IP connectivity. Lima, Docker Desktop, Podman machine, and QEMU are
 not interchangeable launch options; none is attached to a personal daemon.
 Other VM backends need their own isolation, ownership, transport, and recovery
 validation before being supported. M1 does not need nested virtualization:
@@ -716,14 +794,14 @@ and forward their API sockets onto the host. Installed Podman machine defaults
 also include host directory mounts and connection selection. Those convenience
 defaults cannot be used for untrusted jobs; a future adapter would have to
 replace them and prove host/LAN isolation independently. QEMU alone does not
-provide the existing Tart ownership/guest-agent lifecycle integration.
+provide the existing ownership/guest-agent lifecycle integration.
 
 The manager records both names, the engine choice, and the total pair resource
 reservation before cloning. The companion is `<runner-name>-engine` and has
-the same controller/instance IDs plus a parent link in its Tart marker. It
+the same controller/instance IDs plus a parent link in its marker. It
 has no GitHub registration. Both existing baselines must be local arm64 VMs
 with the expected OS. The Linux baseline must already provide a working
-Tart guest agent and rootful Docker or Podman API socket. The macOS baseline
+`bivouac guest-agent` (systemd unit) and rootful Docker or Podman API socket. The macOS baseline
 must already provide the selected client. Bivouac installs no package or tool.
 The Linux helper is cross-built alongside the host binary and transferred
 through stdin; it is not a host share.
@@ -742,15 +820,17 @@ cache and bootstrap-share options are incompatible with this mode.
 
 Source investigation: the installed-version [Softnet VM filter](https://github.com/openai/softnet/blob/0.19.0/lib/proxy/vm.rs)
 applies explicit blocks before its default global-address, gateway, and DNS
-exceptions. Its Ethernet dispatch accepts ARP/IPv4 only. The upstream
-[Tart agent VSOCK listener](https://github.com/openai/tart-guest-agent/blob/main/internal/vsock/listener.go)
-uses AF_VSOCK; Linux agent availability in a particular baseline still requires
-a live `tart exec` check.
+exceptions. Its Ethernet dispatch accepts ARP/IPv4 only. The VM helper runs
+Softnet through its `--vm-fd` interface: a datagram socket pair, Softnet's
+end as its stdin,
+`--vm-fd 0 --vm-mac-address <mac> --block <policy>`, directly when SUID root
+or through `sudo -n` otherwise. Linux agent availability in a particular
+baseline still requires a live check.
 
 The macOS helper exposes a mode-0600 Unix socket in a mode-0700 guest directory.
 The runner gets `DOCKER_HOST` and `CONTAINER_HOST` pointing only there. A
-detached host supervisor attaches `tart exec -i` to that helper and multiplexes
-opaque binary streams to fixed `tart exec -i` commands in the Linux companion.
+detached host supervisor attaches a guest agent stream to that helper and
+multiplexes opaque binary streams to fixed agent commands in the Linux companion.
 The Linux helper opens only `/var/run/docker.sock` or
 `/run/podman/podman.sock`. Frames contain connection IDs and bytes, never
 destinations, paths, or commands. There is no host network listener, daemon
@@ -851,7 +931,7 @@ to 4096 objects, including fills.
 Interrupted or corrupt objects are discarded. Archives are never
 extracted on the host, and no host directory is shared with a guest.
 
-On Tart the service binds every interface by default, because the vmnet
+On macOS the service binds every interface by default, because the vmnet
 bridge may not exist until a guest runs; TLS and per-guest capabilities gate
 access. The macOS adapter is installed in each owned
 clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 cache download
@@ -928,6 +1008,17 @@ excluded, and concurrent coalesced reads count as hits. Proxy bypass totals
 include uncached forwarded GETs, not only release assets. These are delivered
 bytes, not unique stored bytes, total upstream traffic or a bandwidth benchmark.
 
+The per-minute controller summary adds store totals: objects, committed and
+reserved bytes, capacity evictions and evicted bytes, invalidations, and
+startup-discarded files. Store, fill and delivery events carry fixed reason
+categories, HTTP statuses, byte counts and an object label, never URLs, keys,
+object hashes or raw transport/filesystem errors. The label is a truncated
+HMAC of the object identity under a random per-session key: it links one
+session's events for an object without letting a log reader confirm a guessed
+URL or asset. A fill also requires the upstream GET's ETag to match the
+lease's HEAD. A lost SSH cache transport is reported, with its guest, only
+when requests were in progress; an idle loss is ordinary guest deletion.
+
 The existing authenticated TLS service exposes a fixed numeric-only `/metrics`
 read for the calling guest's capability. Revocation/expiry prevents reads and
 capability rotation resets that guest's counters. Session totals reset with the
@@ -936,7 +1027,7 @@ with a one-second query bound; absent cache configuration adds no line, and
 unavailable metrics never fail jobs. Controller summaries appear about once a
 minute and on cache-service shutdown. No object keys, paths, request headers,
 URLs, capabilities or response content enter summaries or persistent state.
-Tart uses the same private `cache-config.json` filename in its guest directory;
+The macOS provider uses the same private `cache-config.json` filename in its guest directory;
 summary reads accept the bootstrap's literal host IP as well as SSH loopback,
 verify TLS and grant authorization, refuse redirects and never use ambient
 proxy settings. This works with Actions caching alone or the optional release
@@ -995,10 +1086,10 @@ localhost management API and UI remain deferred.
   JWTs, PEM blocks, authorization headers, signed URL parameters, and long
   base64 runs. Streams hold at most 64 KiB without a newline, then flush at
   whitespace, quote, `<`, `>` or `&`; an unbroken longer run is masked whole.
-  The Tart launch log is the exception: `tart run` writes its own host-side
-  output there through an inherited descriptor, neither redacted nor bounded,
-  because the guest process must outlive the daemon. `--serial` is refused
-  in config and at Start, so no guest console output reaches it.
+  The macOS launch log is the exception: the VM helper (and Softnet) write
+  host-side status there through an inherited descriptor, neither redacted
+  nor bounded, because the helper must outlive the daemon. The guest console
+  is never attached, so no guest output reaches it.
 - Guests get no host directories except the optional read-only bootstrap
   share. Host credentials never enter a guest.
 - Cleanup deletes only prefixed guests carrying our marker; baselines,
@@ -1008,10 +1099,17 @@ localhost management API and UI remain deferred.
 
 ## Decisions
 
-- Guest bootstrap through the Tart guest agent instead of a login-time
-  LaunchAgent in the baseline: keeps the baseline generic and was verified
-  with real windowed Metal rendering and app lifecycle, focus, and input
-  tests in a `--no-graphics` guest.
+- Bivouac runs macOS guests itself (purego bindings to
+  Virtualization.framework, no cgo) instead of through the Tart CLI, so
+  users install no VM tool for the little of Tart bivouac used. The provider
+  is named `vz` after the engine; "Tart-format" names only an import format,
+  and bivouac keeps its own VM store. Bivouac's manifest, not Tart's
+  `config.json`, describes each VM, so images from other tools need only a
+  manifest, and machine options are typed fields rather than launch flags.
+  Tart's guest agent exits on hosts that are not Tart, so baselines carry
+  `bivouac guest-agent` as an Aqua LaunchAgent. Runner bootstrap through an
+  Aqua guest agent was verified with real windowed Metal rendering and app
+  lifecycle, focus, and input tests in a headless guest.
 - Control through files and a signal rather than a socket, until the
   localhost API milestone.
 - `security` CLI for Keychain instead of cgo bindings: one static binary.

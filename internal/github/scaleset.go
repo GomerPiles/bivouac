@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/actions/scaleset"
 )
@@ -37,10 +38,18 @@ type Session interface {
 	Close(ctx context.Context) error
 }
 
+// ScaleSet is an ensured scale set and the labels GitHub reports for it.
+type ScaleSet struct {
+	ID     int
+	Labels []string
+}
+
 // ScaleSets is what the manager needs from GitHub in scale-set mode.
 type ScaleSets interface {
-	// Ensure returns the scale set's ID, creating it when absent.
-	Ensure(ctx context.Context, name, runnerGroup string) (int, error)
+	// Ensure returns the scale set and the labels GitHub reports, creating
+	// it with labels when absent. GitHub fixes labels at creation and
+	// silently ignores label updates; compare the result with LabelDiff.
+	Ensure(ctx context.Context, name, runnerGroup string, labels []string) (ScaleSet, error)
 	Open(ctx context.Context, scaleSetID int, owner string) (Session, error)
 	GenerateJIT(ctx context.Context, scaleSetID int, runnerName, workFolder string) (JITConfig, error)
 	// RemoveRunner deregisters a runner that never ran or died. Missing
@@ -80,32 +89,76 @@ func NewClient(configURL string, auth AppAuth, version string) (*Client, error) 
 }
 
 // Ensure implements ScaleSets.
-func (c *Client) Ensure(ctx context.Context, name, runnerGroup string) (int, error) {
+func (c *Client) Ensure(ctx context.Context, name, runnerGroup string, labels []string) (ScaleSet, error) {
 	groupID := 1
 	if runnerGroup != "" && runnerGroup != scaleset.DefaultRunnerGroup {
 		g, err := c.c.GetRunnerGroupByName(ctx, runnerGroup)
 		if err != nil {
-			return 0, fmt.Errorf("runner group %q: %w", runnerGroup, err)
+			return ScaleSet{}, fmt.Errorf("runner group %q: %w", runnerGroup, err)
 		}
 		groupID = g.ID
 	}
 	existing, err := c.c.GetRunnerScaleSet(ctx, groupID, name)
 	if err != nil {
-		return 0, fmt.Errorf("look up scale set %q: %w", name, err)
+		return ScaleSet{}, fmt.Errorf("look up scale set %q: %w", name, err)
 	}
 	if existing != nil {
-		return existing.ID, nil
+		return ScaleSet{ID: existing.ID, Labels: labelNames(existing.Labels)}, nil
 	}
-	created, err := c.c.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
+	if _, err := c.c.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
 		Name:          name,
 		RunnerGroupID: groupID,
-		Labels:        []scaleset.Label{{Type: "System", Name: name}},
+		Labels:        systemLabels(labels),
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
-	})
-	if err != nil {
-		return 0, fmt.Errorf("create scale set %q: %w", name, err)
+	}); err != nil {
+		return ScaleSet{}, fmt.Errorf("create scale set %q: %w", name, err)
 	}
-	return created.ID, nil
+	// Read back rather than trusting the create response: unsupported
+	// labels can be dropped without an error.
+	got, err := c.c.GetRunnerScaleSet(ctx, groupID, name)
+	if err != nil {
+		return ScaleSet{}, fmt.Errorf("look up scale set %q: %w", name, err)
+	}
+	if got == nil {
+		return ScaleSet{}, fmt.Errorf("scale set %q missing after create", name)
+	}
+	return ScaleSet{ID: got.ID, Labels: labelNames(got.Labels)}, nil
+}
+
+func systemLabels(names []string) []scaleset.Label {
+	labels := make([]scaleset.Label, len(names))
+	for i, name := range names {
+		labels[i] = scaleset.Label{Type: "System", Name: name}
+	}
+	return labels
+}
+
+func labelNames(labels []scaleset.Label) []string {
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l.Name
+	}
+	return names
+}
+
+// LabelDiff returns the wanted labels absent from got and the labels in
+// got that are not wanted. GitHub labels are case-insensitive.
+func LabelDiff(want, got []string) (missing, extra []string) {
+	return absent(want, got), absent(got, want)
+}
+
+func absent(from, in []string) []string {
+	have := make(map[string]bool, len(in))
+	for _, l := range in {
+		have[strings.ToLower(l)] = true
+	}
+	var out []string
+	for _, l := range from {
+		if !have[strings.ToLower(l)] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // Open implements ScaleSets.

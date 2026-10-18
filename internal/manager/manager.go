@@ -409,18 +409,18 @@ func (m *Manager) rawCapacityWith(ctx context.Context, name string, inv *invento
 		reserved := 0
 		ours := activeHere
 		tracked := recordedNames(guests)
-		if pcfg.Tart != nil {
-			hostLimit = pcfg.Tart.HostVMLimit
-			reserved = pcfg.Tart.ForeignSlots
-			// Apple's limit is per host, not per provider. Tart ownership is
-			// the controller ID, so every Tart provider lists every guest of
-			// ours: count active records of all Tart providers, plus owned
+		if pcfg.VZ != nil {
+			hostLimit = pcfg.VZ.HostVMLimit
+			reserved = pcfg.VZ.ForeignSlots
+			// Apple's limit is per host, not per provider. Guest ownership is
+			// the controller ID, so every vz provider lists every guest of
+			// ours: count active records of all vz providers, plus owned
 			// running guests that have no record yet (orphans). A container
 			// listing reports another provider's guests as foreign; those
 			// are already counted here.
 			ours = 0
 			for _, inst := range guests {
-				if m.o.Config.Providers[inst.Provider].Tart != nil {
+				if m.o.Config.Providers[inst.Provider].VZ != nil {
 					ours++
 				}
 			}
@@ -484,11 +484,11 @@ func guestSize(p config.Provider) (cpu, memGB int) {
 	if p.AppSandbox != nil {
 		return p.AppSandbox.CPU, p.AppSandbox.MemoryGB
 	}
-	if p.Tart != nil {
-		if e := p.Tart.Containers; e != nil {
-			return p.Tart.CPU + e.CPU, p.Tart.MemoryGB + e.MemoryGB
+	if p.VZ != nil {
+		if e := p.VZ.Containers; e != nil {
+			return p.VZ.CPU + e.CPU, p.VZ.MemoryGB + e.MemoryGB
 		}
-		return p.Tart.CPU, p.Tart.MemoryGB
+		return p.VZ.CPU, p.VZ.MemoryGB
 	}
 	return 0, 0
 }
@@ -513,7 +513,7 @@ func (m *Manager) launch(ctx context.Context, providerName string, scaleSetID in
 	if m.o.Config.Providers[providerName].AppSandbox != nil || m.o.Config.Providers[providerName].Crosvm != nil {
 		inst.CPU, inst.MemoryGB = guestSize(m.o.Config.Providers[providerName])
 	}
-	if t := m.o.Config.Providers[providerName].Tart; t != nil && t.Containers != nil {
+	if t := m.o.Config.Providers[providerName].VZ; t != nil && t.Containers != nil {
 		inst.EngineName = inst.Name + "-engine"
 		inst.ContainerEngine = t.Containers.Engine
 		inst.CPU, inst.MemoryGB = guestSize(m.o.Config.Providers[providerName])
@@ -789,11 +789,10 @@ func (m *Manager) spec(inst *state.Instance, pcfg config.Provider) (provider.Spe
 			spec.CPU = inst.CPU
 			spec.MemoryMB = inst.MemoryGB * 1024
 		}
-	case "tart":
-		spec.Baseline = pcfg.Tart.Baseline
-		spec.CPU = pcfg.Tart.CPU
-		spec.MemoryMB = pcfg.Tart.MemoryGB * 1024
-		spec.Launch.Args = append([]string(nil), pcfg.Tart.ExtraArgs...)
+	case "vz":
+		spec.Baseline = pcfg.VZ.Baseline
+		spec.CPU = pcfg.VZ.CPU
+		spec.MemoryMB = pcfg.VZ.MemoryGB * 1024
 	default:
 		return spec, fmt.Errorf("unsupported provider type %q", pcfg.Type)
 	}
@@ -981,7 +980,7 @@ func (m *Manager) teardown(ctx context.Context, inst *state.Instance, reason str
 
 	if cur.Phase != state.PhaseDeregistering {
 		st, err := status()
-		// Tart reports a guest without our metadata as Exists && !Owned; App
+		// vz reports a guest without our metadata as Exists && !Owned; App
 		// Sandbox and Crosvm return ErrNotOwned. Both wait for an operator.
 		if errors.Is(err, provider.ErrNotOwned) || err == nil && st.Exists && !st.Owned {
 			log.Error("guest exists without provable ownership; refusing to touch it", "error", err)
@@ -1098,10 +1097,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	records := m.o.Store.List()
 	for _, inst := range records {
 		pc := m.o.Config.Providers[inst.Provider]
-		if pc.Tart != nil && ((pc.Tart.Containers != nil) != (inst.EngineName != "")) {
+		if pc.VZ != nil && ((pc.VZ.Containers != nil) != (inst.EngineName != "")) {
 			return fmt.Errorf("%w: cannot change container topology with retained records; finish cleanup first", ErrRefused)
 		}
-		if pc.Tart != nil && pc.Tart.Containers != nil && inst.ContainerEngine != pc.Tart.Containers.Engine {
+		if pc.VZ != nil && pc.VZ.Containers != nil && inst.ContainerEngine != pc.VZ.Containers.Engine {
 			return fmt.Errorf("%w: cannot change container engine with retained records; finish cleanup first", ErrRefused)
 		}
 		if (inst.ScaleSetID == 0) != (m.o.Config.GitHub.Demand == config.DemandJIT) {

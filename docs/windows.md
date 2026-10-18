@@ -245,7 +245,15 @@ so an unobserved job cannot be treated as an idle runner during recovery.
 
 The broker's periodic guard supplements fixed kernel policy. A live temporary
 interface-addition check proved quarantine, blocked traffic and no automatic
-reopening after interface removal. Handling is still not atomic, and forced
+reopening after interface removal. The broker now derives admission failure from
+retained quarantine/cleanup records instead of a permanent process latch. Keep
+normal manager cleanup running: after the affected owned guest, network and
+record are removed, the next full successful guard pass restores admission
+without broker restart. A fresh guest builds and verifies current host policy;
+the quarantined guest is never reopened. Cleanup failure, an unreadable journal
+or an incomplete/canceled guard pass keeps admission closed. Automatic admission
+recovery has fake-backed regression coverage; live interface-change validation
+of that recovery is still pending. Handling is still not atomic, and forced
 broker loss removes its monitor. These limits do not establish that untrusted
 workflows are isolated. A WSL private-peer comparison remained unreachable even
 with the guest's deny layer removed and scoped peer ingress allowed; it is

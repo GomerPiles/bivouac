@@ -8,19 +8,20 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/control"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/install"
 	"github.com/GomerPiles/bivouac/internal/manager"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/tart"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 type flagSet = flag.FlagSet
@@ -218,11 +219,14 @@ func (e env) secretCmd(ctx context.Context, args []string) error {
 	return errUsage
 }
 
-// tartCmd inspects and cleans up Tart guests through the provider, with the
-// same ownership checks the daemon uses.
-func (e env) tartCmd(ctx context.Context, args []string) error {
+// vzCmd imports baselines, and inspects and cleans up macOS guests through
+// the provider with the same ownership checks the daemon uses.
+func (e env) vzCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errUsage
+	}
+	if args[0] == "import" {
+		return e.vzImport(args[1:])
 	}
 	cfg, err := e.loadConfig("")
 	if err != nil {
@@ -247,7 +251,7 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	providers, err := buildProviders(ctx, cfg, store)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
 	if err != nil {
 		return err
 	}
@@ -281,7 +285,7 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 		return nil
 	case "cleanup":
 		var dry bool
-		if err := parseFlags("tart cleanup", args[1:], func(fs *flag.FlagSet) { fs.BoolVar(&dry, "dry-run", false, "only report") }); err != nil {
+		if err := parseFlags("vz cleanup", args[1:], func(fs *flag.FlagSet) { fs.BoolVar(&dry, "dry-run", false, "only report") }); err != nil {
 			return err
 		}
 		for _, name := range cfg.ProviderNames() {
@@ -310,8 +314,12 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 		return nil
 	case "run-args":
 		for _, name := range cfg.ProviderNames() {
-			if tp, ok := providers[name].(*tart.Provider); ok {
-				fmt.Printf("%s: tart %s\n", name, strings.Join(tp.RunArgs("<name>", cfg.Providers[name].Tart.ExtraArgs), " "))
+			if tp, ok := providers[name].(*vz.Provider); ok {
+				args, err := tp.LaunchArgs("<name>")
+				if err != nil {
+					return err
+				}
+				fmt.Printf("%s: bivouac %s\n", name, strings.Join(args, " "))
 			}
 		}
 		return nil
@@ -319,8 +327,30 @@ func (e env) tartCmd(ctx context.Context, args []string) error {
 	return errUsage
 }
 
-// tartVersion runs the configured binary for doctor.
-func tartVersion(ctx context.Context, binary string) (string, error) {
-	out, err := exec.CommandContext(ctx, binary, "--version").Output()
-	return strings.TrimSpace(string(out)), err
+// vzImport copies a Tart-format VM into the VM store as a baseline. The
+// operator vouches for the guest: the matching bivouac guest agent is
+// installed, the runner is in --runner-dir, and --sudo when the agent's user
+// has passwordless sudo.
+func (e env) vzImport(args []string) error {
+	fs := flag.NewFlagSet("vz import", flag.ContinueOnError)
+	runnerDir := fs.String("runner-dir", "", "preinstalled runner in a macOS guest, such as /Users/admin/actions-runner")
+	sudo := fs.Bool("sudo", false, "the guest agent's user has passwordless sudo (the release proxy needs it)")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 2 {
+		return errors.New("usage: bivouac vz import [--runner-dir DIR] [--sudo] <tart-vm-dir> <name>")
+	}
+	src, name := fs.Arg(0), fs.Arg(1)
+	if strings.HasPrefix(name, config.NamePrefix) {
+		return fmt.Errorf("baseline names may not start with %q", config.NamePrefix)
+	}
+	guest := vm.Guest{AgentVersion: guestagent.Version, RunnerDir: *runnerDir, Sudo: *sudo}
+	if err := vm.Store(e.layout.VMs).Import(src, name, guest); err != nil {
+		return err
+	}
+	fmt.Printf("imported %s as %q in %s\n", src, name, e.layout.VMs)
+	if m, err := vm.ReadManifest(vm.Store(e.layout.VMs).Dir(name)); err == nil {
+		if _, err := vz.CheckBaseline(e.layout.VMs, name, m.OS); err != nil {
+			fmt.Printf("warning: %v\n", err)
+		}
+	}
+	return nil
 }
