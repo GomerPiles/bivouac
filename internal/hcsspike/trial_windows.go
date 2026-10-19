@@ -55,16 +55,19 @@ type backend interface {
 // GuestBootTimings uses guest uptime milliseconds, never wall-clock timestamps.
 // A fresh bounded cold boot cannot approach TickCount's signed wrap interval.
 type GuestBootTimings struct {
-	TaskBeginMS  uint64 `json:"task_begin_ms"`
-	KeysBeginMS  uint64 `json:"keys_begin_ms"`
-	KeysEndMS    uint64 `json:"keys_end_ms"`
-	SSHDReadyMS  uint64 `json:"sshd_ready_ms"`
-	AgentReadyMS uint64 `json:"agent_ready_ms"`
-	ObservedMS   uint64 `json:"observed_ms"`
+	TaskBeginMS       uint64 `json:"task_begin_ms"`
+	PathCheckReadyMS  uint64 `json:"path_check_ready_ms"`
+	CheckpointReadyMS uint64 `json:"checkpoint_ready_ms"`
+	ServicesCheckedMS uint64 `json:"services_checked_ms"`
+	KeysBeginMS       uint64 `json:"keys_begin_ms"`
+	KeysEndMS         uint64 `json:"keys_end_ms"`
+	SSHDReadyMS       uint64 `json:"sshd_ready_ms"`
+	AgentReadyMS      uint64 `json:"agent_ready_ms"`
+	ObservedMS        uint64 `json:"observed_ms"`
 }
 
 func (t GuestBootTimings) valid() bool {
-	values := []uint64{t.TaskBeginMS, t.KeysBeginMS, t.KeysEndMS, t.SSHDReadyMS, t.AgentReadyMS, t.ObservedMS}
+	values := []uint64{t.TaskBeginMS, t.PathCheckReadyMS, t.CheckpointReadyMS, t.ServicesCheckedMS, t.KeysBeginMS, t.KeysEndMS, t.SSHDReadyMS, t.AgentReadyMS, t.ObservedMS}
 	previous := uint64(1)
 	for _, value := range values {
 		if value < previous || value > 600000 {

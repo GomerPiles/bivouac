@@ -494,15 +494,28 @@ The corrected image passed this gate on all three cold boots.
 
 ## Guest startup checkpoints
 
-The startup task records `boot.task_begin_ms`, `keys_begin_ms`, `keys_end_ms`,
-`sshd_ready_ms` and `agent_ready_ms`; the validation script adds `observed_ms`.
+The startup task records `boot.task_begin_ms` as its first executed statement,
+then `path_check_ready_ms`, `checkpoint_ready_ms`, `services_checked_ms`,
+`keys_begin_ms`, `keys_end_ms`, `sshd_ready_ms` and `agent_ready_ms`; the validation
+script adds `observed_ms`.
 These use guest uptime from [Environment.TickCount](https://learn.microsoft.com/dotnet/api/system.environment.tickcount),
 not wall-clock dates. The reported values must be positive, ordered and within
 ten minutes of a fresh boot. A pre-existing checkpoint file refuses startup;
 missing/incomplete or invalid metrics refuse prepared readiness. Reports contain
 only fixed numeric fields, never key material or service/event log text.
 
-`task_begin_ms` includes guest boot, task dispatch and PowerShell initialization.
+`task_begin_ms` includes guest boot, task dispatch, loading, engine initialization
+and script parsing, but no cmdlet invocation. `path_check_ready_ms` follows the
+unchanged pre-existing-checkpoint refusal, `checkpoint_ready_ms` follows the
+first JSON checkpoint write, and `services_checked_ms` follows the existing
+stopped/disabled service checks. All remain required and ordered. The first
+sample is an in-memory timestamp; no file or service is touched before the
+existing refusal guard. A PowerShell AST regression requires this timestamp to
+be the first statement. The new producer, consumer, fixture and image pins
+require a separate image rebuild; live early-boundary validation is pending.
+
+The older measured image used below sampled `task_begin_ms` after `Test-Path`.
+Its values are a post-path-check checkpoint, not the first script instruction.
 Key generation and the subsequent service starts have separate elapsed spans.
 Guest uptime and the host stopwatch have different origins, so do not directly
 subtract one from the other. Startup/security ordering and task priority are
@@ -511,8 +524,8 @@ pass every key, credential, SSH, console, rendering and owned-cleanup gate.
 
 | Guest uptime / elapsed stage | Boot 1 | Boot 2 | Boot 3 |
 | --- | --- | --- | --- |
-| First startup-script instruction (guest uptime) | 21.875 s | 23.875 s | 23.656 s |
-| Script entry through key-generation entry | 0.703 s | 0.828 s | 0.687 s |
+| Legacy post-Test-Path checkpoint (guest uptime) | 21.875 s | 23.875 s | 23.656 s |
+| Post-Test-Path checkpoint through key-generation entry | 0.703 s | 0.828 s | 0.687 s |
 | Fresh server-key generation | 0.562 s | 0.578 s | 0.485 s |
 | Start SSH after key generation | 0.281 s | 0.312 s | 0.281 s |
 | Start agent after SSH | 0.516 s | 0.610 s | 0.531 s |
@@ -520,7 +533,8 @@ pass every key, credential, SSH, console, rendering and owned-cleanup gate.
 | Validated desktop (host span) | 49.247 s | 39.694 s | 38.661 s |
 
 The first desktop span includes 11.714 s initial image verification. The dominant
-interval is before the script begins, not key generation or service starts. These
+interval precedes the post-Test-Path checkpoint, not key generation or service
+starts; it includes any first-cmdlet/module loading. These
 metrics do not separate OS boot, task dispatch and PowerShell initialization.
 A separate image tested [normal task priority](https://learn.microsoft.com/en-us/windows/win32/taskschd/tasksettings-priority)
 (4) against the default below-normal priority (7). Three alternating pairs used
@@ -583,7 +597,7 @@ time. All normal readiness, reserve and owned-cleanup requirements remain active
 Local synthetic tests cover foreign tasks/processes, clock changes, unavailable
 logs, overflow and redaction. A live read-only boot passed all normal checks and
 owned cleanup, but found Task Scheduler Operational disabled and no usable
-classic PowerShell engine boundary. Its first startup instruction was at 23.656 s
+classic PowerShell engine boundary. Its legacy post-Test-Path checkpoint was at 23.656 s
 guest uptime and the agent-running checkpoint at 26.937 s. Clock/boot checks
 passed, but no event offsets were available: this does not separate OS boot,
 task dispatch and shell initialization. Event collection took 3.011 s after
@@ -600,7 +614,7 @@ recorded process ID avoids relying on the unavailable classic engine boundary. T
 diagnostic image passed capture in 190.566 s with logging acknowledged, sanitation,
 clean shutdown, publication and owned cleanup. Its cold boot passed all normal
 readiness/rendering/cleanup gates and returned task start/process/action at
-2.734 s after the kernel-recorded start; the first script instruction was at
+2.734 s after the kernel-recorded start; the legacy post-Test-Path checkpoint was at
 21.187 s guest uptime, and the agent-running checkpoint at 23.281 s. Console
 queries completed but supplied no matching startup events. The one-shot trace
 refused complete-attribution status because those boundaries were missing.
@@ -626,9 +640,9 @@ matching result.
 | Stage | Calibrated cold boot |
 | --- | --- |
 | Boot through PowerShell process creation | Approximately 3.0 s |
-| Process creation through first script instruction | Approximately 19.2 s |
-| First script instruction (guest uptime) | 22.187 s |
-| Script entry through key-generation entry | 0.672 s |
+| Process creation through post-Test-Path checkpoint | Approximately 19.2 s |
+| Post-Test-Path checkpoint (guest uptime) | 22.187 s |
+| Post-Test-Path checkpoint through key-generation entry | 0.672 s |
 | Fresh server-key generation | 0.609 s |
 | Start SSH after fresh keys | 0.282 s |
 | Start agent after SSH | 0.609 s |
@@ -637,20 +651,24 @@ matching result.
 | Validated desktop, excluding image verification (host span) | 37.740 s |
 
 The 16-ms bracket maps process creation to 2.989-3.005 s guest uptime and the
-subsequent pre-script span to 19.182-19.198 s before timer granularity. Report
+span through the legacy post-Test-Path checkpoint to 19.182-19.198 s before timer
+granularity. Report
 these as approximate tenths of a second: [Windows tick timing](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-gettickcount)
 has finite resolution. Diagnostic collection took a separate 3.607 s after the
 readiness milestone. Image verification was 11.895 s; it is excluded only from
 the explicitly labelled desktop row.
 
-This localizes most delay after process creation and before script execution,
-not to repeated setup, server-key generation or service-start checks. It does
-not distinguish process scheduling, executable/assembly loading and engine
-initialization. A native bootstrap preserving fresh keys, service ordering,
-checkpoint refusal and all readiness gates is a justified candidate for a
-controlled comparison; bypassing PowerShell has not been implemented or measured.
-The earlier priority comparison supplies no reason to change task priority.
-Production CI and the installed provider remain untouched.
+This localizes most delay after process creation and before the existing
+post-Test-Path checkpoint, not to repeated setup, server-key generation or
+service-start checks. It does not distinguish scheduling, executable/assembly
+loading, engine initialization, script parsing and the first cmdlet/module load.
+The earlier checkpoint's position is insufficient to claim a 19-second engine
+startup cost. Corrected first-statement/path/checkpoint/service boundaries above
+will separate those stages before choosing an optimization. One possibility is
+first-use PowerShell work under the SYSTEM task account, which differs from the
+image factory's SSH user; that remains a hypothesis. No replacement bootstrap,
+module-cache warmup or startup speedup is implemented or claimed. Production CI
+and the installed provider remain untouched.
 
 ## Desktop validation checkpoints
 

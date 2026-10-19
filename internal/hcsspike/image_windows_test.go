@@ -210,7 +210,7 @@ func TestPreparedCredentialRotationRequired(t *testing.T) {
 		t.Fatal("prepared clone admitted without credential rotation")
 	}
 	r.CredentialRotated = true
-	r.Boot = &GuestBootTimings{TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
+	r.Boot = &GuestBootTimings{TaskBeginMS: 1000, PathCheckReadyMS: 1010, CheckpointReadyMS: 1020, ServicesCheckedMS: 1030, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
 	b, _ = json.Marshal(r)
 	if _, err := validateRenderReport(b, true); err != nil {
 		t.Fatal(err)
@@ -467,9 +467,12 @@ $ast=[Management.Automation.Language.Parser]::ParseInput($d.sanitizer,[ref]$toke
 if($errors.Count){exit 1}
 $assignment=$ast.Find({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$startup'},$true)
 if(!$assignment){exit 2}
-$startup=$assignment.Right.SafeGetValue()
-[void][Management.Automation.Language.Parser]::ParseInput($startup,[ref]$tokens,[ref]$errors)
+if($assignment.Right.Expression -isnot [Management.Automation.Language.StringConstantExpressionAst]){exit 2}
+$startup=$assignment.Right.Expression.Value
+$taskAst=[Management.Automation.Language.Parser]::ParseInput($startup,[ref]$tokens,[ref]$errors)
 if($errors.Count){exit 3}
+# Any cmdlet before this measurement can hide cold module loading in "startup".
+if($taskAst.EndBlock.Statements[0].Extent.Text -cne '$taskBegin=[Environment]::TickCount'){exit 4}
 `
 	if err := runImageFixture(t, script, payload); err != nil {
 		t.Fatal("nested guest SSH key rotation task syntax invalid", err)
@@ -493,13 +496,27 @@ func TestPreparedNativeOnlySessionDoesNotClaimSSHProof(t *testing.T) {
 }
 
 func TestGuestBootCheckpointsRequireOrderedBoundedUptime(t *testing.T) {
-	good := GuestBootTimings{TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
+	good := GuestBootTimings{TaskBeginMS: 1000, PathCheckReadyMS: 1010, CheckpointReadyMS: 1020, ServicesCheckedMS: 1030, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}
 	if !good.valid() {
 		t.Fatal("ordered uptime rejected")
 	}
-	for _, bad := range []GuestBootTimings{{}, {TaskBeginMS: 1000, KeysBeginMS: 999}, {TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 600001}, {TaskBeginMS: 1000, KeysBeginMS: 1100, KeysEndMS: 900, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}} {
+	for _, bad := range []GuestBootTimings{{}, {TaskBeginMS: 1000, PathCheckReadyMS: 1010, CheckpointReadyMS: 1020, ServicesCheckedMS: 1030, KeysBeginMS: 999}, {TaskBeginMS: 1000, PathCheckReadyMS: 1010, CheckpointReadyMS: 1020, ServicesCheckedMS: 1030, KeysBeginMS: 1100, KeysEndMS: 1200, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 600001}, {TaskBeginMS: 1000, PathCheckReadyMS: 1010, CheckpointReadyMS: 1020, ServicesCheckedMS: 1030, KeysBeginMS: 1100, KeysEndMS: 900, SSHDReadyMS: 1300, AgentReadyMS: 1400, ObservedMS: 1500}} {
 		if bad.valid() {
 			t.Fatal("invalid boot checkpoints admitted")
+		}
+	}
+	for _, field := range []string{"path", "checkpoint", "services"} {
+		bad := good
+		switch field {
+		case "path":
+			bad.PathCheckReadyMS = 0
+		case "checkpoint":
+			bad.CheckpointReadyMS = bad.PathCheckReadyMS - 1
+		case "services":
+			bad.ServicesCheckedMS = bad.KeysBeginMS + 1
+		}
+		if bad.valid() {
+			t.Fatal("invalid early startup boundary admitted", field)
 		}
 	}
 	r := renderResult{CredentialRotated: true, GuestReady: true, DesktopReady: true, HardwareD3D11: true, Presented: true, PixelReadback: true, Stage: 7, AdapterCount: 1, HardwareAdapterCount: 1, VendorID: 0x1002, DeviceID: 1}

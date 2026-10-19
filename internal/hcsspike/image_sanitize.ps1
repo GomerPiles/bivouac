@@ -51,16 +51,19 @@ try {
  $ssh='C:\ProgramData\ssh'
  $sshdConfig=Join-Path $ssh 'sshd_config';Assert-Ordinary $sshdConfig
  [IO.File]::WriteAllText($sshdConfig,"ListenAddress 127.0.0.1`r`nPasswordAuthentication no`r`nKbdInteractiveAuthentication no`r`nPubkeyAuthentication yes`r`nStrictModes yes`r`nSubsystem sftp sftp-server.exe`r`nMatch Group administrators`r`n AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys`r`n",[Text.UTF8Encoding]::new($false))
- $startup='$ErrorActionPreference=''Stop''
+ $startup='$taskBegin=[Environment]::TickCount
+$ErrorActionPreference=''Stop''
 $ProgressPreference=''SilentlyContinue''
 $bootPath=''C:\Windows\AppSandbox\hcs-spike-boot.json''
 if(Test-Path -LiteralPath $bootPath){exit 1}
-$boot=[ordered]@{task_begin_ms=[Environment]::TickCount;keys_begin_ms=0;keys_end_ms=0;sshd_ready_ms=0;agent_ready_ms=0}
+$boot=[ordered]@{task_begin_ms=$taskBegin;path_check_ready_ms=[Environment]::TickCount;checkpoint_ready_ms=0;services_checked_ms=0;keys_begin_ms=0;keys_end_ms=0;sshd_ready_ms=0;agent_ready_ms=0}
 function Write-BootCheckpoint{[IO.File]::WriteAllText($bootPath,($boot|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))}
 Write-BootCheckpoint
+$boot.checkpoint_ready_ms=[Environment]::TickCount
 $service=Get-Service sshd
 $agent=Get-Service AppSandboxAgent
 if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped'' -or $agent.StartType -ne ''Disabled'' -or $agent.Status -ne ''Stopped''){exit 1}
+$boot.services_checked_ms=[Environment]::TickCount
 foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecdsa_key'',''ssh_host_ecdsa_key.pub'',''ssh_host_ed25519_key'',''ssh_host_ed25519_key.pub'')){
  $path=Join-Path ''C:\ProgramData\ssh'' $name
  if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
