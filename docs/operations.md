@@ -283,6 +283,52 @@ During owned policy cleanup, resetting the last boolean overrides to
 persistent policy before issuing another remove, and confirm its absence;
 do not infer complete cleanup from a successful default-action removal.
 
+## Direct HCS lab batch
+
+`TestLabBatch` in `internal/vmhost` boots disposable guests from an existing
+prepared image through the direct HCS code. It is opt-in: it needs the
+`integration` build tag, an explicitly elevated launch, and lab flags. It runs
+these cold boots in order:
+
+1. A baseline guest (2 CPU, 4 GiB).
+2. The same with lazily committed memory.
+3. A guest whose parent is a flattened copy of the image.
+4. Two production-sized guests (4 CPU, 8 GiB).
+
+Each run checks the guest agent, SSH and desktop rendering. The baseline run
+also checks that an unelevated process reaches only the HvSocket service its
+account was granted.
+
+The batch attaches no network adapter, so it changes no host networking, and it
+never touches another compute system, the App Sandbox broker or production
+state. Production CI may keep running. Before each boot, the batch waits for
+the guest's memory plus 10 GiB of available memory and plus 8 GiB of commit
+headroom. During a run, it cancels only that run if available memory drops
+below 6 GiB or commit headroom below 2 GiB.
+
+Build the test binary unelevated, then launch it once through UAC. Use new or
+empty lab directories under an administrator-protected parent, and a new
+results path the ordinary user can read. Take the image pins from the image's
+build record.
+
+```powershell
+go test -c -tags integration -o bin\lab\vmhost-lab.test.exe .\internal\vmhost
+Start-Process -Verb RunAs -FilePath bin\lab\vmhost-lab.test.exe -ArgumentList @(
+  '-test.run=^TestLabBatch$', '-test.timeout=90m',
+  '"-lab.root=<protected parent>\VMHost"', '"-lab.flatten-dir=<protected parent>\VMHost-Images"',
+  '"-lab.results=<user path>\lab-results.jsonl"', '"-lab.image=<prepared image>.vhdx"',
+  '-lab.image-sha256=<hash>', '-lab.guest-name=<computer name>', '-lab.guest-user=<user>',
+  '-lab.probe-sha256=<hash>', '-lab.validation-sha256=<hash>', '-lab.autologon-sha256=<hash>')
+```
+
+Results are JSON lines: one start line, then the image verification time,
+then one line per run, then an end line. Each run line holds timings in
+milliseconds, render and boot checkpoints, host memory samples, and whether
+cleanup confirmed absence. Nothing in them is guest-controlled text. If a run
+retains storage, the batch stops. Rerunning a VM host's `Recover` on the same
+directory settles anything it retained; never delete the directory by hand
+while a guest may exist.
+
 ## GitHub App (separate App can follow cutover)
 
 Both demand modes work with the existing shared App. A dedicated App is

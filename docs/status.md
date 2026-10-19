@@ -131,13 +131,21 @@ Open:
 
 ## Windows: direct HCS (in progress)
 
-Only the typed HCS binding exists, and it is covered by tests only. Its VM
-document matches the one an earlier standalone spike booted live, where HCS ran
-Windows guests with GPU-PV and hardware D3D11 rendering without the App Sandbox
-application, and prepared images skipped first-boot setup. That evidence comes
-from the spike, not from this code.
+Built so far, covered by tests only:
 
-Open: the VM host and its optional service, the provider, networking at
+- The typed HCS binding.
+- The cancellable HvSocket dialer.
+- The VM host core: journal-first creation, ownership-proven teardown that
+  confirms absence before deleting, recovery, and image flattening.
+- The prepared-guest client.
+
+The VM document matches the one an earlier standalone spike booted live. In
+those trials, HCS ran Windows guests with GPU-PV and hardware D3D11 rendering
+without the App Sandbox application, and prepared images skipped first-boot
+setup. That evidence comes from the spike, not from this code. The opt-in lab
+batch in operations.md is ready but has not run.
+
+Open: the VM host's pipe API and optional service, the provider, networking at
 creation, the image factory, the warm spare, and all live validation.
 
 ## Windows: Crosvm (Linux GPU guests)
