@@ -1,7 +1,6 @@
 package appsandbox
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -19,9 +18,10 @@ import (
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
-	"github.com/GomerPiles/bivouac/internal/perf"
+	"github.com/GomerPiles/bivouac/internal/command"
+	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/redact"
+	"github.com/GomerPiles/bivouac/internal/winhost"
 )
 
 // GuestOptions contains local transport/package locations, never GitHub
@@ -39,7 +39,7 @@ type GuestOptions struct {
 }
 type SSHGuest struct {
 	opts     GuestOptions
-	commands CommandRunner
+	commands command.Runner
 	cache    *cache.Service
 }
 
@@ -87,7 +87,7 @@ type guestConfig struct {
 	ArchiveSHA256 string `json:"archive_sha256"`
 }
 
-func NewSSHGuest(opts GuestOptions, commands CommandRunner) (*SSHGuest, error) {
+func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("windows guest transport requires a Windows host")
 	}
@@ -110,7 +110,7 @@ func NewSSHGuest(opts GuestOptions, commands CommandRunner) (*SSHGuest, error) {
 		return nil, errors.New("runner hash without an archive")
 	}
 	if commands == nil {
-		commands = NativeCommands{}
+		commands = command.Native{}
 	}
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
@@ -209,7 +209,7 @@ func (g *SSHGuest) copy(ctx context.Context, l Lease, local, remote string) erro
 	return err
 }
 func (g *SSHGuest) stage() (string, func(), error) {
-	dir, err := PrivateGuestDirectory(g.opts.StateDir)
+	dir, err := winhost.PrivateDirectory(g.opts.StateDir)
 	if err != nil {
 		return "", nil, err
 	}
@@ -407,75 +407,5 @@ func (g *SSHGuest) CollectDiagnostics(ctx context.Context, l Lease, destination 
 	if err := os.WriteFile(path, decoded, 0o600); err != nil {
 		return err
 	}
-	return extractDiagnostics(path, destination)
+	return diag.ExtractGuestArchive(path, destination)
 }
-func extractDiagnostics(path, destination string) error {
-	reader, err := zip.OpenReader(path)
-	if err != nil {
-		return errors.New("invalid guest diagnostic archive")
-	}
-	defer func() { _ = reader.Close() }()
-	if len(reader.File) > 1024 {
-		return errors.New("too many guest diagnostic files")
-	}
-	root, err := os.OpenRoot(destination)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	var total uint64
-	for _, file := range reader.File {
-		name := file.Name
-		if file.Mode().IsDir() {
-			continue
-		}
-		if !file.Mode().IsRegular() || strings.ContainsAny(name, "\\:\x00") || strings.HasPrefix(name, "/") || strings.Contains(name, "..") || (name != "runner.log" && name != perf.FileName && !strings.HasPrefix(name, "_diag/")) {
-			return errors.New("unsafe guest diagnostic path")
-		}
-		total += file.UncompressedSize64
-		if file.UncompressedSize64 > 16<<20 || total > 128<<20 {
-			return errors.New("guest diagnostics exceed bound")
-		}
-		if err := root.MkdirAll(filepath.Dir(filepath.FromSlash(name)), 0o700); err != nil {
-			return err
-		}
-		input, err := file.Open()
-		if err != nil {
-			return err
-		}
-		if name == perf.FileName {
-			report, readErr := perf.DecodeReport(input)
-			_ = input.Close()
-			if readErr != nil {
-				// Optional telemetry must not prevent collecting official logs.
-				continue
-			}
-			output, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-			if err != nil {
-				return err
-			}
-			sink := redact.NewWriter(output)
-			err = errors.Join(json.NewEncoder(sink).Encode(report), sink.Close(), output.Close())
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		output, err := root.OpenFile(filepath.FromSlash(name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			_ = input.Close()
-			return err
-		}
-		sink := redact.NewWriter(output)
-		_, copyErr := io.Copy(sink, io.LimitReader(input, 16<<20+1))
-		err = errors.Join(copyErr, sink.Close(), output.Close(), input.Close())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ExtractDiagnostics shares the bounded, path-checked, redacted host sink
-// across Windows and Linux guest transports. The archive is always untrusted.
-func ExtractDiagnostics(path, destination string) error { return extractDiagnostics(path, destination) }

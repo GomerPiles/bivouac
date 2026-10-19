@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ if($errors.Count -ne 0){foreach($item in $errors){Write-Output $item.Message};ex
 	defer cancel()
 	// #nosec G702 -- Fixed system parser command reads only a test-owned source file; the bootstrap is never executed.
 	cmd := exec.CommandContext(ctx, binary, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", parser, control)
-	hideCommandWindow(cmd)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("stock Windows PowerShell did not finish parsing within the deadline: %v: %s", ctx.Err(), output)

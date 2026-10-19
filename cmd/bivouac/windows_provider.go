@@ -10,15 +10,19 @@ import (
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/winhost"
 )
 
 func buildWindowsProvider(ctx context.Context, name string, cfg config.AppSandbox, store *state.Store) (*appsandbox.Provider, error) {
-	ssh, scp, key, err := appsandbox.WindowsTransportPaths()
+	ssh, scp, err := winhost.OpenSSH()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.SSHKey != "" {
-		key = cfg.SSHKey
+	key := cfg.SSHKey
+	if key == "" {
+		if key, err = appsandbox.DefaultSSHKey(); err != nil {
+			return nil, err
+		}
 	}
 	broker, err := appsandbox.OpenBroker(ctx, secret.Default(), cfg.BrokerSecret, store.ControllerID())
 	if err != nil {

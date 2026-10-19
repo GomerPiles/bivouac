@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/GomerPiles/bivouac/internal/command"
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"golang.org/x/sys/windows"
 )
@@ -39,7 +41,7 @@ func newWindowsNetwork(records *Records) (*windowsNetwork, error) {
 	if _, err = os.Stat(binary); err != nil {
 		return nil, errors.New("system VFP tool unavailable")
 	}
-	return &windowsNetwork{api: api, vfp: VFP{Binary: binary, Commands: NativeCommands{}}, records: records}, nil
+	return &windowsNetwork{api: api, vfp: VFP{Binary: binary, Commands: command.Native{}}, records: records}, nil
 }
 
 type hcnNetwork struct {
@@ -187,7 +189,7 @@ func (w *windowsNetwork) Plan(ctx context.Context, r CloneRecord, all []EngineRe
 	if err != nil {
 		return NetworkPlan{}, err
 	}
-	blocked, snapshot, err := BlockedPrefixes(prefixes)
+	blocked, snapshot, err := netpolicy.BlockedPrefixes(prefixes)
 	if err != nil {
 		return NetworkPlan{}, err
 	}
@@ -451,7 +453,7 @@ func (w *windowsNetwork) Verify(ctx context.Context, r EngineRecord) error {
 	if err != nil {
 		return err
 	}
-	blocked, snapshot, err := BlockedPrefixes(prefixes)
+	blocked, snapshot, err := netpolicy.BlockedPrefixes(prefixes)
 	if err != nil {
 		return err
 	}

@@ -13,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 )
 
 type Envelope struct {
@@ -96,7 +96,7 @@ func inventory() ([]netip.Prefix, string, error) {
 // whose complete prefix is already denied cannot expand guest access; a new
 // public prefix still changes the snapshot and retires the guest.
 func denialInventory(all []netip.Prefix) ([]netip.Prefix, string, error) {
-	blocked, _, err := appsandbox.BlockedPrefixes(all)
+	blocked, _, err := netpolicy.BlockedPrefixes(all)
 	if err != nil {
 		return nil, "", err
 	}

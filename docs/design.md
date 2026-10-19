@@ -19,7 +19,10 @@ internal/state       durable instance records and controller ID (atomic JSON)
 internal/control     mode file, pid file, status snapshot (CLI <-> daemon)
 internal/config      one TOML file, validated, no secrets
 internal/secret      credential store (Keychain; native Windows Credential Manager)
-internal/diag        diagnostics collection with redaction
+internal/diag        diagnostics collection with redaction, bounded guest archive extraction
+internal/command     argument-array subprocesses with bounded output and classified OpenSSH failures
+internal/netpolicy   IPv4 egress denials shared by Windows-hosted providers
+internal/winhost     Windows host checks: protected storage, private staging, system OpenSSH
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
 internal/redact      credential redaction applied at every sink

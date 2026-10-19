@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -275,14 +274,5 @@ func TestVFPEmptyEnumerationIsNarrowlyRecognized(t *testing.T) {
 		if (err == nil) != tc.valid {
 			t.Errorf("unexpected query result: %v", err)
 		}
-	}
-}
-
-func TestBoundedNativeCommandOutput(t *testing.T) {
-	var b boundedOutput
-	data := []byte(strings.Repeat("x", maxResponseBytes+10))
-	n, err := b.Write(data)
-	if n != len(data) || err != nil || !b.overflow || len(b.data) != maxResponseBytes {
-		t.Fatal(errors.New("output bound failed"))
 	}
 }

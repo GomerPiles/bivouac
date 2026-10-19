@@ -1,4 +1,4 @@
-package appsandbox
+package netpolicy
 
 import (
 	"net/netip"

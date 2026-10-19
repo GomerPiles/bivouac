@@ -110,7 +110,11 @@ func crosvmCmd(ctx context.Context, args []string, out io.Writer) error {
 			}
 		}
 	}
-	guest, err := crosvm.NewSSHGuest(crosvm.SSHOptions{StateDir: sshDir, Helper: helper, User: user, RequirePrepared: requirePrepared})
+	key, err := linuxGuestKey("")
+	if err != nil {
+		return err
+	}
+	guest, err := crosvm.NewSSHGuest(crosvm.SSHOptions{StateDir: sshDir, Helper: helper, Key: key, User: user, RequirePrepared: requirePrepared})
 	if err != nil {
 		return err
 	}

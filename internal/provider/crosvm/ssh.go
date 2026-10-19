@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
+	"github.com/GomerPiles/bivouac/internal/command"
+	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
+	"github.com/GomerPiles/bivouac/internal/winhost"
 	"net"
 )
 
@@ -56,12 +58,9 @@ func NewSSHGuest(opts SSHOptions) (*SSHGuest, error) {
 	if !filepath.IsAbs(opts.StateDir) || !filepath.IsAbs(opts.Helper) || !identifier(opts.User, 32) {
 		return nil, errors.New("invalid Linux SSH guest options")
 	}
-	ssh, scp, key, err := appsandbox.WindowsTransportPaths()
+	ssh, scp, err := winhost.OpenSSH()
 	if err != nil {
 		return nil, err
-	}
-	if opts.Key == "" {
-		opts.Key = key
 	}
 	if !filepath.IsAbs(opts.Key) {
 		return nil, errors.New("linux SSH key path must be absolute")
@@ -96,7 +95,7 @@ func NewSSHGuest(opts SSHOptions) (*SSHGuest, error) {
 	if readErr != nil || closeErr != nil || n > 128<<20 {
 		return nil, errors.New("linux helper fingerprint exceeds bound or is unreadable")
 	}
-	return &SSHGuest{opts: opts, ssh: ssh, scp: scp, commands: appsandbox.NativeCommands{}, helperSHA256: hex.EncodeToString(h.Sum(nil))}, nil
+	return &SSHGuest{opts: opts, ssh: ssh, scp: scp, commands: command.Native{}, helperSHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
 // Forget removes the instance's pinned host key once its VM is deleted.
@@ -314,7 +313,7 @@ func (g *SSHGuest) CollectDiagnostics(ctx context.Context, r Record, destination
 	if err != nil || len(decoded) > 32<<20 {
 		return errors.New("invalid bounded Linux diagnostic stream")
 	}
-	dir, err := appsandbox.PrivateGuestDirectory(g.opts.StateDir)
+	dir, err := winhost.PrivateDirectory(g.opts.StateDir)
 	if err != nil {
 		return err
 	}
@@ -323,7 +322,7 @@ func (g *SSHGuest) CollectDiagnostics(ctx context.Context, r Record, destination
 	if err := os.WriteFile(path, decoded, 0o600); err != nil {
 		return err
 	}
-	return appsandbox.ExtractDiagnostics(path, destination)
+	return diag.ExtractGuestArchive(path, destination)
 }
 
 // ExercisePreparedImage is an explicit credential-free factory trial, never a
