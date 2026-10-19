@@ -85,8 +85,9 @@ func (s *Service) LogSummary() {
 	snapshot := s.Snapshot()
 	logCounters(s.log, "controller_session", "archives", snapshot.Archives)
 	logCounters(s.log, "controller_session", "release_proxy", snapshot.Releases)
-	u := snapshot.Uploads
-	s.log.Info("cache upload summary", "scope", "controller_session", "stored", u.Stored, "stored_bytes", u.StoredBytes, "skipped", u.Skipped)
+	if u := snapshot.Uploads; s.storing.Load() {
+		s.log.Info("cache upload summary", "scope", "controller_session", "relayed", u.Relayed, "stored", u.Stored, "stored_bytes", u.StoredBytes, "skipped", u.Skipped, "fallbacks", u.Fallbacks)
+	}
 	d := s.store.Diagnostics()
 	objects, used, reserved := s.store.Stats()
 	s.log.Info("cache store summary", "objects", objects, "stored_bytes", used, "reserved_bytes", reserved, "evictions", d.Evictions, "evicted_bytes", d.EvictedBytes, "invalidations", d.Invalidations, "startup_discarded_files", d.StartupDiscardedFiles)

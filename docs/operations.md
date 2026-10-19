@@ -13,7 +13,8 @@ New macOS clones receive job-start/completion hooks without baseline or workflow
 edits. GitHub's Set up runner and Complete runner logs include guest CPU/RAM/disk
 summaries; diagnostics retain a validated numeric `guest/performance.json`.
 Completion also prints archive/release cache hits, misses, bypasses, failures
-and delivered bytes, plus stored and skipped uploads, when cache setup exists. Disabled caching emits no cache
+and delivered bytes when cache setup exists, and with `store_uploads` the
+relayed, stored, skipped and fallen-back saves. Disabled caching emits no cache
 line; an unavailable service reports an unavailable summary. Controller cache
 counters reset at manager restart, guest counters at capability replacement.
 These whole-system, sampled readings do not measure individual steps or disk IO.
@@ -532,8 +533,13 @@ GitHub hosts, but caches no request carrying `Authorization` or cookies. Other
 public HTTPS hosts use opaque tunnels. Host and baseline trust remain unchanged.
 Newly uploaded Actions archives enter this read-through cache on
 their first restore. With `store_uploads`, the host relays each save to GitHub's
-storage and keeps what it sent, so the next restore is local. A save that does
-not fit, or any relay failure, falls back to a direct upload. A service outage returns lease requests to upstream;
+storage and keeps what it sent, so the next restore is local. A save larger
+than `max_object_mb`, or than idle objects can make room for, is relayed without
+a copy; any relay failure sends the rest of that save directly to GitHub.
+Every save is stored, evicting the least recently used objects, so size
+`max_gb` for the archives saved between restores as well as those restored.
+Upload storage is validated on macOS guests only; leave it off on a Windows
+host until its guests are validated live. A service outage returns lease requests to upstream;
 a failed fill redirects upstream. No upload/storage quota reduction is
 claimed. Logs report object class, hit/miss, size and a per-session object
 label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
@@ -553,8 +559,10 @@ on Linux, but their guest adapters are not yet implemented or validated.
 `BIVOUAC_HOME` isolates a cache under that test home.
 
 To revert, finish work with `bivouac off --wait`, set `cache.enabled = false`,
-and `cache.release_proxy = false`, then restart in the desired mode. To keep
-Actions acceleration alone, leave `enabled = true` and set `release_proxy = false`.
+`cache.release_proxy = false` and `cache.store_uploads = false`, then restart in
+the desired mode. To stop storing saves alone, set `store_uploads = false`. To
+keep Actions acceleration alone, leave `enabled = true` and set
+`release_proxy = false`.
 Fresh guests then receive no proxy root or settings. Cache objects are expendable; the cache
 directory can be removed while off. Keep the ownership state directory
 intact. Production cutover and Tartelet remain independent of cache setup.
@@ -576,6 +584,15 @@ Fill reasons are `capacity`, `object_limit`, `upstream_status`,
 `timeout`, `canceled`, and `store_*` for local filesystem failures.
 `cache SSH transport ended during requests` names a guest whose transport
 dropped mid-transfer. Keep the cache while investigating; it is evidence.
+
+A relayed save logs `cache upload relayed` with its `guest`, then
+`cache upload stored` (with `object`), `cache upload not stored` with a
+`reason`, or `cache upload sent directly upstream`. Fallback reasons are
+`unsupported_request`, `concurrency`, `expired`, `revoked`, `guest_body` and the
+upstream transport reasons above. Repeated `unsupported_request` or
+`concurrency` means the official action changed how it uploads.
+`cache upload not relayed` (`upload_limit`, `expired`) means the save went
+directly; `cache uploads abandoned` counts relays open at revocation or shutdown.
 
 ## Cutover (after validation)
 

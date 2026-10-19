@@ -191,7 +191,7 @@ func TestGuestCacheSummaryNumericPrivateBoundedAndOptional(t *testing.T) {
 	}
 	var out bytes.Buffer
 	PrintGuestSummary(context.Background(), &out, directory)
-	if !strings.Contains(out.String(), "hits=1 (123 bytes)") || strings.Contains(out.String(), b.Token) || strings.Contains(out.String(), directory) || strings.Count(out.String(), "\n") != 1 {
+	if !strings.Contains(out.String(), "hits=1 (123 bytes)") || strings.Contains(out.String(), "uploads") || strings.Contains(out.String(), b.Token) || strings.Contains(out.String(), directory) || strings.Count(out.String(), "\n") != 1 {
 		t.Fatal(out.String())
 	}
 	out.Reset()
@@ -235,5 +235,31 @@ func TestGuestCacheSummaryAcceptsOtherLiteralEndpoint(t *testing.T) {
 	PrintGuestSummary(context.Background(), &out, directory)
 	if !strings.Contains(out.String(), "archives: hits=1 (7 bytes) misses=1 (7 bytes)") || !strings.Contains(out.String(), "release proxy: hits=1 (13 bytes)") || strings.Contains(out.String(), b.Token) {
 		t.Fatal("direct host endpoint did not report both cache kinds", out.String())
+	}
+}
+
+// Upload counters appear only for a guest whose saves the host may store.
+func TestGuestCacheSummaryReportsUploadsWhenStored(t *testing.T) {
+	backend := httptest.NewTLSServer(http.NotFoundHandler())
+	defer backend.Close()
+	s, _, _ := testService(t, backend)
+	s.EnableUploadStore()
+	data, err := s.Issue("stored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b Bootstrap
+	if err = json.Unmarshal(data, &b); err != nil {
+		t.Fatal(err)
+	}
+	s.addUpload(b.Token, func(c *UploadCounters) { c.Relayed, c.Stored, c.StoredBytes, c.Fallbacks = 2, 1, 9, 1 })
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, guestConfigFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	PrintGuestSummary(context.Background(), &out, directory)
+	if !strings.HasSuffix(out.String(), "; uploads: relayed=2 stored=1 (9 bytes) skipped=0 fallbacks=1\n") {
+		t.Fatal(out.String())
 	}
 }

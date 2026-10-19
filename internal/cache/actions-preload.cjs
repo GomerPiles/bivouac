@@ -110,6 +110,22 @@ https.request = function(input, options, callback) {
   const relay = local && path.startsWith('/upload/') && relays.has(path.slice(8)) ? path.slice(8) : '';
   if (relay && direct.has(relay)) toUpstream(opts, relays.get(relay));
   const relayed = relay && !direct.has(relay);
+  // The official action can log the relay ID in debug output, so the host also
+  // requires this guest's token, which only the bootstrap settings hold.
+  if (relayed) {
+    const auth = `Bearer ${config.token}`;
+    if (Array.isArray(opts.headers)) { // Node's raw [name, value, ...] form.
+      const pairs = [];
+      for (let i = 0; i + 1 < opts.headers.length; i += 2) {
+        if (String(opts.headers[i]).toLowerCase() !== 'authorization') pairs.push(opts.headers[i], opts.headers[i + 1]);
+      }
+      opts.headers = [...pairs, 'Authorization', auth];
+    } else {
+      opts.headers = {...opts.headers};
+      for (const name of Object.keys(opts.headers)) if (name.toLowerCase() === 'authorization') delete opts.headers[name];
+      opts.headers.Authorization = auth;
+    }
+  }
   const cacheService = host.endsWith('.actions.githubusercontent.com');
   const cacheLookup = cacheService && path === servicePath + 'GetCacheEntryDownloadURL';
   const cacheCreate = cacheService && config.store_uploads === true && path === servicePath + 'CreateCacheEntry';

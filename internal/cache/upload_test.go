@@ -2,10 +2,12 @@ package cache
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeBlob emulates the block-blob operations the Azure SDK uses to upload,
@@ -156,6 +159,16 @@ func put(t *testing.T, c *http.Client, target string, header map[string]string, 
 	return r.StatusCode, r.Header
 }
 
+// relayPut sends a relay request as the preload does, with the guest's token.
+func relayPut(t *testing.T, c *http.Client, b Bootstrap, target string, header map[string]string, body []byte) (int, http.Header) {
+	t.Helper()
+	h := map[string]string{"Authorization": "Bearer " + b.Token}
+	for k, v := range header {
+		h[k] = v
+	}
+	return put(t, c, target, h, body)
+}
+
 func blockList(ids ...string) []byte {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="utf-8"?><BlockList>`)
@@ -203,11 +216,11 @@ func TestUploadRelayStoresCommittedBlocksForTheFirstRestore(t *testing.T) {
 	}
 	first, second := bytes.Repeat([]byte("a"), 3000), bytes.Repeat([]byte("b"), 1234)
 	for id, data := range map[string][]byte{"AAAA": first, "AAAB": second} {
-		if status, _ := put(t, client, relay+"?comp=block&blockid="+id, map[string]string{"x-ms-version": "2020-04-08"}, data); status != http.StatusCreated {
+		if status, _ := relayPut(t, client, b, relay+"?comp=block&blockid="+id, map[string]string{"x-ms-version": "2020-04-08"}, data); status != http.StatusCreated {
 			t.Fatal("block not relayed", status)
 		}
 	}
-	status, header := put(t, client, relay+"?comp=blocklist", map[string]string{"Content-Type": "application/xml"}, blockList("AAAA", "AAAB"))
+	status, header := relayPut(t, client, b, relay+"?comp=blocklist", map[string]string{"Content-Type": "application/xml"}, blockList("AAAA", "AAAB"))
 	if status != http.StatusCreated || header.Get("ETag") == "" || header.Get("x-ms-request-id") != "fixture" {
 		t.Fatal("commit response not relayed", status, header)
 	}
@@ -221,7 +234,7 @@ func TestUploadRelayStoresCommittedBlocksForTheFirstRestore(t *testing.T) {
 			t.Fatal("guest parameters displaced the signed query", q)
 		}
 	}
-	waitSummary(t, s, Summary{Uploads: UploadCounters{Stored: 1, StoredBytes: uint64(len(want))}})
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Stored: 1, StoredBytes: uint64(len(want))}})
 	if got := restore(t, b, client, upstream, "/cache/blocks"); !bytes.Equal(got, want) {
 		t.Fatal("restore did not return the uploaded archive")
 	}
@@ -232,7 +245,7 @@ func TestUploadRelayStoresCommittedBlocksForTheFirstRestore(t *testing.T) {
 		t.Fatal("staging outlived its commit", reserved)
 	}
 	// The lease ends at commit, so a retried commit goes to Azure directly.
-	if status, header := put(t, client, relay+"?comp=blocklist", nil, blockList("AAAA", "AAAB")); status != http.StatusServiceUnavailable || header.Get("X-Bivouac-Relay") != "unavailable" {
+	if status, header := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList("AAAA", "AAAB")); status != http.StatusServiceUnavailable || header.Get("X-Bivouac-Relay") != "unavailable" {
 		t.Fatal("finished upload still relayed", status)
 	}
 }
@@ -240,10 +253,10 @@ func TestUploadRelayStoresCommittedBlocksForTheFirstRestore(t *testing.T) {
 func TestUploadRelayStoresSingleShotUploads(t *testing.T) {
 	s, b, client, blob, upstream := uploadFixture(t)
 	relay := createUploadLease(t, b, client, upstream+"/cache/single?sig=upload")
-	if status, _ := put(t, client, relay, map[string]string{"x-ms-blob-type": "BlockBlob"}, []byte("payload")); status != http.StatusCreated {
+	if status, _ := relayPut(t, client, b, relay, map[string]string{"x-ms-blob-type": "BlockBlob"}, []byte("payload")); status != http.StatusCreated {
 		t.Fatal("put blob not relayed", status)
 	}
-	waitSummary(t, s, Summary{Uploads: UploadCounters{Stored: 1, StoredBytes: 7}})
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Stored: 1, StoredBytes: 7}})
 	if got := restore(t, b, client, upstream, "/cache/single"); string(got) != "payload" {
 		t.Fatal("single-shot upload not restored")
 	}
@@ -257,56 +270,69 @@ func TestUploadRelayStoresSingleShotUploads(t *testing.T) {
 func TestUploadRelayNeverStoresBytesItDidNotCommit(t *testing.T) {
 	s, b, client, blob, upstream := uploadFixture(t)
 	relay := createUploadLease(t, b, client, upstream+"/cache/partial?sig=upload")
-	put(t, client, relay+"?comp=block&blockid=AAAA", nil, []byte("relayed"))
+	relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("relayed"))
 	put(t, s.client, upstream+"/cache/partial?sig=upload&comp=block&blockid=AAAB", nil, []byte("direct"))
-	if status, _ := put(t, client, relay+"?comp=blocklist", nil, blockList("AAAA", "AAAB")); status != http.StatusCreated {
+	if status, _ := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList("AAAA", "AAAB")); status != http.StatusCreated {
 		t.Fatal("commit not relayed", status)
 	}
-	waitSummary(t, s, Summary{Uploads: UploadCounters{Skipped: 1}})
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Skipped: 1}})
 
 	blob.refuseCommits()
 	relay = createUploadLease(t, b, client, upstream+"/cache/rejected?sig=upload")
-	put(t, client, relay+"?comp=block&blockid=AAAA", nil, []byte("bytes"))
-	if status, _ := put(t, client, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusForbidden {
+	relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("bytes"))
+	if status, _ := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusForbidden {
 		t.Fatal("Azure refusal not relayed", status)
 	}
 	if objects, _, reserved := s.store.Stats(); objects != 0 || reserved != 0 || stagedFiles(t, s) != 0 {
 		t.Fatal("uncommitted bytes stored or left staged", objects, reserved)
 	}
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 2, Skipped: 2}})
 }
 
-// Anything outside the SDK's three upload operations, or for an unknown lease,
-// is refused before reaching Azure with the marker the preload falls back on.
+// Anything outside the SDK's three upload operations is refused before reaching
+// Azure with the marker the preload falls back on. The preload takes the marker
+// as final, so the lease and its staged bytes end at once and count once.
 func TestUploadRelayRefusesWhatItCannotCarry(t *testing.T) {
 	s, b, client, blob, upstream := uploadFixture(t)
-	relay := createUploadLease(t, b, client, upstream+"/cache/refused?sig=upload")
-	for name, request := range map[string]struct {
-		method, target string
-		header         map[string]string
+	cases := map[string]struct {
+		method, query string
+		header        map[string]string
 	}{
-		"unknown lease":    {http.MethodPut, b.URL + "/upload/unknown", map[string]string{"x-ms-blob-type": "BlockBlob"}},
-		"read":             {http.MethodGet, relay, nil},
-		"signed parameter": {http.MethodPut, relay + "?comp=block&blockid=AAAA&sig=other", nil},
-		"other operation":  {http.MethodPut, relay + "?comp=properties", nil},
-		"copy source":      {http.MethodPut, relay, map[string]string{"x-ms-blob-type": "BlockBlob", "x-ms-copy-source": "https://example.invalid/"}},
-		"page blob":        {http.MethodPut, relay, map[string]string{"x-ms-blob-type": "PageBlob"}},
-	} {
-		req, _ := http.NewRequest(request.method, request.target, strings.NewReader("x"))
-		for k, v := range request.header {
-			req.Header.Set(k, v)
+		"read":             {http.MethodGet, "", nil},
+		"signed parameter": {http.MethodPut, "?comp=block&blockid=AAAB&sig=other", nil},
+		"other operation":  {http.MethodPut, "?comp=properties", nil},
+		"copy source":      {http.MethodPut, "", map[string]string{"x-ms-blob-type": "BlockBlob", "x-ms-copy-source": "https://example.invalid/"}},
+		"page blob":        {http.MethodPut, "", map[string]string{"x-ms-blob-type": "PageBlob"}},
+	}
+	for name, request := range cases {
+		relay := createUploadLease(t, b, client, upstream+"/cache/refused?sig=upload")
+		if status, _ := relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("staged")); status != http.StatusCreated {
+			t.Fatal(name, "block not relayed", status)
 		}
-		r, err := client.Do(req)
-		if err != nil {
-			t.Fatal(err)
+		for range 2 { // A request racing the first refusal finds no lease.
+			req, _ := http.NewRequest(request.method, relay+request.query, strings.NewReader("x"))
+			req.Header.Set("Authorization", "Bearer "+b.Token)
+			for k, v := range request.header {
+				req.Header.Set(k, v)
+			}
+			r, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = r.Body.Close()
+			if r.StatusCode != http.StatusServiceUnavailable || r.Header.Get("X-Bivouac-Relay") != "unavailable" {
+				t.Fatal(name, "not refused for direct fallback", r.StatusCode)
+			}
 		}
-		_ = r.Body.Close()
-		if r.StatusCode != http.StatusServiceUnavailable || r.Header.Get("X-Bivouac-Relay") != "unavailable" {
-			t.Fatal(name, "not refused for direct fallback", r.StatusCode)
+		if _, _, reserved := s.store.Stats(); reserved != 0 || stagedFiles(t, s) != 0 {
+			t.Fatal(name, "fallback left staged bytes", reserved)
 		}
 	}
-	if queries, _ := blob.requests(); len(queries) != 0 {
+	if queries, _ := blob.requests(); len(queries) != len(cases) {
 		t.Fatal("refused request reached Azure", queries)
 	}
+	n := uint64(len(cases))
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: n, Fallbacks: n}})
 	s.storing.Store(false)
 	payload, _ := json.Marshal(map[string]string{"url": upstream + "/cache/off?sig=upload"})
 	req, _ := http.NewRequest(http.MethodPost, b.URL+"/upload", bytes.NewReader(payload))
@@ -316,12 +342,75 @@ func TestUploadRelayRefusesWhatItCannotCarry(t *testing.T) {
 	}
 }
 
+// The relay ID can appear in the official action's debug output. Without the
+// guest's own token a request is refused and cannot disturb the upload.
+func TestUploadRelayRequiresTheGuestToken(t *testing.T) {
+	s, b, client, blob, upstream := uploadFixture(t)
+	data, err := s.Issue("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var other Bootstrap
+	if err = json.Unmarshal(data, &other); err != nil {
+		t.Fatal(err)
+	}
+	relay := createUploadLease(t, b, client, upstream+"/cache/owned?sig=upload")
+	for name, header := range map[string]map[string]string{
+		"no token":      {"x-ms-blob-type": "BlockBlob"},
+		"other guest":   {"x-ms-blob-type": "BlockBlob", "Authorization": "Bearer " + other.Token},
+		"unknown relay": {"x-ms-blob-type": "BlockBlob", "Authorization": "Bearer " + b.Token},
+	} {
+		target := relay
+		if name == "unknown relay" {
+			target = b.URL + "/upload/unknown"
+		}
+		if status, h := put(t, client, target, header, []byte("forged")); status != http.StatusServiceUnavailable || h.Get("X-Bivouac-Relay") != "unavailable" {
+			t.Fatal(name, "accepted", status)
+		}
+	}
+	if queries, _ := blob.requests(); len(queries) != 0 {
+		t.Fatal("unauthenticated request reached Azure", queries)
+	}
+	if status, _ := relayPut(t, client, b, relay, map[string]string{"x-ms-blob-type": "BlockBlob"}, []byte("payload")); status != http.StatusCreated {
+		t.Fatal("refused strangers ended the guest's relay", status)
+	}
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Stored: 1, StoredBytes: 7}})
+}
+
 func TestUploadRelayFallsBackWhenAzureIsUnreachable(t *testing.T) {
 	s, b, client, _, _ := uploadFixture(t)
 	s.validate = func(*url.URL) bool { return true }
 	relay := createUploadLease(t, b, client, "https://127.0.0.1:1/cache/unreachable?sig=upload")
-	if status, header := put(t, client, relay+"?comp=block&blockid=AAAA", nil, []byte("x")); status != http.StatusServiceUnavailable || header.Get("X-Bivouac-Relay") != "unavailable" {
+	if status, header := relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("x")); status != http.StatusServiceUnavailable || header.Get("X-Bivouac-Relay") != "unavailable" {
 		t.Fatal("unreachable upstream did not request direct fallback", status)
+	}
+	if _, _, reserved := s.store.Stats(); reserved != 0 || stagedFiles(t, s) != 0 {
+		t.Fatal("fallback left staged bytes", reserved)
+	}
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Fallbacks: 1}})
+}
+
+// A guest that stops sending its block mid-request is named as the broken side,
+// not Azure, and its relay ends like any other fallback.
+func TestUploadRelayNamesAGuestThatStopsSending(t *testing.T) {
+	s, b, client, _, upstream := uploadFixture(t)
+	var logs bytes.Buffer
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	relay := createUploadLease(t, b, client, upstream+"/cache/cut?sig=upload")
+	target, _ := url.Parse(relay)
+	conn, err := tls.Dial("tcp", target.Host, client.Transport.(*http.Transport).TLSClientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fmt.Fprintf(conn, "PUT %s?comp=block&blockid=AAAA HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Length: 1000\r\n\r\npartial", target.Path, target.Host, b.Token)
+	time.Sleep(100 * time.Millisecond)
+	_ = conn.Close()
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Fallbacks: 1}})
+	if !strings.Contains(logs.String(), "reason=guest_body") {
+		t.Fatal("guest failure not named", logs.String())
+	}
+	if _, _, reserved := s.store.Stats(); reserved != 0 || stagedFiles(t, s) != 0 {
+		t.Fatal("cut request left staged bytes", reserved)
 	}
 }
 
@@ -331,16 +420,16 @@ func TestUploadRelayCapacityAndRevocation(t *testing.T) {
 	s, b, client, blob, upstream := uploadFixture(t)
 	relay := createUploadLease(t, b, client, upstream+"/cache/large?sig=upload")
 	large := bytes.Repeat([]byte("x"), int(s.store.maxObject)+1)
-	if status, _ := put(t, client, relay+"?comp=block&blockid=AAAA", nil, large); status != http.StatusCreated {
+	if status, _ := relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, large); status != http.StatusCreated {
 		t.Fatal("oversize block not relayed", status)
 	}
-	if status, _ := put(t, client, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusCreated || len(blob.blob("/cache/large")) != len(large) {
+	if status, _ := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusCreated || len(blob.blob("/cache/large")) != len(large) {
 		t.Fatal("oversize upload not committed upstream", status)
 	}
-	waitSummary(t, s, Summary{Uploads: UploadCounters{Skipped: 1}})
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Skipped: 1}})
 
 	relay = createUploadLease(t, b, client, upstream+"/cache/revoked?sig=upload")
-	put(t, client, relay+"?comp=block&blockid=AAAA", nil, []byte("staged"))
+	relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("staged"))
 	if _, _, reserved := s.store.Stats(); reserved != 6 || stagedFiles(t, s) != 1 {
 		t.Fatal("block not staged", reserved)
 	}
@@ -348,7 +437,9 @@ func TestUploadRelayCapacityAndRevocation(t *testing.T) {
 	if _, _, reserved := s.store.Stats(); reserved != 0 || stagedFiles(t, s) != 0 {
 		t.Fatal("revocation left staged bytes", reserved)
 	}
-	if status, _ := put(t, client, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusServiceUnavailable {
+	if status, _ := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList("AAAA")); status != http.StatusServiceUnavailable {
 		t.Fatal("revoked upload still relayed", status)
 	}
+	// Revocation ends the guest's saves uncounted.
+	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 2, Skipped: 1}})
 }

@@ -210,6 +210,9 @@ func (s *Service) Revoke(name string) {
 	for _, u := range abandoned {
 		u.abandon("revoked")
 	}
+	if len(abandoned) > 0 {
+		s.log.Info("cache uploads abandoned", "reason", "revoked", "uploads", len(abandoned))
+	}
 	if transport != nil {
 		_ = transport.Close()
 	}
@@ -232,6 +235,9 @@ func (s *Service) Close() {
 	}
 	for _, u := range uploads {
 		u.abandon("shutdown")
+	}
+	if len(uploads) > 0 {
+		s.log.Info("cache uploads abandoned", "reason", "shutdown", "uploads", len(uploads))
 	}
 	s.commits.Wait()
 	s.LogSummary()

@@ -96,12 +96,19 @@ func TestPreloadRelaysUploadsAndFallsBackToAzure(t *testing.T) {
 				t.Fatal("Azure did not commit the archive")
 			}
 			if mode != "relay" {
-				if s.Snapshot().Uploads != (UploadCounters{}) {
+				// Only the lease was counted: revocation and shutdown end it uncounted.
+				want := UploadCounters{Relayed: 1}
+				if mode == "disabled" {
+					want = UploadCounters{}
+				}
+				if s.Snapshot().Uploads != want {
 					t.Fatal("fallback stored an upload", s.Snapshot().Uploads)
 				}
 				return
 			}
-			waitSummary(t, s, Summary{Uploads: UploadCounters{Stored: 1, StoredBytes: 12}})
+			// Storing at all proves the preload sent the guest token to the relay;
+			// the fake Azure refuses any request carrying a credential.
+			waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 1, Stored: 1, StoredBytes: 12}})
 			r, err := client.Get(makeLease(t, b, client, upstream+"/cache/node?sig=read"))
 			if err != nil {
 				t.Fatal(err)

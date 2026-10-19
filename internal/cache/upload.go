@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"encoding/xml"
 	"io"
@@ -12,15 +13,19 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // The preload points the Azure SDK's signed upload URL at /upload/<id>. The host
-// forwards each request to Azure itself and keeps the bytes it sent, so a commit
-// Azure accepts stores exactly the archive Azure holds, under the identity a
-// later restore's HEAD reports. A guest can store only objects it can write
-// upstream. Requests the relay cannot carry get relayUnavailable, and the
-// preload sends that upload's retries directly to Azure.
+// forwards each request to Azure itself and keeps the bytes it sent. When Azure
+// accepts a commit, those bytes are stored under the identity (blob path, ETag,
+// size) a later restore's HEAD reports. A guest holding the signed URL can also
+// write blocks to Azure directly, so the copy matches Azure only for a guest
+// that does not; either way it can affect only an object it can write upstream.
+// Relay requests need the relay ID and the guest's bearer token. Requests the
+// relay cannot carry get relayUnavailable, and the preload sends that upload's
+// retries directly to Azure.
 
 const (
 	uploadsPerGuest   = 8
@@ -39,6 +44,7 @@ type stagedBlock struct {
 // changes to stage happen under mu until take hands the stage to a commit.
 type uploadLease struct {
 	token    string
+	guest    string
 	upstream *url.URL
 	expires  time.Time
 
@@ -50,12 +56,16 @@ type uploadLease struct {
 	blocks map[string]stagedBlock
 }
 
-// UploadCounters count saves whose bytes the relay kept. Skipped saves reached
-// GitHub through the relay without a complete local copy.
+// UploadCounters count saves routed through the relay. Each ends stored, skipped
+// (the relay carried it, or Azure refused it, without a complete local copy) or
+// fallen back (the relay sent the guest straight to Azure); a save abandoned by
+// revocation, expiry or shutdown ends uncounted.
 type UploadCounters struct {
+	Relayed     uint64 `json:"relayed"`
 	Stored      uint64 `json:"stored"`
 	StoredBytes uint64 `json:"stored_bytes"`
 	Skipped     uint64 `json:"skipped"`
+	Fallbacks   uint64 `json:"fallbacks"`
 }
 
 // EnableUploadStore is configured before attaching this service to providers.
@@ -75,6 +85,7 @@ func (s *Service) createUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	expires := signedExpiry(u.parsed, u.grant.expires)
 	if time.Now().After(expires) {
+		s.log.Info("cache upload not relayed", "reason", "expired")
 		http.Error(w, "expired upstream", http.StatusForbidden)
 		return
 	}
@@ -91,18 +102,24 @@ func (s *Service) createUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, valid := s.grants[u.token]
-	admitted := !s.closed && valid && count < uploadsPerGuest
+	open := !s.closed && valid
+	admitted := open && count < uploadsPerGuest
 	if admitted {
-		s.uploads[id] = &uploadLease{token: u.token, upstream: u.parsed, expires: expires, stage: s.store.newStage(), blocks: map[string]stagedBlock{}}
+		s.uploads[id] = &uploadLease{token: u.token, guest: u.grant.name, upstream: u.parsed, expires: expires, stage: s.store.newStage(), blocks: map[string]stagedBlock{}}
 	}
 	s.mu.Unlock()
 	for _, l := range expired {
 		l.abandon("expired")
 	}
 	if !admitted {
+		if open {
+			s.log.Info("cache upload not relayed", "reason", "upload_limit")
+		}
 		http.Error(w, "upload limit", http.StatusTooManyRequests)
 		return
 	}
+	s.addUpload(u.token, func(c *UploadCounters) { c.Relayed++ })
+	s.log.Info("cache upload relayed", "guest", u.grant.name)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		URL string `json:"url"`
@@ -178,9 +195,26 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 		_, valid = s.grants[u.token]
 	}
 	s.mu.Unlock()
-	op, ok := parseUploadRequest(r)
-	if u == nil || !valid || !ok || time.Now().After(u.expires) || !u.enter() {
+	// The relay ID alone is not enough: the official action logs it in debug
+	// output, and a macOS host listens beyond the guest. Without the guest's own
+	// token the lease is left untouched, so a stranger cannot end the relay.
+	if u == nil || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+u.token)) != 1 {
 		relayUnavailable(w)
+		return
+	}
+	op, ok := parseUploadRequest(r)
+	switch {
+	case !valid:
+		s.fallBack(w, id, u, "revoked")
+		return
+	case !ok:
+		s.fallBack(w, id, u, "unsupported_request")
+		return
+	case time.Now().After(u.expires):
+		s.fallBack(w, id, u, "expired")
+		return
+	case !u.enter():
+		s.fallBack(w, id, u, "concurrency")
 		return
 	}
 	defer u.leave()
@@ -192,20 +226,21 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	ctx, cancel := context.WithDeadline(r.Context(), u.expires)
 	defer cancel()
 
-	var body io.Reader = r.Body
+	guest := &guestBody{r: r.Body}
+	var body io.Reader = guest
 	var list []string
 	listed := false
 	var staged *stageWriter
 	if op.kind == putBlockList {
-		data, err := io.ReadAll(r.Body)
+		data, err := io.ReadAll(guest)
 		if err != nil {
-			relayUnavailable(w)
+			s.fallBack(w, id, u, "guest_body")
 			return
 		}
 		body = bytes.NewReader(data)
 		list, listed = parseBlockList(data)
 	} else if staged = u.reserve(r.ContentLength); staged != nil {
-		body = io.TeeReader(r.Body, staged)
+		body = io.TeeReader(guest, staged)
 	}
 	if r.ContentLength == 0 {
 		body = http.NoBody
@@ -217,7 +252,7 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target.String(), body)
 	if err != nil {
 		u.discard(staged)
-		relayUnavailable(w)
+		s.fallBack(w, id, u, "unsupported_request")
 		return
 	}
 	req.ContentLength = r.ContentLength
@@ -231,8 +266,10 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	if err != nil {
 		u.discard(staged)
 		reason, _ := failureDetails(upstreamFailure(err))
-		s.log.Info("cache upload relay unavailable", "reason", reason)
-		relayUnavailable(w)
+		if guest.failed.Load() {
+			reason = "guest_body"
+		}
+		s.fallBack(w, id, u, reason)
 		return
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -240,10 +277,11 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	// as the last block is acknowledged.
 	if response.StatusCode != http.StatusCreated {
 		u.discard(staged)
-		if op.kind != putBlock && response.StatusCode < http.StatusInternalServerError {
+		if op.kind != putBlock && response.StatusCode < http.StatusInternalServerError && s.dropUpload(id) {
 			// The SDK does not retry a refused commit; free its staged blocks now.
-			s.dropUpload(id)
 			u.abandon("upstream_status")
+			s.log.Info("cache upload not stored", "reason", "upstream_status")
+			s.addUpload(u.token, func(c *UploadCounters) { c.Skipped++ })
 		}
 	} else {
 		switch op.kind {
@@ -263,6 +301,22 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(response.Body, maxRelayReply))
+}
+
+// guestBody records whether reading the guest's request failed, so a relay
+// failure names the side that broke. The transport may still read it after
+// the request returns.
+type guestBody struct {
+	r      io.Reader
+	failed atomic.Bool
+}
+
+func (g *guestBody) Read(p []byte) (int, error) {
+	n, err := g.r.Read(p)
+	if err != nil && err != io.EOF {
+		g.failed.Store(true)
+	}
+	return n, err
 }
 
 // relayedHeader passes Azure's own protocol headers, never credentials, cookies
@@ -299,7 +353,11 @@ func parseBlockList(data []byte) ([]string, bool) {
 // them in the background. The service owns that work, so it may finish after
 // the guest exits; Close cancels and joins it.
 func (s *Service) storeUpload(id string, u *uploadLease, order []string, listed bool, etag string) {
-	s.dropUpload(id) // A retried commit goes directly to Azure.
+	// A retried commit goes directly to Azure. Every other path that ends a
+	// lease abandons it, and counts it if it should be counted.
+	if !s.dropUpload(id) {
+		return
+	}
 	if !listed {
 		u.abandon("block_list")
 	} else if etag == "" {
@@ -353,10 +411,25 @@ func (s *Service) storeUpload(id string, u *uploadLease, order []string, listed 
 	}()
 }
 
-func (s *Service) dropUpload(id string) {
+// dropUpload ends a relay lease and reports whether this call ended it.
+func (s *Service) dropUpload(id string) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.uploads[id]
 	delete(s.uploads, id)
-	s.mu.Unlock()
+	return ok
+}
+
+// fallBack sends the guest's upload straight to Azure: the preload takes the
+// marker as final for that upload, so the lease and its staged bytes end now.
+// Only the call that ends the lease counts it.
+func (s *Service) fallBack(w http.ResponseWriter, id string, u *uploadLease, reason string) {
+	if s.dropUpload(id) {
+		u.abandon(reason)
+		s.log.Warn("cache upload sent directly upstream", "guest", u.guest, "reason", reason)
+		s.addUpload(u.token, func(c *UploadCounters) { c.Fallbacks++ })
+	}
+	relayUnavailable(w)
 }
 
 func appendFile(out io.Writer, path string) error {
