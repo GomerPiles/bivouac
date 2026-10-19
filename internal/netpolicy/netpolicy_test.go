@@ -41,3 +41,19 @@ func TestMissingOrInvalidHostInventoryFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveDenialIgnoresCoveredPrivateAdapters(t *testing.T) {
+	hosts := []netip.Prefix{netip.MustParsePrefix("192.168.1.7/24"), netip.MustParsePrefix("8.8.8.10/24")}
+	_, base, err := EffectiveDenial(hosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withGuestSwitch := append(slices.Clone(hosts), netip.MustParsePrefix("10.251.0.1/28"), netip.MustParsePrefix("fe80::1/64"))
+	if _, snapshot, err := EffectiveDenial(withGuestSwitch); err != nil || snapshot != base {
+		t.Fatal("a covered private adapter changed the effective denial", err)
+	}
+	withPublic := append(slices.Clone(hosts), netip.MustParsePrefix("203.0.114.9/24"))
+	if _, snapshot, err := EffectiveDenial(withPublic); err != nil || snapshot == base {
+		t.Fatal("a new public prefix did not change the effective denial", err)
+	}
+}

@@ -91,42 +91,10 @@ func inventory() ([]netip.Prefix, string, error) {
 	return denialInventory(all)
 }
 
-// Freeze effective IPv4 denial rather than interface identities. IPv6 is
-// unconditionally dropped by the native packet filter. A new private adapter
-// whose complete prefix is already denied cannot expand guest access; a new
-// public prefix still changes the snapshot and retires the guest.
+// Freeze effective IPv4 denial rather than interface identities; see
+// netpolicy.EffectiveDenial.
 func denialInventory(all []netip.Prefix) ([]netip.Prefix, string, error) {
-	blocked, _, err := netpolicy.BlockedPrefixes(all)
-	if err != nil {
-		return nil, "", err
-	}
-	prefixes := make([]netip.Prefix, len(blocked))
-	for i, text := range blocked {
-		prefixes[i], err = netip.ParsePrefix(text)
-		if err != nil || !prefixes[i].Addr().Is4() || prefixes[i].Bits() == 0 {
-			return nil, "", errors.New("invalid effective host denial")
-		}
-	}
-	var effective []netip.Prefix
-	var canonical []string
-	for i, prefix := range prefixes {
-		covered := false
-		for j, outer := range prefixes {
-			if i != j && outer.Bits() < prefix.Bits() && outer.Contains(prefix.Addr()) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			effective = append(effective, prefix)
-			canonical = append(canonical, prefix.String())
-		}
-	}
-	if len(effective) == 0 || len(effective) > 128 {
-		return nil, "", errors.New("effective host denial exceeds bound")
-	}
-	hash := sha256.Sum256([]byte(strings.Join(canonical, "\n")))
-	return effective, hex.EncodeToString(hash[:]), nil
+	return netpolicy.EffectiveDenial(all)
 }
 
 // Baseline admission is metadata-only. Images are operator-managed; lifecycle

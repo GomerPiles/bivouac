@@ -37,3 +37,42 @@ func BlockedPrefixes(host []netip.Prefix) ([]string, string, error) {
 	hash := sha256.Sum256([]byte(strings.Join(identities, "\n")))
 	return result, hex.EncodeToString(hash[:]), nil
 }
+
+// EffectiveDenial reduces BlockedPrefixes to the prefixes no broader denial
+// already covers, and identifies that set. A new private adapter whose prefix
+// is already denied, such as another guest's switch, cannot expand guest
+// access and leaves the snapshot unchanged; a new public prefix changes it.
+// IPv6 is denied entirely elsewhere, so IPv6 addresses never change it.
+func EffectiveDenial(host []netip.Prefix) ([]netip.Prefix, string, error) {
+	blocked, _, err := BlockedPrefixes(host)
+	if err != nil {
+		return nil, "", err
+	}
+	prefixes := make([]netip.Prefix, len(blocked))
+	for i, text := range blocked {
+		prefixes[i], err = netip.ParsePrefix(text)
+		if err != nil || !prefixes[i].Addr().Is4() || prefixes[i].Bits() == 0 {
+			return nil, "", errors.New("invalid effective host denial")
+		}
+	}
+	var effective []netip.Prefix
+	var canonical []string
+	for i, prefix := range prefixes {
+		covered := false
+		for j, outer := range prefixes {
+			if i != j && outer.Bits() < prefix.Bits() && outer.Contains(prefix.Addr()) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			effective = append(effective, prefix)
+			canonical = append(canonical, prefix.String())
+		}
+	}
+	if len(effective) == 0 || len(effective) > 128 {
+		return nil, "", errors.New("effective host denial exceeds bound")
+	}
+	hash := sha256.Sum256([]byte(strings.Join(canonical, "\n")))
+	return effective, hex.EncodeToString(hash[:]), nil
+}
