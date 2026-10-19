@@ -594,6 +594,73 @@ upstream transport reasons above. Repeated `unsupported_request` or
 `cache upload not relayed` (`upload_limit`, `expired`) means the save went
 directly; `cache uploads abandoned` counts relays open at revocation or shutdown.
 
+### Cache validation fixture
+
+`tools/cache-validation` runs the official Actions cache code, pinned to a
+commit, in a guest. Credentials and action output stay there; it prints only
+fixed outcomes and numbers. It needs self-hosted runners, so this public
+repository has no workflow for it. Run one from a private repository on
+isolated scale sets, for example:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs: {mode: {required: true}, nonce: {required: true}}
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        scaleset: [bivouac-cache-validation-macos, bivouac-cache-validation-windows, bivouac-cache-validation-linux]
+    runs-on: '${{ matrix.scaleset }}'
+    timeout-minutes: 20
+    steps:
+      - uses: <owner>/bivouac/tools/cache-validation@<commit>
+        with: {mode: '${{ inputs.mode }}', nonce: '${{ inputs.nonce }}'}
+```
+
+Set each isolated provider's `scaleset` to its matching matrix entry. Scale-set
+routing uses that single name, without a `self-hosted` or OS label array. For
+REST JIT mode instead, set `[github].demand = "jit"`, give each provider a
+positive `idle_pool` and an isolated label array, and use that same array in
+`runs-on`, as described in "REST JIT fallback" above.
+
+Use a separate validation `BIVOUAC_HOME` on each host; a Windows validation
+home may contain both Windows and Linux providers. Never use the normal home
+or production labels, or run two homes against one native broker at once.
+Keep the provider-specific cache transport settings and enable the following
+for `save`, `restore`, `mixed`, `outage` and `interrupt`:
+
+```toml
+[cache]
+enabled = true
+release_proxy = true
+store_uploads = true
+# Omit max_object_mb and max_gb: defaults are 2 GiB per object and 20 GiB total.
+```
+
+- `save` uploads 24 and 192 MiB archives under a fresh nonce, covering a
+  single-request and a block upload. With `store_uploads`, the host must relay
+  and store both, with no fallbacks. `restore` in a later job with that nonce must then hit locally twice
+  with no misses; without `store_uploads`, both restores fill upstream.
+- `mixed` overlaps restores with new uploads.
+- `limited` requires `store_uploads = true` and a deliberately small limit:
+  set `[cache].max_object_mb = 16` only for this mode. Saves and restores still
+  pass, and both saves must increment the relayed-without-a-copy counter with
+  no stored uploads. Disabled upload storage fails validation. Finish the
+  isolated home's work with `bivouac off --wait` before changing the limit,
+  then restart it to load the new value. Remove the override and restart before
+  returning to normal validation with the default 2 GiB limit.
+- `outage` checks release hits, then waits up to two minutes for the isolated
+  controller to stop. Saves, restores and releases must still pass directly.
+  Stop only the isolated controller, after confirming its process.
+- `interrupt` requires `store_uploads`. It starts both saves through the relay
+  and waits for the isolated controller to stop; stop it once the controller
+  logs two `cache upload relayed` lines. At least one save must still be open
+  then, and both must finish directly and restore intact.
+- `fallback` expects caching disabled.
+- Every mode checks release downloads through fresh signed URLs.
+
 ## Cutover (after validation)
 
 Do not cut over while an assignment or recovery problem remains in
