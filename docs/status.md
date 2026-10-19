@@ -48,42 +48,19 @@ virtualization entitlement; macOS CI signs a test binary and has the
 framework validate every helper device combination (skipped where the host
 cannot virtualize).
 
-Isolated cold-boot validation: 12 successful macOS VM boots (three per condition,
-2 CPUs/4 GiB, caching and release proxy enabled), without runner registration.
-The original baseline's new one-upload fallback had median helper/cache
-preparation of 2.76 s versus 2.09 s for the old two-upload path. On a separately
-prepared baseline, verified helper reuse took 0.99 s versus 1.17 s for its
-old-path control. Overall startup medians did not improve; boot/readiness varied
-from 36.70 to 45.68 s and dominates the total. Host disk caches were retained.
-[Individual timings and methodology](macos-startup-benchmark.json) include the
-excluded failed verification attempt; successful samples all proved the intended
-helper mode and complete guest/record cleanup. Production configuration, mode
-and source image checks were unchanged.
+The guest LaunchAgent uses `ProcessType=Interactive`. Six interleaved cold-boot
+pairs on one host/image (2 CPUs/4 GiB, host disk caches retained) measured median
+boot-to-Aqua/script readiness of 26.47 s versus 44.16 s with the default class.
+Two fresh guests also passed registered ephemeral-runner smoke checks for Aqua,
+fresh state, child execution, exit propagation, file I/O, listener survival
+across an agent restart, and numeric start/completion telemetry. These checks do
+not establish full workload performance or an end-to-end runner speedup.
 
-The guest LaunchAgent now sets `ProcessType=Interactive`, targeting the
-low-priority I/O throttling observed before the agent reached Go main. Six
-interleaved cold-boot pairs (2 CPUs/4 GiB, full disk synchronization, identical
-agent binaries, equally prepared private image copies) reduced median
-boot-to-Aqua/script readiness from 44.16 s to 26.47 s: 17.69 s (40.1%).
-Interactive was faster in every pair; ranges were 39.92–48.97 s for default
-and 24.85–27.68 s for Interactive. Host disk caches were retained; registration
-and helper/cache preparation were outside those timings.
-[Individual measurements and methodology](macos-interactive-benchmark.json)
-retain every successful sample, including slower observations.
-
-Two additional fresh Interactive guests ran real ephemeral-runner smoke jobs:
-Aqua execution, fresh-guest state, child processes, exit propagation and file I/O
-passed. In both, the same official listener survived an agent restart, the
-start/completion hooks emitted numeric telemetry, and the listener exited zero
-after its job. All validation guests, records, image copies and registrations
-were removed; production configuration, mode and source image checks were
-unchanged. These smoke jobs do not establish complete workload performance.
-
-Tests only: manager JIT/listener stage logging, transport and partial-copy fault
-handling, cache failure fallback and optional container-pair reuse. Those paths
-were not part of the cold-boot comparison. These changes are not deployed to the
-installed controller or source baseline; no end-to-end registered-runner speedup
-has been established.
+Tests cover a single shared helper upload, partial-copy cleanup, cache failure
+fallback, container-pair helper preservation, and provider-independent manager
+JIT/listener stage logging. The simplified upload path has not been benchmarked
+on live guests. The LaunchAgent policy and startup changes are not deployed to
+the installed controller or source baseline.
 
 Open:
 
