@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,42 +157,5 @@ exit 7
 	job, err := os.ReadFile(filepath.Join(root, "bivouac", "job"))
 	if err != nil || string(job) != "run_id=123\nrepository=example/repository\njob=macos\n" {
 		t.Fatal("job identity changed", err)
-	}
-}
-
-type failedHelper struct {
-	*recorder
-	cleanupFails bool
-}
-
-func (f failedHelper) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
-	if strings.Contains(strings.Join(args, " "), "dd of="+guestHelper) {
-		return errors.New("synthetic partial copy failure")
-	}
-	if f.cleanupFails && len(args) >= 3 && args[len(args)-1] == guestHelper && args[len(args)-3] == "rm" {
-		return errors.New("synthetic cleanup failure")
-	}
-	return f.recorder.Run(ctx, args, stdin, stdout)
-}
-
-func TestPartialHelperInstallationFallsBackOnlyAfterRemoval(t *testing.T) {
-	for _, cleanupFails := range []bool{false, true} {
-		r := newRecorder()
-		p := newProvider(t, r)
-		writeMarker(t, p, "bivouac-macos-fixture")
-		p.rt = callRuntime{failedHelper{r, cleanupFails}}
-		err := p.StartRunner(context.Background(), "bivouac-macos-fixture", []byte("synthetic-jit"))
-		if (err != nil) != cleanupFails {
-			t.Fatal("partial helper cleanup outcome", err)
-		}
-		started := false
-		for _, call := range r.calls {
-			if strings.Contains(strings.Join(call, " "), guestPath+" start") {
-				started = true
-			}
-		}
-		if started == cleanupFails {
-			t.Fatal("JIT dispatched before partial helper removal")
-		}
 	}
 }

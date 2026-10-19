@@ -194,7 +194,7 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if c := t.Containers; c != nil {
 		cpu += c.CPU
 		mem += c.MemoryGB
-		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil)
+		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil, nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}

@@ -48,6 +48,20 @@ virtualization entitlement; macOS CI signs a test binary and has the
 framework validate every helper device combination (skipped where the host
 cannot virtualize).
 
+The guest LaunchAgent uses `ProcessType=Interactive`. Six interleaved cold-boot
+pairs on one host/image (2 CPUs/4 GiB, host disk caches retained) measured median
+boot-to-Aqua/script readiness of 26.47 s versus 44.16 s with the default class.
+Two fresh guests also passed registered ephemeral-runner smoke checks for Aqua,
+fresh state, child execution, exit propagation, file I/O, listener survival
+across an agent restart, and numeric start/completion telemetry. These checks do
+not establish full workload performance or an end-to-end runner speedup.
+
+Tests cover a single shared helper upload, partial-copy cleanup, cache failure
+fallback, container-pair helper preservation, and provider-independent manager
+JIT/listener stage logging. The simplified upload path has not been benchmarked
+on live guests. The LaunchAgent policy and startup changes are not deployed to
+the installed controller or source baseline.
+
 Open:
 
 - Production cutover to a baseline with the guest agent installed.
@@ -60,8 +74,9 @@ Open:
   need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
-- The Aqua session check, process-group launch, and cache bind to
-  `guest_host` are untested on a real host.
+- Native VM-helper process-group launch and the cache bind to `guest_host`
+  remain unverified on a real host; the guest agent's runner process lifetime
+  was checked separately above.
 
 ## Windows: App Sandbox (Windows guests)
 
@@ -161,6 +176,6 @@ invalidation and upstream change.
 
 Host and guest CPU, memory, disk, and (Windows) commit summaries appear in
 controller logs and job hooks as numeric-only reports. Validated live on
-Windows and Linux guests. On macOS a live job's report contains valid CPU and
-memory samples; completion summaries and cache hit/miss readback are not yet
-observed.
+Windows and Linux guests. On macOS real smoke jobs emitted numeric start and
+completion CPU, memory and disk summaries; cache hit/miss readback remains
+unverified.

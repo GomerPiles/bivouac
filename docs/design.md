@@ -313,13 +313,24 @@ startup intact. No detached logging process, extra service, host endpoint or
 workflow change is needed. Hook output on a lost guest may be unavailable, while
 its last retained report remains eligible for normal diagnostics.
 
-The macOS provider copies the native manager binary into each disposable clone as a private
-helper, independently of whether caching is enabled. Its listener wrapper starts
+The macOS provider uploads the current host binary once per disposable clone
+at `/tmp/bivouac-helper`, shared by telemetry, optional caching and the macOS
+side of optional container pairs. It removes the runtime leaf before uploading
+so a stale symlink cannot redirect the write into the baseline agent.
+The baseline agent need only match the guest protocol; helper delivery does
+not depend on its binary version or filesystem ownership.
+
+Its listener wrapper starts
 the official runner in the same Aqua session, records the actual listener PID
 for existing cancellation, preserves its exit code and joins sampling at exit.
 The existing shell hook still records job identity; the helper's job marker only
 starts numeric sampling. Partial helper installation is removed before falling
 back to the official listener. Optional telemetry errors cannot fail a job.
+An unavailable shared helper also disables optional cache setup; a cache failure
+removes only cache assets, preserving the helper used by telemetry or the relay.
+Container readiness installs the macOS helper once before relay startup and
+never overwrites it at runner start; its Linux companion receives its own Linux
+helper. No running guest agent, baseline or host binary is modified.
 It archives the optional report alongside the runner log; extraction validates
 and re-encodes numeric fields, skipping malformed reports while retaining logs.
 
@@ -442,6 +453,10 @@ path fits `sun_path` whatever the name.
   10 s after the command exits is reported as a failure, never as success.
   The agent accepts only the host's context ID, and its LaunchAgent abandons
   its process group, so an agent restart leaves a started runner alone.
+  Its LaunchAgent uses `ProcessType=Interactive`: the default process class
+  throttles low-priority I/O during boot, delaying agent startup and inherited
+  runner commands. The agent and runner remain in the auto-login user's Aqua
+  session with the same permissions and VM resource limits.
 - Ready: the agent runs `true`. Only an unreachable agent is retried; an
   agent of another protocol version names its own, and readiness fails at
   once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
@@ -484,6 +499,18 @@ path fits `sun_path` whatever the name.
 The runner package is baked into the baseline; `doctor` reports its version.
 A host-cached package copied at boot is a later option if baseline updates
 lag runner releases.
+
+Structured `startup stage` records use the daemon's redacted sink and
+host-monotonic durations, with provider and guest identity, fixed stage names,
+milliseconds and success even on failure. The manager records JIT generation
+and official listener readiness for every provider. The macOS provider adds
+clone, VM-helper launch, agent availability, script delivery, Aqua verification,
+helper upload, optional cache setup and JIT delivery; container pairs also time
+companion agent/helper preparation and DNS setup. No command arguments, stdin,
+guest output, credential material or raw errors enter these records. The sink
+is supplied at provider construction. Existing manager clone/boot/registration
+totals retain their meaning, and adoption repeats neither helper delivery nor
+registration. See [operations](operations.md) for stage definitions.
 
 ### Windows foundation and App Sandbox (experimental integration)
 

@@ -251,7 +251,7 @@ func (e env) vzCmd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs)
+	providers, err := buildProviders(ctx, cfg, store, e.layout.VMs, nil)
 	if err != nil {
 		return err
 	}

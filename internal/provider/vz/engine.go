@@ -135,13 +135,13 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	if err := p.waitVM(ctx, name); err != nil {
+	if err := p.startupStage(name, "agent_wait", func() error { return p.waitVM(ctx, name) }); err != nil {
 		return err
 	}
-	if err := p.installGuestScript(ctx, name); err != nil {
+	if err := p.startupStage(name, "script_install", func() error { return p.installGuestScript(ctx, name) }); err != nil {
 		return err
 	}
-	if err := p.checkSession(ctx, name); err != nil {
+	if err := p.startupStage(name, "aqua_session_check", func() error { return p.checkSession(ctx, name) }); err != nil {
 		return err
 	}
 	if p.cfg.Containers == nil {
@@ -151,33 +151,36 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err != nil || !a.Owned || !b.Owned {
 		return provider.ErrNotOwned
 	}
-	if err = p.waitVM(ctx, name+"-engine"); err != nil {
+	if err = p.startupStage(name+"-engine", "agent_wait", func() error { return p.waitVM(ctx, name+"-engine") }); err != nil {
 		return err
 	}
-	for _, f := range []struct{ name, path string }{{name, ""}, {name + "-engine", p.cfg.Containers.Helper}} {
-		path := f.path
-		if path == "" {
-			path, err = os.Executable()
-			if err != nil {
-				return err
-			}
-		}
-		file, err := os.Open(path)
+	if err = p.installGuestHelper(ctx, name); err != nil {
+		return err // The helper is mandatory for container isolation/readiness.
+	}
+	err = p.startupStage(name+"-engine", "helper_upload", func() error {
+		file, err := os.Open(p.cfg.Containers.Helper)
 		if err != nil {
 			return errors.New("open container guest helper")
 		}
-		_, err = p.output(ctx, f.name, []string{"install", "-m", "0600", "/dev/null", engine.GuestHelper}, nil)
+		defer func() { _ = file.Close() }()
+		_, err = p.output(ctx, name+"-engine", []string{"install", "-m", "0600", "/dev/null", engine.GuestHelper}, nil)
 		if err == nil {
-			_, err = p.output(ctx, f.name, []string{"dd", "of=" + engine.GuestHelper, "status=none"}, file)
+			_, err = p.output(ctx, name+"-engine", []string{"dd", "of=" + engine.GuestHelper, "status=none"}, file)
 		}
-		_ = file.Close()
 		if err != nil {
 			return errors.New("deliver private container helper")
 		}
-		if _, err = p.output(ctx, f.name, []string{"chmod", "0700", engine.GuestHelper}, nil); err != nil {
+		_, err = p.output(ctx, name+"-engine", []string{"chmod", "0700", engine.GuestHelper}, nil)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, h := range []struct{ name, helper string }{{name, guestHelper}, {name + "-engine", engine.GuestHelper}} {
+		if err = p.startupStage(h.name, "dns_setup", func() error {
+			_, err := p.output(ctx, h.name, []string{h.helper, "engine", "dns"}, nil)
 			return err
-		}
-		if _, err = p.output(ctx, f.name, []string{engine.GuestHelper, "engine", "dns"}, nil); err != nil {
+		}); err != nil {
 			return errors.New("configure public guest DNS")
 		}
 	}
@@ -239,7 +242,7 @@ func (p *Provider) engineHealthy(ctx context.Context, name string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	_, err = p.output(ctx, name, []string{engine.GuestHelper, "engine", "probe"}, nil)
+	_, err = p.output(ctx, name, []string{guestHelper, "engine", "probe"}, nil)
 	if err != nil {
 		// Both VMs run, are owned, and the policy holds: a failed probe is a
 		// guest agent transport failure. The relay retires the pair itself on

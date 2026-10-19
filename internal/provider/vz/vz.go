@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -50,6 +51,7 @@ type Provider struct {
 	records        *state.Store
 	checkIsolation func(context.Context) (vm.SoftnetOptions, error)
 	startRelay     func(context.Context, RelayPlan) (Process, error)
+	log            *slog.Logger
 
 	mu    sync.Mutex
 	procs map[string]Process // VM helper processes by VM name
@@ -59,8 +61,9 @@ type Provider struct {
 func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
 
 // New returns the provider for VMs in store (paths.Layout.VMs). rt may be
-// nil for the real VM runtime.
-func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime) (*Provider, error) {
+// nil for the real VM runtime. log is the caller's redacted sink; nil disables
+// startup timing records.
+func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime, log *slog.Logger) (*Provider, error) {
 	if !filepath.IsAbs(store) {
 		return nil, fmt.Errorf("VM store %q is not absolute", store)
 	}
@@ -71,7 +74,7 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the VM store path is
@@ -209,7 +212,9 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS stri
 	if err := machine.CheckGuest(m); err != nil {
 		return fmt.Errorf("baseline %q: %w", spec.Baseline, err)
 	}
-	if err := p.rt.Clone(ctx, spec.Baseline, spec.Name, vm.CloneOptions{CPU: spec.CPU, MemoryMiB: spec.MemoryMB}); err != nil {
+	if err := p.startupStage(spec.Name, "clone", func() error {
+		return p.rt.Clone(ctx, spec.Baseline, spec.Name, vm.CloneOptions{CPU: spec.CPU, MemoryMiB: spec.MemoryMB})
+	}); err != nil {
 		return err
 	}
 	meta, err := json.Marshal(spec.Meta)
@@ -320,7 +325,11 @@ func (p *Provider) startVM(ctx context.Context, name string, launch Launch, laun
 		sink = redact.NewWriter(&dropWriter{w: launchLog, remaining: launchLogLimit})
 	}
 	// The VM must outlive a controller restart, so it is not bound to ctx.
-	proc, err := p.rt.Start(context.WithoutCancel(ctx), name, launch, sink)
+	var proc Process
+	err := p.startupStage(name, "native_start", func() (err error) {
+		proc, err = p.rt.Start(context.WithoutCancel(ctx), name, launch, sink)
+		return err
+	})
 	if err != nil {
 		return err
 	}
@@ -422,19 +431,31 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	if err := p.installGuestHelper(ctx, name); err != nil {
-		// Telemetry is optional, but never execute a partially copied binary.
-		if _, cleanupErr := p.output(ctx, name, []string{"rm", "-f", guestHelper}, nil); cleanupErr != nil {
-			return errors.New("remove incomplete guest helper")
+	helperReady := true
+	// Container readiness already installed the shared macOS helper. Replacing
+	// it here could overwrite a binary the detached relay is executing.
+	if p.cfg.Containers == nil {
+		if err := p.installGuestHelper(ctx, name); err != nil {
+			helperReady = false
+			// Telemetry is optional, but never execute a partially copied binary.
+			if _, cleanupErr := p.output(ctx, name, []string{"rm", "-f", guestHelper}, nil); cleanupErr != nil {
+				return errors.New("remove incomplete guest helper")
+			}
 		}
 	}
 	if p.cache != nil {
-		if err := p.installCache(ctx, name); err != nil {
+		err := p.startupStage(name, "cache_setup", func() error {
+			if !helperReady {
+				return errors.New("guest helper unavailable")
+			}
+			return p.installCache(ctx, name)
+		})
+		if err != nil {
 			p.cache.GuestUnavailable(name)
 			p.cache.Revoke(name)
 			// Optional caching must not strand a healthy guest. Remove a partial
 			// adapter before starting the official runner on its normal paths.
-			if _, cleanupErr := p.output(ctx, name, []string{"rm", "-f", "/tmp/bivouac/cache-config.json", "/tmp/bivouac-cache-preload.cjs", "/tmp/bivouac-cache-client", "/tmp/bivouac-cache-env"}, nil); cleanupErr != nil {
+			if _, cleanupErr := p.output(ctx, name, []string{"rm", "-f", "/tmp/bivouac/cache-config.json", "/tmp/bivouac-cache-preload.cjs", "/tmp/bivouac-cache-env"}, nil); cleanupErr != nil {
 				return errors.New("remove incomplete guest cache adapter")
 			}
 		}
@@ -447,14 +468,16 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	if err != nil {
 		return err
 	}
-	out, err := p.guest(ctx, name, []string{guestPath, "start", dir}, bytes.NewReader(jit), statusOutputLimit)
-	if err != nil {
-		return err
-	}
-	if !strings.Contains(string(out), "started") {
-		return errors.New("guest bootstrap did not confirm start")
-	}
-	return nil
+	return p.startupStage(name, "jit_delivery", func() error {
+		out, err := p.guest(ctx, name, []string{guestPath, "start", dir}, bytes.NewReader(jit), statusOutputLimit)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(out), "started") {
+			return errors.New("guest bootstrap did not confirm start")
+		}
+		return nil
+	})
 }
 
 func (p *Provider) installCache(ctx context.Context, name string) error {
@@ -474,21 +497,12 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 			return err
 		}
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	f, err := os.Open(exe)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	// dd writes without echoing the binary or private bootstrap back to the host.
+	// dd writes the private bootstrap without echoing it back to the host.
 	for _, file := range []struct {
 		path  string
 		input io.Reader
 		mode  string
-	}{{"/tmp/bivouac-cache-preload.cjs", bytes.NewReader(cache.Preload()), "0600"}, {"/tmp/bivouac-cache-client", f, "0700"}, {"/tmp/bivouac/cache-config.json", bytes.NewReader(bootstrap), "0600"}} {
+	}{{"/tmp/bivouac-cache-preload.cjs", bytes.NewReader(cache.Preload()), "0600"}, {"/tmp/bivouac/cache-config.json", bytes.NewReader(bootstrap), "0600"}} {
 		if _, err := p.output(ctx, name, []string{"/usr/bin/install", "-m", "0600", "/dev/null", file.path}, nil); err != nil {
 			return errors.New("prepare private guest cache adapter")
 		}

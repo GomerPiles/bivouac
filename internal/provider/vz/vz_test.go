@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -247,7 +248,7 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 		writeTestManifest(t, filepath.Join(store, name), guestOS)
 	}
 	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, HostVMLimit: 2}
-	p, err := New("macos", cfg, "ctl-1", store, callRuntime{r})
+	p, err := New("macos", cfg, "ctl-1", store, callRuntime{r}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +258,8 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 func TestLifecycleArguments(t *testing.T) {
 	r := newRecorder()
 	p := newProvider(t, r)
+	var stageLog bytes.Buffer
+	p.log = slog.New(slog.NewJSONHandler(&stageLog, nil))
 	ctx := context.Background()
 	spec := provider.Spec{Name: "bivouac-macos-abc", Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "abc"}}
 	// Simulate the clone creating the directory before the marker is written.
@@ -288,6 +291,24 @@ func TestLifecycleArguments(t *testing.T) {
 	}
 	if err := p.StartRunner(ctx, spec.Name, []byte("secret-jit")); err != nil {
 		t.Fatal(err)
+	}
+	stages := map[string]bool{}
+	decoder := json.NewDecoder(&stageLog)
+	for decoder.More() {
+		var record struct {
+			Stage      string `json:"stage"`
+			DurationMS int64  `json:"duration_ms"`
+			Success    bool   `json:"success"`
+		}
+		if err := decoder.Decode(&record); err != nil || record.DurationMS < 0 || !record.Success {
+			t.Fatal("invalid startup stage outcome", err)
+		}
+		stages[record.Stage] = true
+	}
+	for _, stage := range []string{"clone", "native_start", "agent_wait", "script_install", "aqua_session_check"} {
+		if !stages[stage] {
+			t.Fatalf("missing %s timing", stage)
+		}
 	}
 	if got := r.stdin["Exec bivouac-macos-abc /tmp/bivouac-guest start /Users/admin/actions-runner"]; got != "secret-jit" {
 		t.Fatalf("JIT not delivered on stdin: %q", got)
@@ -476,7 +497,7 @@ func TestCheckNestedFollowsTheHost(t *testing.T) {
 // before it accepts a job whose guest could never start.
 func TestRuntimeRefusesStoreTooLongForAgentSockets(t *testing.T) {
 	store := filepath.Join(t.TempDir(), strings.Repeat("v", 100))
-	p, err := New("macos", config.VZ{}, "controller", store, nil)
+	p, err := New("macos", config.VZ{}, "controller", store, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
