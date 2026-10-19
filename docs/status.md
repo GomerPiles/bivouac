@@ -234,7 +234,9 @@ interval using existing kernel, fixed-task process/action and correlated
 PowerShell engine/console events. It preserves image pins and normal startup;
 missing channels and clock changes remain explicit unknowns. Local bounded-output,
 clock-change, identity-correlation and readiness-milestone tests pass. Live event
-attribution is pending; no further optimization is claimed.
+attribution is pending; no further optimization is claimed. Embedded image assets
+are byte-pinned with repository LF endings; ordinary-token `image-pins` reports
+the three script hashes, and a regression rejects CRLF drift before a live build.
 No Windows runner-listening/job timing, manager integration, input or networking/
 isolation validation has occurred. Production CI is unchanged.
 See [`hcs-spike.md`](hcs-spike.md).

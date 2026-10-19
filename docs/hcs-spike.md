@@ -547,6 +547,16 @@ requires finer startup tracing before changing the boot mechanism.
 Sanitation and validation pins require rebuilding the prepared image when the
 fixed scripts change.
 
+## Embedded-script pin preflight
+
+Run `hcs-spike.exe image-pins` without elevation to obtain only the public
+sanitation, validation and autologon script hashes. Save these with a captured
+build and compare them before arranging a later trial's elevation. The image
+manifest still validates all pins in the elevated trial. Keep the repository's
+LF bytes: a CRLF rewrite can be invisible in Git's normalized diff but changes
+`go:embed` bytes and invalidates a prepared image. Regression coverage rejects
+that drift; no pin normalization or compatibility bypass is applied.
+
 ## Read-only boot event attribution
 
 `trial --boot-events` reuses an existing compatible prepared image, proves normal

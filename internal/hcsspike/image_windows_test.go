@@ -513,3 +513,21 @@ func TestGuestBootCheckpointsRequireOrderedBoundedUptime(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPreparedImageAssetsUseRepositoryLFBytes(t *testing.T) {
+	// Pins bind bytes, not normalized source text. CRLF edits can be invisible in
+	// Git's normalized diff while invalidating an existing image's provenance.
+	for name, script := range map[string]string{"sanitation": imageSanitize, "validation": guestValidate, "autologon": autologonSecret} {
+		if strings.ContainsRune(script, '\r') {
+			t.Error("restore repository LF bytes before building pinned image assets", name)
+		}
+	}
+	var out bytes.Buffer
+	if err := RunCLI(context.Background(), []string{"image-pins"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var pins map[string]string
+	if json.Unmarshal(out.Bytes(), &pins) != nil || len(pins) != 3 || pins["sanitation_sha256"] != sanitationHash() || pins["validation_sha256"] != validationHash() || pins["autologon_sha256"] != autologonHash() {
+		t.Fatal("ordinary-token source-pin preflight differs")
+	}
+}

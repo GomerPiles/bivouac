@@ -820,7 +820,11 @@ Publication uses an exclusive owned build directory under a protected sibling
 `HCS-Images` root. Only a clean, sanitized, validated and confirmed-absent source
 can be copied. The runtime config precedes an atomically published, hash-pinned
 manifest binding image, flat parent, build owner, guest identity and public asset
-hashes, including the exact sanitation implementation. Interrupted unpublished
+hashes, including the exact sanitation implementation. Embedded image scripts
+must use the repository's LF bytes: Git-normalized source equality does not imply
+byte-pin equality. An ordinary-token `image-pins` command exposes only the three
+public embedded-script hashes for comparison with the captured build before
+arranging elevation; a regression rejects CRLF drift. Interrupted unpublished
 output is removable only with its exact owner marker; published images are never removed by trial cleanup. Parent resolution
 is checked through read-only virtdisk metadata. A session hashes and pins both
 image files once with handles denying writes/deletion until all trials finish.

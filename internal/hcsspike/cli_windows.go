@@ -18,6 +18,13 @@ import (
 )
 
 func RunCLI(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 1 && args[0] == "image-pins" {
+		return json.NewEncoder(out).Encode(struct {
+			Sanitation string `json:"sanitation_sha256"`
+			Validation string `json:"validation_sha256"`
+			Autologon  string `json:"autologon_sha256"`
+		}{sanitationHash(), validationHash(), autologonHash()})
+	}
 	if len(args) == 1 && args[0] == "check" {
 		result, err := Check()
 		if err != nil {
@@ -26,7 +33,7 @@ func RunCLI(ctx context.Context, args []string, out io.Writer) error {
 		return json.NewEncoder(out).Encode(result)
 	}
 	if len(args) == 0 || (args[0] != "plan" && args[0] != "headroom" && args[0] != "trial" && args[0] != "cleanup" && args[0] != "build-image") {
-		return errors.New("usage: hcs-spike check | plan|headroom|trial|build-image|cleanup --config <file>")
+		return errors.New("usage: hcs-spike check|image-pins | plan|headroom|trial|build-image|cleanup --config <file>")
 	}
 	fs := flag.NewFlagSet("hcs-spike", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
