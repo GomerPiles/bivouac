@@ -52,8 +52,13 @@ type Topology struct {
 	Processor Processor `json:"Processor"`
 }
 
+// Memory is physically backed unless AllowOvercommit makes it virtual-address
+// backed. With EnableDeferredCommit, the host commits guest memory as the guest
+// touches it rather than at start.
 type Memory struct {
-	SizeInMB uint64 `json:"SizeInMB"`
+	SizeInMB             uint64 `json:"SizeInMB"`
+	AllowOvercommit      bool   `json:"AllowOvercommit,omitempty"`
+	EnableDeferredCommit bool   `json:"EnableDeferredCommit,omitempty"`
 }
 
 type Processor struct {

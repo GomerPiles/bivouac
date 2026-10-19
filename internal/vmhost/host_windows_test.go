@@ -1,0 +1,265 @@
+//go:build windows
+
+package vmhost
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/GomerPiles/bivouac/internal/hcs"
+	"golang.org/x/sys/windows"
+)
+
+// fakeNative models HCS names, owners and lifetimes without Hyper-V.
+type fakeNative struct {
+	mu        sync.Mutex
+	t         *testing.T
+	host      *Host
+	systems   map[string]*fakeSystem
+	createErr error
+	owner     string // overrides the owner HCS reports, if set
+	lingers   int    // absence polls before a terminated guest disappears
+	created   []string
+	sawIntent bool
+}
+
+type fakeSystem struct {
+	n      *fakeNative
+	name   string
+	props  hcs.Properties
+	closed bool
+}
+
+func (n *fakeNative) Open(_ context.Context, name string) (system, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	s, ok := n.systems[name]
+	if !ok {
+		return nil, hcs.ErrNotFound
+	}
+	if s.props.State == hcs.StateStopped && n.lingers > 0 {
+		n.lingers--
+	} else if s.props.State == hcs.StateStopped {
+		delete(n.systems, name)
+		return nil, hcs.ErrNotFound
+	}
+	return &fakeSystem{n: n, name: name, props: s.props}, nil
+}
+
+func (n *fakeNative) Create(_ context.Context, name string, doc hcs.ComputeSystem) (system, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var r record
+	if err := n.host.read(recordName(name), &r); err != nil || r.Phase != phaseDispatched {
+		n.t.Error("create dispatched before its intent was journalled")
+	}
+	n.sawIntent = true
+	if n.createErr != nil {
+		return nil, n.createErr
+	}
+	owner := doc.Owner
+	if n.owner != "" {
+		owner = n.owner
+	}
+	s := &fakeSystem{n: n, name: name, props: hcs.Properties{ID: name, Owner: owner, SystemType: hcs.SystemTypeVM, State: "Created"}}
+	n.systems[name] = s
+	n.created = append(n.created, name)
+	return s, nil
+}
+
+func (n *fakeNative) GrantVMAccess(string, string) error { return nil }
+func (n *fakeNative) CreateGuestStateFiles(guestState, runtimeState string) error {
+	return errors.Join(os.WriteFile(guestState, nil, 0o600), os.WriteFile(runtimeState, nil, 0o600))
+}
+func (n *fakeNative) CreateDisk(child, _ string) error {
+	return os.WriteFile(child, []byte("disk"), 0o600)
+}
+func (n *fakeNative) CheckImage(string) error { return nil }
+
+func (s *fakeSystem) Properties(context.Context) (hcs.Properties, error) {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	if live, ok := s.n.systems[s.name]; ok {
+		return live.props, nil
+	}
+	return hcs.Properties{}, errors.New("compute system gone")
+}
+func (s *fakeSystem) Start(context.Context) error {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	live := s.n.systems[s.name]
+	live.props.State, live.props.RuntimeID = hcs.StateRunning, "11111111-2222-3333-4444-555555555555"
+	return nil
+}
+func (s *fakeSystem) Terminate(context.Context) error {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	s.n.systems[s.name].props.State = hcs.StateStopped
+	return nil
+}
+func (s *fakeSystem) Modify(context.Context, hcs.ModifyRequest) error { return nil }
+func (s *fakeSystem) Close()                                          { s.closed = true }
+
+func fixture(t *testing.T) (*Host, *fakeNative) {
+	t.Helper()
+	n := &fakeNative{t: t, systems: map[string]*fakeSystem{}}
+	h, err := newHost(t.TempDir(), n, "bivouac-vmhost:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	n.host = h
+	return h, n
+}
+
+func entries(t *testing.T, h *Host) []string {
+	t.Helper()
+	list, err := fs.ReadDir(h.root.FS(), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range list {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+func TestCreateJournalsFirstAndDestroyLeavesNothing(t *testing.T) {
+	h, n := fixture(t)
+	g, err := h.Create(t.Context(), validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !n.sawIntent || g.RuntimeID == "" || h.Running(t.Context(), g) != nil {
+		t.Fatal("guest not created, journalled and running")
+	}
+	for _, file := range []string{diskFile, guestStateFile, runtimeStateFile, "owner.json"} {
+		if _, err := os.Stat(filepath.Join(h.dir, g.Name, file)); err != nil {
+			t.Fatal("guest storage missing", file)
+		}
+	}
+	n.lingers = 3
+	if err = h.Destroy(t.Context(), g); err != nil {
+		t.Fatal(err)
+	}
+	if left := entries(t, h); len(left) != 0 {
+		t.Fatal("destroy left storage or journal", left)
+	}
+}
+
+func TestCreateRefusesAnExistingNativeName(t *testing.T) {
+	h, n := fixture(t)
+	n.systems["bivouac-lab-1"] = &fakeSystem{n: n, name: "bivouac-lab-1", props: hcs.Properties{ID: "bivouac-lab-1", State: hcs.StateRunning}}
+	if _, err := h.Create(t.Context(), validSpec()); err == nil {
+		t.Fatal("replaced an existing compute system")
+	}
+	if left := entries(t, h); len(left) != 0 || n.systems["bivouac-lab-1"].props.State != hcs.StateRunning {
+		t.Fatal("refusal touched the foreign guest or journalled it", left)
+	}
+}
+
+func TestDefiniteCreateFailureRemovesOnlyItsStorage(t *testing.T) {
+	h, n := fixture(t)
+	n.createErr = &hcs.Error{Op: "HcsCreateComputeSystem", Code: 0x80070005}
+	if _, err := h.Create(t.Context(), validSpec()); err == nil {
+		t.Fatal("failed create reported success")
+	}
+	if left := entries(t, h); len(left) != 0 {
+		t.Fatal("definite failure retained storage", left)
+	}
+}
+
+func TestUnknownCreateOutcomeIsRetainedAndNeverReplayed(t *testing.T) {
+	h, n := fixture(t)
+	n.createErr = &hcs.Error{Op: "HcsCreateComputeSystem", Code: uint32(windows.HCS_E_OPERATION_TIMEOUT)}
+	if _, err := h.Create(t.Context(), validSpec()); err == nil {
+		t.Fatal("unknown create reported success")
+	}
+	var r record
+	if err := h.read(recordName("bivouac-lab-1"), &r); err != nil || r.Phase != phaseDispatched {
+		t.Fatal("unknown outcome not retained", r.Phase, err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "bivouac-lab-1", diskFile)); err != nil {
+		t.Fatal("storage of a possibly running guest was removed")
+	}
+	// A later VM host settles it: the name is absent, so storage is removed.
+	n.createErr = nil
+	if err := h.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if left := entries(t, h); len(left) != 0 || len(n.created) != 0 {
+		t.Fatal("recovery replayed create or retained storage", left, n.created)
+	}
+}
+
+func TestForeignOwnerIsNeverStoppedOrDeleted(t *testing.T) {
+	h, n := fixture(t)
+	n.owner = "someone-else"
+	if _, err := h.Create(t.Context(), validSpec()); !errors.Is(err, ErrForeign) {
+		t.Fatal("foreign owner accepted", err)
+	}
+	if s := n.systems["bivouac-lab-1"]; s == nil || s.props.State == hcs.StateStopped {
+		t.Fatal("foreign guest was stopped")
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "bivouac-lab-1", diskFile)); err != nil {
+		t.Fatal("storage of an unproven guest was removed")
+	}
+	if err := h.Recover(t.Context()); !errors.Is(err, ErrForeign) {
+		t.Fatal("recovery bypassed ownership", err)
+	}
+}
+
+func TestRecoverTerminatesOurSurvivorsAndWaitsForAbsence(t *testing.T) {
+	h, n := fixture(t)
+	g, err := h.Create(t.Context(), validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.system.Close() // the earlier VM host's handle is gone
+	n.lingers = 2
+	if err = h.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if left := entries(t, h); len(left) != 0 || len(n.systems) != 0 {
+		t.Fatal("survivor not settled", left)
+	}
+}
+
+func TestAbsenceIsRequiredBeforeStorageIsRemoved(t *testing.T) {
+	h, n := fixture(t)
+	g, err := h.Create(t.Context(), validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.lingers = 1 << 30
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if err = h.Destroy(ctx, g); err == nil {
+		t.Fatal("destroy succeeded while the guest was still present")
+	}
+	if _, err = os.Stat(filepath.Join(h.dir, g.Name, diskFile)); err != nil {
+		t.Fatal("storage removed before absence was confirmed")
+	}
+}
+
+func TestRecoverIgnoresUnrelatedFiles(t *testing.T) {
+	h, _ := fixture(t)
+	for _, name := range []string{"daemon.lock", "notes.json", "bivouac-x.json.new"} {
+		if err := os.WriteFile(filepath.Join(h.dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.Recover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries(t, h)) != 3 {
+		t.Fatal("recovery touched unrelated files")
+	}
+}

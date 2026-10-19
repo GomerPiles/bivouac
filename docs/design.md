@@ -25,6 +25,7 @@ internal/netpolicy   IPv4 egress denials shared by Windows-hosted providers
 internal/winhost     Windows host checks: protected storage, private staging, system OpenSSH
 internal/hcs         typed Host Compute Service binding for direct Windows guests
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
+internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
 internal/redact      credential redaction applied at every sink
