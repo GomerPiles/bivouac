@@ -347,7 +347,7 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 		done()
 		return fail("ssh dial", err)
 	}
-	client, fingerprint, err := winguest.Connect(sshCtx, transport, *lab.guestUser, identity, verify)
+	client, fingerprint, err := winguest.Connect(sshCtx, transport, *lab.guestUser, identity, func(string) error { return verify() })
 	done()
 	if err != nil {
 		_ = transport.Close()

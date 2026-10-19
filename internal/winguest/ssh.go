@@ -42,9 +42,10 @@ func (i *Identity) Clear() { clear(i.private) }
 
 // Connect authenticates over an HvSocket stream to the guest's SSH service.
 // The stream's address is bound to one guest partition by the hypervisor, so
-// the first host key is accepted once verify reproves that partition; its
-// SHA-256 fingerprint is returned so callers can pin and compare it.
-func Connect(ctx context.Context, transport net.Conn, user string, id *Identity, verify func() error) (*ssh.Client, string, error) {
+// a host key is accepted once verify reproves that partition. verify receives
+// the key's SHA-256 fingerprint: the first connection records it, and later
+// connections must present the same key.
+func Connect(ctx context.Context, transport net.Conn, user string, id *Identity, verify func(fingerprint string) error) (*ssh.Client, string, error) {
 	stop := context.AfterFunc(ctx, func() { _ = transport.Close() })
 	defer stop()
 	if d, ok := ctx.Deadline(); ok {
@@ -58,10 +59,10 @@ func Connect(ctx context.Context, transport net.Conn, user string, id *Identity,
 		User: user,
 		Auth: []ssh.AuthMethod{ssh.PublicKeys(id.Signer)},
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-			if verifyErr = verify(); verifyErr != nil {
+			sum := sha256.Sum256(key.Marshal())
+			if verifyErr = verify(hex.EncodeToString(sum[:])); verifyErr != nil {
 				return verifyErr
 			}
-			sum := sha256.Sum256(key.Marshal())
 			fingerprint = hex.EncodeToString(sum[:])
 			return nil
 		},

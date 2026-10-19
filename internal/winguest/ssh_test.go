@@ -44,7 +44,7 @@ func serve(t *testing.T, conn net.Conn, allowed ssh.PublicKey) {
 	}()
 }
 
-func connectFixture(t *testing.T, authorize bool, verify func() error) (string, error) {
+func connectFixture(t *testing.T, authorize bool, verify func(string) error) (string, error) {
 	t.Helper()
 	id, err := NewIdentity()
 	if err != nil {
@@ -96,20 +96,20 @@ func tcpPair(t *testing.T) (net.Conn, net.Conn) {
 }
 
 func TestConnectReportsOnlyTheFailedStage(t *testing.T) {
-	if fingerprint, err := connectFixture(t, true, func() error { return nil }); err != nil || len(fingerprint) != 64 {
+	if fingerprint, err := connectFixture(t, true, func(string) error { return nil }); err != nil || len(fingerprint) != 64 {
 		t.Fatal("authorized key refused", fingerprint, err)
 	}
-	if _, err := connectFixture(t, false, func() error { return nil }); !errors.Is(err, ErrSSHRejected) {
+	if _, err := connectFixture(t, false, func(string) error { return nil }); !errors.Is(err, ErrSSHRejected) {
 		t.Fatal("rejected key misclassified", err)
 	}
 	gone := errors.New("guest no longer running")
-	if _, err := connectFixture(t, true, func() error { return gone }); !errors.Is(err, ErrSSHHostKey) || !errors.Is(err, gone) {
+	if _, err := connectFixture(t, true, func(string) error { return gone }); !errors.Is(err, ErrSSHHostKey) || !errors.Is(err, gone) {
 		t.Fatal("unverified partition accepted", err)
 	}
 	host, guest := net.Pipe()
 	_ = guest.Close()
 	id, _ := NewIdentity()
-	if _, _, err := Connect(t.Context(), host, "ciuser", id, func() error { return nil }); !errors.Is(err, ErrSSHHandshake) {
+	if _, _, err := Connect(t.Context(), host, "ciuser", id, func(string) error { return nil }); !errors.Is(err, ErrSSHHandshake) {
 		t.Fatal("transport loss misclassified", err)
 	}
 	for _, err := range []error{ErrSSHRejected, ErrSSHHostKey, ErrSSHHandshake, ErrSSHAfterHostKey} {
