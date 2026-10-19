@@ -10,7 +10,7 @@ security model, and durable decisions. Keep it aligned with the code.
 ```
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
-internal/provider    provider contract; vz/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
+internal/provider    provider contract; vz/ (macOS), appsandbox/, crosvm/ and hcsvm/ (Windows host experiments), fake/
 internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
@@ -754,6 +754,31 @@ connection: info, create, status, destroy or list.
   every manager budgets against the same host.
 - A create whose outcome is unknown keeps its reservation until a later VM
   host's Recover settles it.
+
+The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
+
+- **Create** asks the VM host to create, start and GPU-assign the guest. It
+  labels the guest with the controller and instance IDs, which Status and
+  List check. The VM host returns only this account's guests. **Stop** and
+  **Delete** both destroy the disposable guest.
+- **Guest sessions:** each session generates an in-memory SSH identity and
+  deploys it through the image's guest agent, whose connection stays open.
+  It then authenticates SSH over HvSocket.
+  - The guest's host key fingerprint is public, and is pinned beside
+    manager state. A manager that reconnects, for example after a restart,
+    refuses a different key.
+  - A transport failure drops the session, and the next probe reconnects.
+    These failures are retryable for the manager's bounded grace;
+    authentication and host-key failures are terminal.
+- **Readiness** delivers files by scp to fixed names: first the shared
+  winrunner preflight, then its control script, the configuration and this
+  executable as the guest adapter. Runner status and diagnostics call the
+  adapter directly, without PowerShell, because status runs every few
+  seconds.
+- **JIT** bytes travel only on SSH stdin.
+- **Not yet:** WaitReady refuses a guest without a network lease, because its
+  runner could not reach GitHub. The download cache is not yet supported for
+  these guests.
 
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the

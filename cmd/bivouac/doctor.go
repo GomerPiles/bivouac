@@ -102,6 +102,18 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			}
 			continue
 		}
+		if p.Type == "hcs" {
+			if err := checkVMHost(ctx, *p.HCS); err != nil {
+				add("FAIL", "hcs "+name, err.Error())
+			} else {
+				add("PASS", "hcs "+name, "VM host serving image "+p.HCS.Image+" within its limits; no VM started")
+			}
+			add("WARN", "Windows validation", "experimental: VM host networking, runner lifecycle and GitHub job checks remain required")
+			if p.HCS.CPU > host.CPUs-cfg.Budget.ReserveCPU || (host.MemoryBytes > 0 && p.HCS.MemoryGB > int(host.MemoryBytes>>30)-cfg.Budget.ReserveMemoryGB) {
+				add("FAIL", "budget "+name, "guest resources exceed host capacity after reservations")
+			}
+			continue
+		}
 		if p.Type != "vz" {
 			add("WARN", "provider "+name, "type "+p.Type+" is not implemented on this host")
 			continue

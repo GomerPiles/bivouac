@@ -174,15 +174,17 @@ Desktop validation takes about 11 s. Its own console, GPU and render waits
 account for about 5 s of that; the rest is PowerShell work in the image.
 
 Built since, covered by tests only: the VM host's authorized pipe API, the
-optional service and its install and control commands. A real named-pipe
+optional service and its install and control commands, and the `hcs` provider.
+The provider adopts guests by label, pins host keys, reconnects after transport
+loss and delivers files by scp. A real named-pipe
 test covers caller identification, refusal of anonymous callers and refusal
 of an unprivileged server. The service has not yet been installed live.
 
 Open:
 
 - Installing and running the VM host service live.
-- The provider.
-- Networking at creation.
+- Networking at creation; until then the provider refuses readiness.
+- The provider running live.
 - The image factory.
 - The warm spare.
 - Runner listening and jobs.

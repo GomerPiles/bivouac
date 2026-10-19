@@ -173,6 +173,13 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 				return nil, err
 			}
 			out[name] = lp
+		case "hcs":
+			hp, err := buildHCSProvider(name, *p.HCS, store)
+			if err != nil {
+				closeProviders(out)
+				return nil, err
+			}
+			out[name] = hp
 		case "appsandbox":
 			wp, err := buildWindowsProvider(ctx, name, *p.AppSandbox, store)
 			if err != nil {

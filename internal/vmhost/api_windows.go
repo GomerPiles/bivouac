@@ -67,6 +67,18 @@ type GuestInfo struct {
 	State     string            `json:"state"`
 	TimingsMS map[string]int64  `json:"timings_ms,omitempty"`
 	Labels    map[string]string `json:"labels,omitempty"`
+	// Network is the guest's isolated endpoint, or nil while the VM host
+	// attaches none.
+	Network *NetworkLease `json:"network,omitempty"`
+}
+
+// NetworkLease is the static IPv4 configuration the guest must apply to the
+// adapter with MAC.
+type NetworkLease struct {
+	Address string `json:"address"`
+	Gateway string `json:"gateway"`
+	Prefix  int    `json:"prefix"`
+	MAC     string `json:"mac"`
 }
 
 // Info reports the VM host's identity and limits. Running counts every

@@ -334,6 +334,30 @@ compute and network services must already be running.
 The service logs to `vmhost.log` in its root. Any guest left by an earlier VM
 host is settled when it next starts.
 
+The manager's provider then names one of the VM host's images. `guest_name`
+and `guest_user` are that prepared image's Windows computer name and console
+user:
+
+```toml
+[providers.windows]
+type = "hcs"
+labels = ["self-hosted", "Windows", "X64", "bivouac-windows-hcs"]
+idle_pool = 1
+
+[providers.windows.hcs]
+experimental = true
+image = "windows"
+guest_name = "<image computer name>"
+guest_user = "ciuser"
+cpu = 4
+memory_gb = 8
+gpu = true
+runner_dir = 'C:\actions-runner'
+```
+
+`bivouac doctor` checks that the VM host is serving this image within its
+limits. The provider cannot run jobs until the VM host attaches networking.
+
 ## Direct HCS lab batch
 
 `TestLabBatch` in `internal/vmhost` boots disposable guests from an existing

@@ -8,7 +8,11 @@
 package winrunner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
+	"os"
 	"strings"
 )
 
@@ -60,4 +64,25 @@ func instanceID(name string) (string, error) {
 		return "", errors.New("invalid managed runner instance ID")
 	}
 	return id, nil
+}
+
+// VerifyArchive checks a runner package before it is sent to a guest.
+func VerifyArchive(path, expected string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return errors.New("runner archive unavailable")
+	}
+	defer func() { _ = f.Close() }()
+	stat, err := f.Stat()
+	if err != nil || !stat.Mode().IsRegular() || stat.Size() > 512<<20 {
+		return errors.New("invalid bounded runner archive")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return errors.New("read runner archive")
+	}
+	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected) {
+		return errors.New("runner archive hash differs")
+	}
+	return nil
 }

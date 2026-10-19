@@ -89,7 +89,7 @@ type Budget struct {
 // Provider is one guest type on one virtualization engine. Each provider has
 // exactly one scale set (or JIT label set).
 type Provider struct {
-	// Type is the engine: "vz" (macOS Virtualization.framework), experimental "appsandbox" or "crosvm".
+	// Type is the engine: "vz" (macOS Virtualization.framework), experimental "appsandbox", "crosvm" or "hcs".
 	Type string `toml:"type"`
 	// ScaleSet is the scale set name, which is always one of its labels.
 	ScaleSet string `toml:"scaleset"`
@@ -106,6 +106,24 @@ type Provider struct {
 	VZ         *VZ         `toml:"vz"`
 	AppSandbox *AppSandbox `toml:"appsandbox"`
 	Crosvm     *Crosvm     `toml:"crosvm"`
+	HCS        *HCS        `toml:"hcs"`
+}
+
+// HCS runs Windows guests through bivouac's own VM host. Image names one of
+// the VM host's administrator-configured images; GuestName and GuestUser are
+// that prepared image's Windows computer name and console user.
+type HCS struct {
+	Experimental  bool   `toml:"experimental"`
+	Image         string `toml:"image"`
+	GuestName     string `toml:"guest_name"`
+	GuestUser     string `toml:"guest_user"`
+	CPU           int    `toml:"cpu"`
+	MemoryGB      int    `toml:"memory_gb"`
+	LazyMemory    bool   `toml:"lazy_memory"`
+	GPU           bool   `toml:"gpu"`
+	RunnerDir     string `toml:"runner_dir"`
+	RunnerArchive string `toml:"runner_archive"`
+	RunnerSHA256  string `toml:"runner_sha256"`
 }
 
 type Crosvm struct {
@@ -430,7 +448,7 @@ func (c *Config) Validate() error {
 		}
 		switch p.Type {
 		case "crosvm":
-			if p.Crosvm == nil || p.VZ != nil || p.AppSandbox != nil {
+			if p.Crosvm == nil || p.VZ != nil || p.AppSandbox != nil || p.HCS != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only crosvm settings are required", name))
 				continue
 			}
@@ -454,8 +472,32 @@ func (c *Config) Validate() error {
 			if c.Cache.Enabled && !c.Cache.loopback() {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
+		case "hcs":
+			if p.HCS == nil || p.VZ != nil || p.Crosvm != nil || p.AppSandbox != nil {
+				errs = append(errs, fmt.Errorf("provider %q: only [providers.%s.hcs] is required", name, name))
+				continue
+			}
+			h := p.HCS
+			if !h.Experimental {
+				errs = append(errs, fmt.Errorf("provider %q: hcs requires experimental = true until live validation is complete", name))
+			}
+			if !nameRE.MatchString(h.Image) || !nameRE.MatchString(h.GuestName) || len(h.GuestName) > 15 || !nameRE.MatchString(h.GuestUser) {
+				errs = append(errs, fmt.Errorf("provider %q: hcs needs a VM host image name and the image's guest name (at most 15 characters) and user", name))
+			}
+			if h.CPU < 1 || h.CPU > 64 || h.MemoryGB < 1 || h.MemoryGB > 256 {
+				errs = append(errs, fmt.Errorf("provider %q: hcs requires explicit CPU (1-64) and memory_gb (1-256)", name))
+			}
+			if !windowsPath(h.RunnerDir) || (h.RunnerArchive != "" && !windowsPath(h.RunnerArchive)) {
+				errs = append(errs, fmt.Errorf("provider %q: hcs paths must be absolute local Windows paths", name))
+			}
+			if (h.RunnerArchive == "") != (h.RunnerSHA256 == "") || (h.RunnerSHA256 != "" && (len(h.RunnerSHA256) != 64 || strings.Trim(h.RunnerSHA256, "0123456789abcdefABCDEF") != "")) {
+				errs = append(errs, fmt.Errorf("provider %q: runner_archive requires its SHA-256", name))
+			}
+			if c.Cache.Enabled {
+				errs = append(errs, fmt.Errorf("provider %q: the download cache is not yet supported for hcs guests", name))
+			}
 		case "appsandbox":
-			if p.AppSandbox == nil || p.VZ != nil || p.Crosvm != nil {
+			if p.AppSandbox == nil || p.VZ != nil || p.Crosvm != nil || p.HCS != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only [providers.%s.appsandbox] is required", name, name))
 				continue
 			}
@@ -484,6 +526,9 @@ func (c *Config) Validate() error {
 			}
 			if p.AppSandbox != nil {
 				errs = append(errs, fmt.Errorf("provider %q: appsandbox settings do not belong to vz", name))
+			}
+			if p.HCS != nil {
+				errs = append(errs, fmt.Errorf("provider %q: hcs settings do not belong to vz", name))
 			}
 			if p.VZ == nil {
 				errs = append(errs, fmt.Errorf("provider %q: [providers.%s.vz] is required", name, name))

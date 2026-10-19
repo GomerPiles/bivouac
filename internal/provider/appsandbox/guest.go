@@ -2,9 +2,7 @@ package appsandbox
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -90,7 +88,7 @@ func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) 
 		if !filepath.IsAbs(opts.RunnerArchive) || len(opts.RunnerSHA256) != 64 {
 			return nil, errors.New("runner archive requires an absolute path and SHA-256")
 		}
-		if err := verifyArchive(opts.RunnerArchive, opts.RunnerSHA256); err != nil {
+		if err := winrunner.VerifyArchive(opts.RunnerArchive, opts.RunnerSHA256); err != nil {
 			return nil, err
 		}
 	} else if opts.RunnerSHA256 != "" {
@@ -103,25 +101,6 @@ func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) 
 		return nil, err
 	}
 	return &SSHGuest{opts: opts, commands: commands}, nil
-}
-func verifyArchive(path, expected string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return errors.New("runner archive unavailable")
-	}
-	defer func() { _ = f.Close() }()
-	stat, err := f.Stat()
-	if err != nil || !stat.Mode().IsRegular() || stat.Size() > 512<<20 {
-		return errors.New("invalid bounded runner archive")
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		return errors.New("read runner archive")
-	}
-	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected) {
-		return errors.New("runner archive hash differs")
-	}
-	return nil
 }
 func (g *SSHGuest) base(l Lease, scp bool) ([]string, error) {
 	if !l.SSH.ForwardReady() || !identifier(l.SSH.User, 32) || l.Record.NativeName == "" {
@@ -283,7 +262,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		return err
 	}
 	if g.opts.RunnerArchive != "" {
-		if err := verifyArchive(g.opts.RunnerArchive, g.opts.RunnerSHA256); err != nil {
+		if err := winrunner.VerifyArchive(g.opts.RunnerArchive, g.opts.RunnerSHA256); err != nil {
 			return err
 		}
 		if err := g.copy(ctx, l, g.opts.RunnerArchive, "bivouac-runner.zip"); err != nil {
