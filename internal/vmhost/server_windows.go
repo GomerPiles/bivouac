@@ -42,6 +42,7 @@ type owned struct {
 	guest    *Guest
 	cpu      uint32
 	memoryMB uint64
+	labels   map[string]string
 	busy     bool // a request is operating on it
 }
 
@@ -170,7 +171,7 @@ func (s *Server) list(sid string) Response {
 	guests := []GuestInfo{}
 	for name, o := range s.guests {
 		if o.owner == sid && o.guest != nil {
-			guests = append(guests, GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: StateRunning})
+			guests = append(guests, GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: StateRunning, Labels: o.labels})
 		}
 	}
 	sort.Slice(guests, func(i, j int) bool { return guests[i].Name < guests[j].Name })
@@ -182,7 +183,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 	if !ok {
 		return refused("unknown image")
 	}
-	spec := Spec{Name: c.Name, Image: image, CPU: c.CPU, MemoryMB: c.MemoryMB, LazyMemory: c.LazyMemory, GPU: c.GPU}
+	spec := Spec{Name: c.Name, Image: image, CPU: c.CPU, MemoryMB: c.MemoryMB, LazyMemory: c.LazyMemory, GPU: c.GPU, Labels: c.Labels}
 	for _, id := range c.Services {
 		spec.Services = append(spec.Services, Service{ID: id, Connect: []string{sid}})
 	}
@@ -208,7 +209,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 		s.mu.Unlock()
 		return refused("VM host limits reached")
 	}
-	reservation := &owned{owner: sid, cpu: c.CPU, memoryMB: c.MemoryMB, busy: true}
+	reservation := &owned{owner: sid, cpu: c.CPU, memoryMB: c.MemoryMB, labels: c.Labels, busy: true}
 	s.guests[c.Name] = reservation
 	s.mu.Unlock()
 
@@ -225,7 +226,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 		return failure(err)
 	}
 	reservation.guest = g
-	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings)}}
+	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings), Labels: c.Labels}}
 }
 
 // claim marks the caller's guest busy for one operation.
@@ -261,7 +262,7 @@ func (s *Server) status(ctx context.Context, sid, name string) Response {
 	} else if err != nil {
 		state = StateStopped
 	}
-	return Response{Guest: &GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: state}}
+	return Response{Guest: &GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: state, Labels: o.labels}}
 }
 
 func (s *Server) destroy(ctx context.Context, sid, name string) Response {

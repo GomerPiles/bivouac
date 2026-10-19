@@ -33,13 +33,14 @@ type Request struct {
 // CreateRequest names a configured image rather than a path. The VM host,
 // not the caller, decides which account each HvSocket service admits.
 type CreateRequest struct {
-	Name       string   `json:"name"`
-	Image      string   `json:"image"`
-	CPU        uint32   `json:"cpu"`
-	MemoryMB   uint64   `json:"memory_mb"`
-	LazyMemory bool     `json:"lazy_memory,omitempty"`
-	GPU        bool     `json:"gpu"`
-	Services   []string `json:"services,omitempty"`
+	Name       string            `json:"name"`
+	Image      string            `json:"image"`
+	CPU        uint32            `json:"cpu"`
+	MemoryMB   uint64            `json:"memory_mb"`
+	LazyMemory bool              `json:"lazy_memory,omitempty"`
+	GPU        bool              `json:"gpu"`
+	Services   []string          `json:"services,omitempty"`
+	Labels     map[string]string `json:"labels,omitempty"`
 }
 
 // Error codes let callers act on a failure without parsing its text.
@@ -61,10 +62,11 @@ type Response struct {
 
 // GuestInfo is a guest as its owner sees it. State is running, stopped or absent.
 type GuestInfo struct {
-	Name      string           `json:"name"`
-	RuntimeID string           `json:"runtime_id,omitempty"`
-	State     string           `json:"state"`
-	TimingsMS map[string]int64 `json:"timings_ms,omitempty"`
+	Name      string            `json:"name"`
+	RuntimeID string            `json:"runtime_id,omitempty"`
+	State     string            `json:"state"`
+	TimingsMS map[string]int64  `json:"timings_ms,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
 }
 
 // Info reports the VM host's identity and limits. Running counts every

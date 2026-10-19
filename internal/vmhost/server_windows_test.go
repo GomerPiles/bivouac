@@ -218,3 +218,25 @@ func TestPipeIdentifiesCallersAndClientsRefuseUnprivilegedServers(t *testing.T) 
 		t.Fatal("anonymous caller served", resp, err)
 	}
 }
+
+func TestLabelsAreBoundedAndReturnedOnlyToTheOwner(t *testing.T) {
+	s, _ := serverFixture(t)
+	req := createReq("bivouac-a")
+	req.Create.Labels = map[string]string{"controller_id": "ctl-1", "instance_id": "0a1b2c3d"}
+	if resp := call(t, s, alice, req); resp.Code != "" || resp.Guest.Labels["instance_id"] != "0a1b2c3d" {
+		t.Fatal("labels not recorded", resp)
+	}
+	if resp := call(t, s, alice, Request{Op: "list"}); len(resp.Guests) != 1 || resp.Guests[0].Labels["controller_id"] != "ctl-1" {
+		t.Fatal("labels not listed", resp)
+	}
+	if resp := call(t, s, alice, Request{Op: "status", Name: "bivouac-a"}); resp.Guest.Labels["controller_id"] != "ctl-1" {
+		t.Fatal("labels not in status", resp)
+	}
+	for _, labels := range []map[string]string{{"Bad": "x"}, {"key": "has space"}, {"key": "a;b"}} {
+		bad := createReq("bivouac-b")
+		bad.Create.Labels = labels
+		if resp := call(t, s, alice, bad); resp.Code != CodeRefused {
+			t.Fatal("invalid labels accepted", labels)
+		}
+	}
+}

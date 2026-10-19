@@ -32,6 +32,9 @@ type Spec struct {
 	LazyMemory bool      `json:"lazy_memory,omitempty"`
 	GPU        bool      `json:"gpu"`
 	Services   []Service `json:"services,omitempty"`
+	// Labels are the creator's own bounded ownership metadata, such as its
+	// controller and instance IDs. They grant nothing.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Service is one HvSocket service the guest exposes or dials. SYSTEM and
@@ -44,6 +47,8 @@ type Service struct {
 
 var (
 	namePattern = regexp.MustCompile(`^bivouac-[a-z0-9][a-z0-9-]{0,54}$`)
+	labelKey    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	labelValue  = regexp.MustCompile(`^[A-Za-z0-9._:+-]{0,128}$`)
 	guidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	sidPattern  = regexp.MustCompile(`^S-1-[0-9]{1,14}(-[0-9]{1,10}){1,14}$`)
 )
@@ -57,6 +62,14 @@ func (s Spec) Validate() error {
 	}
 	if s.CPU < 1 || s.CPU > 64 || s.MemoryMB < 1024 || s.MemoryMB > 256<<10 || s.MemoryMB%2 != 0 {
 		return errors.New("guest needs 1-64 CPUs and an even 1024-262144 MiB of memory")
+	}
+	if len(s.Labels) > 8 {
+		return errors.New("at most 8 labels")
+	}
+	for k, v := range s.Labels {
+		if !labelKey.MatchString(k) || !labelValue.MatchString(v) {
+			return errors.New("labels need short lowercase keys and plain values")
+		}
 	}
 	if len(s.Services) > 8 {
 		return errors.New("at most 8 HvSocket services")
