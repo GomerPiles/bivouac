@@ -131,22 +131,56 @@ Open:
 
 ## Windows: direct HCS (in progress)
 
-Built so far, covered by tests only:
+The pieces built so far:
 
 - The typed HCS binding.
 - The cancellable HvSocket dialer.
-- The VM host core: journal-first creation, ownership-proven teardown that
-  confirms absence before deleting, recovery, and image flattening.
+- The VM host core.
 - The prepared-guest client.
 
-The VM document matches the one an earlier standalone spike booted live. In
-those trials, HCS ran Windows guests with GPU-PV and hardware D3D11 rendering
-without the App Sandbox application, and prepared images skipped first-boot
-setup. That evidence comes from the spike, not from this code. The opt-in lab
-batch in operations.md is ready but has not run.
+They passed one lab batch while production CI kept running. That was five cold
+boots, with no network adapter, from a prepared image that still contains App
+Sandbox's guest components. Every guest:
 
-Open: the VM host's pipe API and optional service, the provider, networking at
-creation, the image factory, the warm spare, and all live validation.
+- Was created, started and given GPU-PV.
+- Initialized the guest agent and authenticated SSH over HvSocket.
+- Rendered hardware D3D11 and passed the presentation and pixel checks.
+- Rotated its credential and presented its own SSH host key.
+- Was terminated, confirmed absent and removed.
+
+The same batch showed:
+
+- An unelevated process reached the HvSocket service its account was granted
+  and was refused access to the other one.
+- Lazily committed memory boots and renders with GPU-PV and commits only about
+  0.1 GiB at start. Its steady-state saving was not measured, because
+  production CI was active during that run.
+- A flattened single-file image (18.9 GB, written in 7 s) boots the same way.
+
+| Spans (host clock) | 2 CPU, 4 GiB | 4 CPU, 8 GiB |
+| --- | --- | --- |
+| Disk, create, start, GPU | 0.4-1.0 s | 0.6 s |
+| Agent reachable | 25.4-26.3 s | 15.2-15.3 s |
+| Validated desktop | 37.4-39.0 s | 27.2-27.3 s |
+| Teardown to confirmed absence | 0.2-0.4 s | 0.3 s |
+
+With 4 CPUs, the image's PowerShell boot task runs its first statement at
+5.6-5.8 s guest uptime instead of 21.3-21.7 s. The earlier gap of about 18.6 s
+was therefore CPU contention during boot, not a fixed wait. In that earlier
+window, the task's SSH host-key generation takes 5.6-5.8 s instead of
+0.6-1.7 s.
+
+Desktop validation takes about 11 s. Its own console, GPU and render waits
+account for about 5 s of that; the rest is PowerShell work in the image.
+
+Open:
+
+- The VM host's pipe API and optional service.
+- The provider.
+- Networking at creation.
+- The image factory.
+- The warm spare.
+- Runner listening and jobs.
 
 ## Windows: Crosvm (Linux GPU guests)
 

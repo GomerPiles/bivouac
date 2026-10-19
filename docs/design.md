@@ -726,6 +726,11 @@ HCS and Windows networking refuse ordinary tokens, so the work splits in two:
   named pipe whose DACL admits only the accounts named in its
   administrator-protected configuration. It never receives GitHub
   credentials, job data or guest output.
+- Each HvSocket service's descriptor admits SYSTEM, Administrators and the
+  manager's account. The manager therefore connects to guests itself, and
+  guest traffic never passes through the elevated process. A live test
+  confirmed that an unelevated account is refused services it was not
+  granted.
 
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
