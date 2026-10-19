@@ -13,7 +13,8 @@ New macOS clones receive job-start/completion hooks without baseline or workflow
 edits. GitHub's Set up runner and Complete runner logs include guest CPU/RAM/disk
 summaries; diagnostics retain a validated numeric `guest/performance.json`.
 Completion also prints archive/release cache hits, misses, bypasses, failures
-and delivered bytes when cache setup exists. Disabled caching emits no cache
+and delivered bytes when cache setup exists, and with `store_uploads` the
+relayed, stored, skipped and fallen-back saves. Disabled caching emits no cache
 line; an unavailable service reports an unavailable summary. Controller cache
 counters reset at manager restart, guest counters at capability replacement.
 These whole-system, sampled readings do not measure individual steps or disk IO.
@@ -505,6 +506,7 @@ Caching is disabled by default. On the experimental macOS setup:
 [cache]
 enabled = true
 release_proxy = true  # optional GitHub release interception; default false
+store_uploads = true  # optional local copy of each Actions save; default false
 guest_host = "192.168.64.1" # host gateway reachable from the owned guest
 max_gb = 4
 max_object_mb = 512
@@ -517,7 +519,7 @@ on another provider. Restart the daemon to load changes, using the recorded
 PID and replacement procedure above. Each fresh guest gets its own private
 adapter, TLS trust, and expiring capability. No baseline or workflow change
 is needed. GitHub remains the authority for Actions cache scope and keys;
-metadata and uploads use the normal upstream service.
+metadata uses the normal upstream service.
 
 The macOS adapter accelerates Actions v2 cache archives. With `release_proxy`,
 bootstrap installs temporary root trust in each disposable clone and gives its
@@ -530,7 +532,14 @@ stores may need provider setup. The proxy sees traffic on its three intercepted
 GitHub hosts, but caches no request carrying `Authorization` or cookies. Other
 public HTTPS hosts use opaque tunnels. Host and baseline trust remain unchanged.
 Newly uploaded Actions archives enter this read-through cache on
-their first restore. A service outage returns lease requests to upstream;
+their first restore. With `store_uploads`, the host relays each save to GitHub's
+storage and keeps what it sent, so the next restore is local. A save larger
+than `max_object_mb`, or than idle objects can make room for, is relayed without
+a copy; any relay failure sends the rest of that save directly to GitHub.
+Every save is stored, evicting the least recently used objects, so size
+`max_gb` for the archives saved between restores as well as those restored.
+Upload storage is validated on macOS guests only; leave it off on a Windows
+host until its guests are validated live. A service outage returns lease requests to upstream;
 a failed fill redirects upstream. No upload/storage quota reduction is
 claimed. Logs report object class, hit/miss, size and a per-session object
 label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
@@ -550,8 +559,10 @@ on Linux, but their guest adapters are not yet implemented or validated.
 `BIVOUAC_HOME` isolates a cache under that test home.
 
 To revert, finish work with `bivouac off --wait`, set `cache.enabled = false`,
-and `cache.release_proxy = false`, then restart in the desired mode. To keep
-Actions acceleration alone, leave `enabled = true` and set `release_proxy = false`.
+`cache.release_proxy = false` and `cache.store_uploads = false`, then restart in
+the desired mode. To stop storing saves alone, set `store_uploads = false`. To
+keep Actions acceleration alone, leave `enabled = true` and set
+`release_proxy = false`.
 Fresh guests then receive no proxy root or settings. Cache objects are expendable; the cache
 directory can be removed while off. Keep the ownership state directory
 intact. Production cutover and Tartelet remain independent of cache setup.
@@ -573,6 +584,82 @@ Fill reasons are `capacity`, `object_limit`, `upstream_status`,
 `timeout`, `canceled`, and `store_*` for local filesystem failures.
 `cache SSH transport ended during requests` names a guest whose transport
 dropped mid-transfer. Keep the cache while investigating; it is evidence.
+
+A relayed save logs `cache upload relayed` with its `guest`, then
+`cache upload stored` (with `object`), `cache upload not stored` with a
+`reason`, or `cache upload sent directly upstream`. Fallback reasons are
+`unsupported_request`, `concurrency`, `expired`, `revoked`, `guest_body` and the
+upstream transport reasons above. Repeated `unsupported_request` or
+`concurrency` means the official action changed how it uploads.
+`cache upload not relayed` (`upload_limit`, `expired`) means the save went
+directly; `cache uploads abandoned` counts relays open at revocation or shutdown.
+
+### Cache validation fixture
+
+`tools/cache-validation` runs the official Actions cache code, pinned to a
+commit, in a guest. Credentials and action output stay there; it prints only
+fixed outcomes and numbers. It needs self-hosted runners, so this public
+repository has no workflow for it. Run one from a private repository on
+isolated scale sets, for example:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs: {mode: {required: true}, nonce: {required: true}}
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        scaleset: [bivouac-cache-validation-macos, bivouac-cache-validation-windows, bivouac-cache-validation-linux]
+    runs-on: '${{ matrix.scaleset }}'
+    timeout-minutes: 20
+    steps:
+      - uses: <owner>/bivouac/tools/cache-validation@<commit>
+        with: {mode: '${{ inputs.mode }}', nonce: '${{ inputs.nonce }}'}
+```
+
+Set each isolated provider's `scaleset` to its matching matrix entry. Scale-set
+routing uses that single name, without a `self-hosted` or OS label array. For
+REST JIT mode instead, set `[github].demand = "jit"`, give each provider a
+positive `idle_pool` and an isolated label array, and use that same array in
+`runs-on`, as described in "REST JIT fallback" above.
+
+Use a separate validation `BIVOUAC_HOME` on each host; a Windows validation
+home may contain both Windows and Linux providers. Never use the normal home
+or production labels, or run two homes against one native broker at once.
+Keep the provider-specific cache transport settings and enable the following
+for `save`, `restore`, `mixed`, `outage` and `interrupt`:
+
+```toml
+[cache]
+enabled = true
+release_proxy = true
+store_uploads = true
+# Omit max_object_mb and max_gb: defaults are 2 GiB per object and 20 GiB total.
+```
+
+- `save` uploads 24 and 192 MiB archives under a fresh nonce, covering a
+  single-request and a block upload. With `store_uploads`, the host must relay
+  and store both, with no fallbacks. `restore` in a later job with that nonce must then hit locally twice
+  with no misses; without `store_uploads`, both restores fill upstream.
+- `mixed` overlaps restores with new uploads.
+- `limited` requires `store_uploads = true` and a deliberately small limit:
+  set `[cache].max_object_mb = 16` only for this mode. Saves and restores still
+  pass, and both saves must increment the relayed-without-a-copy counter with
+  no stored uploads. Disabled upload storage fails validation. Finish the
+  isolated home's work with `bivouac off --wait` before changing the limit,
+  then restart it to load the new value. Remove the override and restart before
+  returning to normal validation with the default 2 GiB limit.
+- `outage` checks release hits, then waits up to two minutes for the isolated
+  controller to stop. Saves, restores and releases must still pass directly.
+  Stop only the isolated controller, after confirming its process.
+- `interrupt` requires `store_uploads`. It starts both saves through the relay
+  and waits for the isolated controller to stop; stop it once the controller
+  logs two `cache upload relayed` lines. At least one save must still be open
+  then, and both must finish directly and restore intact.
+- `fallback` expects caching disabled.
+- Every mode checks release downloads through fresh signed URLs.
 
 ## Cutover (after validation)
 

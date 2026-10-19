@@ -168,6 +168,19 @@ private releases, and GHES; tools with their own trust stores need setup.
 Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
+
+Upload storage (`store_uploads`) passed every fixture mode live on isolated
+macOS guests, with production cache limits (4 GiB, 512 MiB objects). The host
+relayed and stored single-request and block uploads (24 and 192 MiB); a fresh
+guest's first restores were local hits, taking 15-19 s against 100 s with
+storage off; restores overlapped uploads. With the controller stopped while
+both relays were open, the saves finished directly and restored intact. Outage,
+oversize (relayed without a copy), storage off and caching disabled behaved as
+documented. In an earlier run of this code one relayed upload fell back
+mid-upload with an upstream transport error; its save finished directly.
+Windows and Linux guests are unvalidated; leave upload storage off on
+Windows hosts.
+
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,
 invalidation and upstream change.

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type Bootstrap struct {
 	Token        string `json:"token"`
 	CA           string `json:"ca"`
 	ReleaseProxy bool   `json:"release_proxy"`
+	StoreUploads bool   `json:"store_uploads"`
 }
 type grant struct {
 	summary Summary
@@ -45,7 +47,7 @@ type lease struct {
 }
 
 // Service owns a TLS listener, short-lived guest capabilities, and bounded storage.
-// Metadata and uploads stay on GitHub; only authorized archive bytes pass here.
+// Metadata stays on GitHub; only authorized archive bytes pass here.
 type Service struct {
 	summary     Summary
 	mu          sync.Mutex
@@ -56,6 +58,7 @@ type Service struct {
 	server      *http.Server
 	grants      map[string]grant
 	leases      map[string]lease
+	uploads     map[string]*uploadLease
 	ttl         time.Duration
 	validate    func(*url.URL) bool
 	proxy       *releaseProxy
@@ -63,6 +66,10 @@ type Service struct {
 	certificate tls.Certificate
 	transports  map[string]io.Closer
 	closed      bool
+	storing     atomic.Bool
+	work        context.Context // Canceled by Close; owns upload commits.
+	stopWork    context.CancelFunc
+	commits     sync.WaitGroup
 	crl         []byte
 	crlExpires  time.Time
 }
@@ -99,11 +106,13 @@ func Start(dir, listen, host string, maxBytes, maxObject int64, ttl time.Duratio
 		_ = listener.Close()
 		return nil, err
 	}
-	s := &Service{store: store, client: publicClient(), log: logger, url: "https://" + net.JoinHostPort(host, port), ca: ca, grants: map[string]grant{}, leases: map[string]lease{}, connections: map[net.Conn]string{}, ttl: ttl, validate: allowedURL}
+	s := &Service{store: store, client: publicClient(), log: logger, url: "https://" + net.JoinHostPort(host, port), ca: ca, grants: map[string]grant{}, leases: map[string]lease{}, uploads: map[string]*uploadLease{}, connections: map[net.Conn]string{}, ttl: ttl, validate: allowedURL}
+	s.work, s.stopWork = context.WithCancel(context.Background())
 	s.certificate = certificate
 	s.transports = map[string]io.Closer{}
 	s.proxy, err = newReleaseProxy(certificate)
 	if err != nil {
+		s.stopWork()
 		_ = listener.Close()
 		return nil, err
 	}
@@ -168,9 +177,10 @@ func (s *Service) issueAt(name, endpoint string) ([]byte, error) {
 	}
 	s.grants[token] = grant{name: name, expires: time.Now().Add(s.ttl), url: endpoint}
 	s.mu.Unlock()
-	return json.Marshal(Bootstrap{URL: endpoint, Token: token, CA: s.ca, ReleaseProxy: s.proxy.enabled.Load()})
+	return json.Marshal(Bootstrap{URL: endpoint, Token: token, CA: s.ca, ReleaseProxy: s.proxy.enabled.Load(), StoreUploads: s.storing.Load()})
 }
 func (s *Service) Revoke(name string) {
+	var abandoned []*uploadLease
 	s.mu.Lock()
 	transport := s.transports[name]
 	delete(s.transports, name)
@@ -188,9 +198,21 @@ func (s *Service) Revoke(name string) {
 					delete(s.leases, id)
 				}
 			}
+			for id, u := range s.uploads {
+				if u.token == token {
+					delete(s.uploads, id)
+					abandoned = append(abandoned, u)
+				}
+			}
 		}
 	}
 	s.mu.Unlock()
+	for _, u := range abandoned {
+		u.abandon("revoked")
+	}
+	if len(abandoned) > 0 {
+		s.log.Info("cache uploads abandoned", "reason", "revoked", "uploads", len(abandoned))
+	}
 	if transport != nil {
 		_ = transport.Close()
 	}
@@ -199,15 +221,25 @@ func (s *Service) Close() {
 	_ = s.server.Close()
 	s.mu.Lock()
 	s.closed = true
+	s.stopWork()
 	transports := s.transports
 	s.transports = map[string]io.Closer{}
 	for conn := range s.connections {
 		_ = conn.Close()
 	}
+	uploads := s.uploads
+	s.uploads = map[string]*uploadLease{}
 	s.mu.Unlock()
 	for _, transport := range transports {
 		_ = transport.Close()
 	}
+	for _, u := range uploads {
+		u.abandon("shutdown")
+	}
+	if len(uploads) > 0 {
+		s.log.Info("cache uploads abandoned", "reason", "shutdown", "uploads", len(uploads))
+	}
+	s.commits.Wait()
 	s.LogSummary()
 }
 
@@ -238,6 +270,14 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/lease" && r.Method == http.MethodPost {
 		s.createLease(w, r)
+		return
+	}
+	if r.URL.Path == "/upload" && r.Method == http.MethodPost {
+		s.createUpload(w, r)
+		return
+	}
+	if id, ok := strings.CutPrefix(r.URL.Path, "/upload/"); ok && !r.URL.IsAbs() {
+		s.relayUpload(w, r, id)
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/object/")
@@ -308,26 +348,24 @@ func (s *Service) objectHeaders(w http.ResponseWriter, l lease) {
 	w.Header().Set("x-ms-version", "2020-04-08")
 }
 
-func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
+// upstreamRequest is a guest's authenticated submission of a signed URL.
+type upstreamRequest struct {
+	token  string
+	grant  grant
+	raw    string
+	parsed *url.URL
+}
+
+// readUpstreamRequest authenticates the guest and decodes its signed URL. It
+// writes the HTTP error itself when the request is unusable.
+func (s *Service) readUpstreamRequest(w http.ResponseWriter, r *http.Request) (upstreamRequest, bool) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
 	g, ok := s.grants[token]
-	count := 0
-	for id, l := range s.leases {
-		if time.Now().After(l.expires) {
-			delete(s.leases, id)
-		} else if l.token == token {
-			count++
-		}
-	}
 	s.mu.Unlock()
 	if !ok || time.Now().After(g.expires) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if count >= 64 {
-		http.Error(w, "lease limit", http.StatusTooManyRequests)
-		return
+		return upstreamRequest{}, false
 	}
 	var body struct {
 		URL string `json:"url"`
@@ -336,16 +374,54 @@ func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&body) != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
+		return upstreamRequest{}, false
 	}
 	parsed, err := url.Parse(body.URL)
 	if err != nil || !s.validate(parsed) {
 		http.Error(w, "unsupported upstream", http.StatusBadRequest)
+		return upstreamRequest{}, false
+	}
+	return upstreamRequest{token: token, grant: g, raw: body.URL, parsed: parsed}, true
+}
+
+// signedExpiry is the earlier of limit and the URL's SAS expiry.
+func signedExpiry(u *url.URL, limit time.Time) time.Time {
+	if se, err := time.Parse(time.RFC3339, u.Query().Get("se")); err == nil && se.Before(limit) {
+		return se
+	}
+	return limit
+}
+
+// activeLeases prunes expired leases and counts the guest's remainder. Caller
+// holds s.mu.
+func (s *Service) activeLeases(token string) int {
+	count := 0
+	for id, l := range s.leases {
+		if time.Now().After(l.expires) {
+			delete(s.leases, id)
+		} else if l.token == token {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.readUpstreamRequest(w, r)
+	if !ok {
+		return
+	}
+	token, g, parsed := u.token, u.grant, u.parsed
+	s.mu.Lock()
+	count := s.activeLeases(token)
+	s.mu.Unlock()
+	if count >= 64 {
+		http.Error(w, "lease limit", http.StatusTooManyRequests)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, body.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.raw, nil)
 	if err != nil {
 		http.Error(w, "invalid upstream", http.StatusBadRequest)
 		return
@@ -374,31 +450,23 @@ func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream lacks identity", http.StatusBadGateway)
 		return
 	}
-	key := parsed.Host + parsed.EscapedPath() + "\x00" + etag + "\x00" + strconv.FormatInt(response.ContentLength, 10)
+	key := archiveKey(parsed, etag, response.ContentLength)
 	id := randomToken()
 	expires := time.Now().Add(5 * time.Minute)
 	if g.expires.Before(expires) {
 		expires = g.expires
 	}
-	if signedExpiry, err := time.Parse(time.RFC3339, parsed.Query().Get("se")); err == nil && signedExpiry.Before(expires) {
-		expires = signedExpiry
-	}
+	expires = signedExpiry(parsed, expires)
 	if time.Now().After(expires) {
 		http.Error(w, "expired upstream", http.StatusForbidden)
 		return
 	}
-	l := lease{token: token, upstream: body.URL, key: key, etag: etag, size: response.ContentLength, expires: expires}
+	l := lease{token: token, upstream: u.raw, key: key, etag: etag, size: response.ContentLength, expires: expires}
 	s.mu.Lock()
 	// Recheck admission and revocation after the upstream round trip. Concurrent
 	// lease requests cannot exceed the bound or revive a deleted guest's grant.
 	_, valid := s.grants[token]
-	count = 0
-	for _, existing := range s.leases {
-		if existing.token == token {
-			count++
-		}
-	}
-	if !valid || count >= 64 {
+	if !valid || s.activeLeases(token) >= 64 {
 		s.mu.Unlock()
 		http.Error(w, "lease unavailable", http.StatusTooManyRequests)
 		return
@@ -409,6 +477,12 @@ func (s *Service) createLease(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(struct {
 		URL string `json:"url"`
 	}{g.url + "/object/" + id})
+}
+
+// archiveKey names an Actions archive by blob location and upstream identity.
+// It excludes the SAS query, so fresh signed URLs share one object.
+func archiveKey(u *url.URL, etag string, size int64) string {
+	return u.Host + u.EscapedPath() + "\x00" + etag + "\x00" + strconv.FormatInt(size, 10)
 }
 
 func (s *Service) fetch(ctx context.Context, l lease, out io.Writer) error {

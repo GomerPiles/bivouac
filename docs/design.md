@@ -895,10 +895,10 @@ extracted on the host, and no host directory is shared with a guest.
 On macOS the service binds every interface by default, because the vmnet
 bridge may not exist until a guest runs; TLS and per-guest capabilities gate
 access. The macOS adapter is installed in each owned
-clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 cache download
-responses. GitHub still handles authentication, branch/ref matching, cache
-versions, metadata, and uploads. Bivouac stores downloaded archives, not a
-second cache-key database. Each new read validates its fresh signed URL with
+clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 download
+lookups and, with upload storage, cache creations. GitHub still handles
+authentication, branch/ref matching, cache versions and metadata. Bivouac
+stores archives, not a second cache-key database. Each new read validates its fresh signed URL with
 an upstream HEAD, including on a local hit; expired or denied capabilities
 cannot expose cached bytes. Object identity excludes URL query credentials.
 A lease request carries only that URL. HEAD on a lease answers from the
@@ -956,6 +956,35 @@ SAS. TLS identities rotate on daemon restart. Existing guests retain their
 upstream paths if their old cache endpoint disappears. This accelerates
 restores; it does not reduce GitHub cache uploads, storage, or metadata calls.
 
+`cache.store_uploads` (default off) keeps a copy of each Actions save, so the
+next restore does not download what was just uploaded. The preload replaces the
+creation response's signed upload URL with a host relay URL. The host sends
+each Put Blob, Put Block and Put Block List to Azure itself, appending only the
+operation's own parameters to the signed query, and stages the bytes it sent.
+When Azure accepts the commit, the staged blocks in committed order become the
+object that a restore's HEAD identifies by blob path, ETag and size. The host
+never accepts guest bytes on any other path. A guest holding the signed URL can
+still write blocks to Azure directly, so the copy can differ from Azure's blob,
+but only for an entry that guest can write, whose readers already accept its
+bytes. A guest that can only read an entry cannot place it locally. Relay
+requests need the relay ID and the guest's own token: the official action logs
+the ID in debug output, and the macOS listener is reachable beyond the guest.
+
+Staging counts against cache capacity, evicting idle objects as needed, and an
+upload that does not fit is relayed without a copy. Staged files use the fill
+prefix, so startup discards them; revocation and shutdown discard them too.
+Commits run after the response, belong to the service, which cancels and joins
+them, and may finish after the guest exits. A request the relay cannot carry,
+an unknown or revoked relay, or a lost host gets a 503 marker or a connection
+error. The storage SDK retries both, and the preload sends that upload's retries
+straight to Azure, so a relay failure falls back instead of failing the save.
+The marker ends the relay and frees its staging at once.
+
+The relay depends on details GitHub and Azure do not document: the
+`CreateCacheEntry` field names, the SDK's three upload operations and its
+retries on 503. A change there shows as fewer `relayed` saves or more
+`fallbacks`, not as failed saves; the validation fixture checks both.
+
 The store and HTTP service use pure Go and portable filesystem/network APIs.
 
 The service owns constant-space numeric request/byte counters for archive
@@ -968,6 +997,9 @@ fallback body bytes. HEAD, cache-service metadata and opaque tunnels are
 excluded, and concurrent coalesced reads count as hits. Proxy bypass totals
 include uncached forwarded GETs, not only release assets. These are delivered
 bytes, not unique stored bytes, total upstream traffic or a bandwidth benchmark.
+Upload storage counts saves relayed, stored (with bytes), skipped (carried or
+refused without a complete copy) and sent back to direct upload (`fallbacks`);
+none count as restore hits.
 
 The per-minute controller summary adds store totals: objects, committed and
 reserved bytes, capacity evictions and evicted bytes, invalidations, and
@@ -1053,6 +1085,9 @@ localhost management API and UI remain deferred.
   is never attached, so no guest output reaches it.
 - Guests get no host directories except the optional read-only bootstrap
   share. Host credentials never enter a guest.
+- With `cache.store_uploads`, a guest's signed upload URLs reach host memory
+  and the host forwards its saves; it stores only what it sent and Azure
+  committed, and needs the guest's token on every relay request.
 - Cleanup deletes only prefixed guests carrying our marker; baselines,
   Tartelet's clones, and unrelated VMs are never touched.
 - The GitHub App needs only organization "Self-hosted runners: Read and
@@ -1079,5 +1114,9 @@ localhost management API and UI remain deferred.
   with nonprintable bytes, which makes a hex-looking secret ambiguous.
 - `actions/scaleset` pinned at v0.4.0; its listener package is not used
   because the manager needs to acquire jobs itself.
+- Actions saves are kept by relaying them (`store_uploads`). Reading each
+  archive back after the save doubled the transfer and gave up on slow links;
+  a copy sent by the guest could differ from what it uploaded. GitHub remains
+  the authority for every entry; local copies only avoid a download.
 - Deferred: localhost management HTTP API and UI, Linux host provider,
-  Actions storage optimisation.
+  reducing GitHub-side Actions cache storage.

@@ -131,13 +131,19 @@ func TestCacheConfiguration(t *testing.T) {
 	if explicit, err := Parse([]byte(good + "listen = \"0.0.0.0:8443\"\n")); err != nil || explicit.Cache.Listen != "0.0.0.0:8443" {
 		t.Fatalf("explicit listen not kept: %v", err)
 	}
+	if cfg.Cache.StoreUploads {
+		t.Fatal("upload storage must be opt-in")
+	}
+	if _, err = Parse([]byte(good + "store_uploads = true\n")); err != nil {
+		t.Fatal("enabled upload storage rejected", err)
+	}
 	if cfg.Cache.ReleaseProxy {
 		t.Fatal("release interception must be opt-in")
 	}
 	if _, err = Parse([]byte(good + "release_proxy = true\n")); err != nil {
 		t.Fatal("enabled release proxy rejected", err)
 	}
-	for _, bad := range []Cache{{ReleaseProxy: true}, {Enabled: true, GuestHost: "not-an-ip", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 512}, {Enabled: true, GuestHost: "192.168.64.1", Listen: "bad", MaxGB: 4, MaxObjectMB: 512}, {Enabled: true, GuestHost: "192.168.64.1", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 8192}} {
+	for _, bad := range []Cache{{ReleaseProxy: true}, {StoreUploads: true}, {Enabled: true, GuestHost: "not-an-ip", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 512}, {Enabled: true, GuestHost: "192.168.64.1", Listen: "bad", MaxGB: 4, MaxObjectMB: 512}, {Enabled: true, GuestHost: "192.168.64.1", Listen: "0.0.0.0:0", MaxGB: 4, MaxObjectMB: 8192}} {
 		cfg.Cache = bad
 		if cfg.Validate() == nil {
 			t.Fatal("invalid cache config accepted")

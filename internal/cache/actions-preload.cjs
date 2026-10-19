@@ -1,6 +1,7 @@
 // The official runner injects cache endpoints after job hooks. Observe only the
-// authorized CacheService download response; metadata, uploads, and all other
-// HTTPS traffic remain untouched. No runtime token enters Bivouac.
+// authorized CacheService responses that carry signed archive URLs: download
+// lookups and, when the host stores uploads, cache creation. Metadata and all
+// other HTTPS traffic remain untouched. No runtime token enters Bivouac.
 'use strict';
 const fs = require('node:fs');
 const https = require('node:https');
@@ -9,11 +10,15 @@ try { config = JSON.parse(fs.readFileSync(process.env.BIVOUAC_CACHE_CONFIG, 'utf
 catch { return; }
 const endpoint = new URL(config.url);
 const original = https.request;
+const servicePath = '/twirp/github.actions.results.api.v1.CacheService/';
+// Relayed upload IDs and their signed Azure URLs. Once a relay fails, the
+// storage SDK's retries for that upload go straight to Azure.
+const relays = new Map(), direct = new Set();
 
-function lease(source) {
+function claim(path, source) {
   return new Promise(resolve => {
     const body = JSON.stringify({url: source});
-    const request = original.call(https, new URL('/lease', endpoint), {
+    const request = original.call(https, new URL(path, endpoint), {
       method: 'POST', ca: config.ca, agent: false,
       headers: {'Authorization': `Bearer ${config.token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body)}
     }, response => {
@@ -21,7 +26,7 @@ function lease(source) {
       response.on('data', chunk => { if (data.length < 16384) data += chunk; });
       response.on('error', () => resolve(source));
       response.on('end', () => {
-        try { const parsed = JSON.parse(data); resolve(response.statusCode === 200 ? parsed.url : source); }
+        try { const parsed = JSON.parse(data); resolve(response.statusCode === 200 && typeof parsed.url === 'string' ? parsed.url : source); }
         catch { resolve(source); }
       });
     });
@@ -31,7 +36,8 @@ function lease(source) {
   });
 }
 
-function inspect(response) {
+// Swap the signed URL in a small successful JSON response for the host's.
+function inspect(response, names, path, claimed) {
   if (response.statusCode !== 200) return;
   const emit = response.emit;
   let chunks = [], size = 0, pending = false, closed;
@@ -52,13 +58,17 @@ function inspect(response) {
         let output = body;
         try {
           const parsed = JSON.parse(body.toString('utf8'));
-          const field = parsed.signed_download_url ? 'signed_download_url' : 'signedDownloadUrl';
-          if (parsed[field]) {
-            parsed[field] = await lease(parsed[field]);
-            output = Buffer.from(JSON.stringify(parsed));
+          const field = names.find(name => typeof parsed[name] === 'string' && parsed[name]);
+          if (field) {
+            const local = await claim(path, parsed[field]);
+            if (local !== parsed[field]) {
+              if (claimed) claimed(parsed[field], local);
+              parsed[field] = local;
+              output = Buffer.from(JSON.stringify(parsed));
+            }
           }
         } catch { /* Cache is optional; retain the exact upstream response. */ }
-        delete response.headers['content-length'];
+        if (output !== body) delete response.headers['content-length'];
         response.emit = emit;
         emit.call(response, 'data', output);
         emit.call(response, 'end');
@@ -71,6 +81,21 @@ function inspect(response) {
   };
 }
 
+// Send a relayed upload request to Azure with the same operation. With a proxy
+// configured this connects directly: it is only the fallback path.
+function toUpstream(opts, source) {
+  const upstream = new URL(source);
+  const query = (opts.path || '').split('?').slice(1).join('?');
+  opts.protocol = 'https:';
+  opts.hostname = opts.host = upstream.hostname;
+  opts.port = upstream.port || 443;
+  opts.path = upstream.pathname + upstream.search + (query ? '&' + query : '');
+  delete opts.ca;
+  delete opts.servername;
+  opts.headers = {...opts.headers};
+  for (const name of Object.keys(opts.headers)) if (name.toLowerCase() === 'host') delete opts.headers[name];
+}
+
 https.request = function(input, options, callback) {
   let opts;
   if (typeof input === 'string' || input instanceof URL) {
@@ -79,10 +104,38 @@ https.request = function(input, options, callback) {
   } else { opts = {...input}; }
   const cb = typeof options === 'function' ? options : callback;
   const host = opts.hostname || opts.host || '';
-  if (host === endpoint.hostname && String(opts.port || 443) === endpoint.port) opts.ca = config.ca;
-  const cacheLookup = host.endsWith('.actions.githubusercontent.com') &&
-    (opts.path || '').split('?')[0] === '/twirp/github.actions.results.api.v1.CacheService/GetCacheEntryDownloadURL';
-  const request = original.call(https, opts, cb ? response => { if (cacheLookup) inspect(response); cb(response); } : undefined);
-  if (!cb && cacheLookup) request.prependOnceListener('response', inspect);
+  const local = host === endpoint.hostname && String(opts.port || 443) === endpoint.port;
+  if (local) opts.ca = config.ca;
+  const path = (opts.path || '').split('?')[0];
+  const relay = local && path.startsWith('/upload/') && relays.has(path.slice(8)) ? path.slice(8) : '';
+  if (relay && direct.has(relay)) toUpstream(opts, relays.get(relay));
+  const relayed = relay && !direct.has(relay);
+  // The official action can log the relay ID in debug output, so the host also
+  // requires this guest's token, which only the bootstrap settings hold.
+  if (relayed) {
+    const auth = `Bearer ${config.token}`;
+    if (Array.isArray(opts.headers)) { // Node's raw [name, value, ...] form.
+      const pairs = [];
+      for (let i = 0; i + 1 < opts.headers.length; i += 2) {
+        if (String(opts.headers[i]).toLowerCase() !== 'authorization') pairs.push(opts.headers[i], opts.headers[i + 1]);
+      }
+      opts.headers = [...pairs, 'Authorization', auth];
+    } else {
+      opts.headers = {...opts.headers};
+      for (const name of Object.keys(opts.headers)) if (name.toLowerCase() === 'authorization') delete opts.headers[name];
+      opts.headers.Authorization = auth;
+    }
+  }
+  const cacheService = host.endsWith('.actions.githubusercontent.com');
+  const cacheLookup = cacheService && path === servicePath + 'GetCacheEntryDownloadURL';
+  const cacheCreate = cacheService && config.store_uploads === true && path === servicePath + 'CreateCacheEntry';
+  const observe = response => {
+    if (cacheLookup) inspect(response, ['signed_download_url', 'signedDownloadUrl'], '/lease');
+    if (cacheCreate) inspect(response, ['signed_upload_url', 'signedUploadUrl'], '/upload', (source, url) => relays.set(new URL(url).pathname.slice(8), source));
+    if (relayed && response.statusCode === 503 && response.headers['x-bivouac-relay'] === 'unavailable') direct.add(relay);
+  };
+  const request = original.call(https, opts, cb ? response => { observe(response); cb(response); } : undefined);
+  if (!cb && (cacheLookup || cacheCreate || relayed)) request.prependOnceListener('response', observe);
+  if (relayed) request.prependListener('error', () => direct.add(relay));
   return request;
 };
