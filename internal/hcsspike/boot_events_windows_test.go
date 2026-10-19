@@ -24,6 +24,9 @@ func TestBootEventResponsesRejectUntrustedOffsetsAndFields(t *testing.T) {
 		`{"boot_marker":1,"clock_stable":false,"shell_ready_ms":1}`,
 		`{"raw_event":"discarded-private-fixture"}`,
 		`{} {}`,
+		`{"boot_marker":1,"clock_stable":true,"uptime_at_query_ms":100}`,
+		`{"boot_marker":1,"clock_stable":true,"uptime_at_query_ms":100,"event_clock_at_query_ms":100,"clock_sample_span_ms":21}`,
+		`{"console_event_count":129}`,
 	} {
 		_, err := parseBootEventSnapshot([]byte(raw))
 		if err == nil || strings.Contains(err.Error(), "discarded-private-fixture") {
@@ -41,7 +44,7 @@ func TestBootEventResponsesRejectUntrustedOffsetsAndFields(t *testing.T) {
 		if mismatch == "clock" {
 			b.ClockStable = false
 		}
-		r := joinBootEvents(a, b)
+		r := joinBootEvents(a, b, a)
 		if (r.ProcessCreatedMS != nil) != (mismatch == "none") || (r.ShellStartMS != nil) != (mismatch == "none") {
 			t.Fatal("cross-boot or stepped-clock interval escaped")
 		}
@@ -148,7 +151,7 @@ func TestNativeBootEventReadOnlyCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, script := range []string{bootEventsTask, bootEventsShell} {
+	for _, script := range []string{bootEventsTask, bootEventsShell, bootEventsClock} {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		cmd := exec.CommandContext(ctx, filepath.Join(sys, "cmd.exe"), "/d", "/s", "/c", bootEventCommand(script))
 		var out boundedOutput
@@ -173,6 +176,38 @@ func TestDiagnosticLoggingFlagCannotAlterOrdinaryTrial(t *testing.T) {
 		err := RunCLI(context.Background(), []string{mode, "--config", "missing.json", "--boot-event-logs"}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "boot-event-logs requires build-image") {
 			t.Fatal("diagnostic image flag passed non-build dispatch", mode, err)
+		}
+	}
+}
+
+func TestClockCalibrationPreservesDifferentClockOrigins(t *testing.T) {
+	raw := []byte(`{"boot_marker":1,"clock_stable":true,"uptime_at_query_ms":40000,"event_clock_at_query_ms":20000,"clock_sample_span_ms":0,"console_event_count":0,"task_process_is_powershell":true}`)
+	clock, err := parseBootEventSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := bootEventSnapshot{BootMarker: 1, ClockStable: true}
+	r := joinBootEvents(task, task, clock)
+	if r.UptimeAtQueryMS == nil || *r.UptimeAtQueryMS != 40000 || r.EventClockAtQueryMS == nil || *r.EventClockAtQueryMS != 20000 || r.ClockSampleSpanMS == nil || *r.ClockSampleSpanMS != 0 {
+		t.Fatal("clock origin calibration was normalized or lost")
+	}
+	clock.BootMarker = 2
+	r = joinBootEvents(task, task, clock)
+	if r.BootMatched || r.UptimeAtQueryMS != nil || r.EventClockAtQueryMS != nil {
+		t.Fatal("cross-boot calibration escaped")
+	}
+	clock.BootMarker = 1
+	clock.ClockStable = false
+	r = joinBootEvents(task, task, clock)
+	if r.ClockStable || r.ClockSampleSpanMS != nil {
+		t.Fatal("stepped-clock calibration escaped")
+	}
+}
+
+func TestAllBootEventCommandsFitRemoteLimit(t *testing.T) {
+	for _, script := range []string{bootEventsTask, bootEventsShell, bootEventsClock} {
+		if len(bootEventCommand(script)) > 7800 {
+			t.Fatal("fixed event command exceeds conservative remote limit")
 		}
 	}
 }

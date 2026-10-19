@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“129 s in the crash tests). A job
+  GitHub expires the dead session (128ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -884,7 +884,7 @@ start/process/action and correlated PowerShell console events after all
 readiness gates pass. It does not enable logs, change startup, or rebuild images.
 The native backend owns this per-run option; it is absent from image provenance
 and durable configuration. Absolute boot markers and process identity stay in
-memory solely to bind the two responses. Public output contains only availability
+memory solely to bind the three responses. Public output contains only availability
 flags and bounded numeric offsets. Different boots, clock-change records or
 unavailable/overflowing channels suppress uncertain offsets. This event-clock
 view is separate from monotonic guest checkpoints and host timings. A monotonic
@@ -896,9 +896,15 @@ remains unresolved. `build-image --boot-event-logs` explicitly enables only gues
 Task Scheduler Operational logging, after validated readiness and before normal
 sanitation/clean shutdown; the manifest records this diagnostic provenance. It
 is refused in other CLI modes and changes no startup/security behavior. Console
-events correlate directly to the fixed task's process-creation record. A separate
-diagnostic image/cold boot requires its own explicit elevated validation; no
-optimization is inferred from unavailable offsets.
+events correlate directly to the fixed task's process-creation record. The diagnostic
+capture/cold boot passed normal gates and owned cleanup. Task process creation
+was 2.734 s after kernel-recorded start, versus script entry at 21.187 s guest
+uptime; console boundaries remained unavailable. A third fixed query samples
+both clock origins together with a bounded at-most-20-ms bracket. Calibration
+requires one boot, no observed clock steps and a complete bounded sample; live
+validation is pending. A bounded console-event count and expected-process-path
+Boolean retain no raw event or identity text. No initialization duration or
+optimization is inferred by directly subtracting different clock origins.
 The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only

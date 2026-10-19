@@ -571,7 +571,7 @@ embedded source and stay below the remote command-size limit.
 startup (40961/40962) records correlated directly to the fixed task's process
 creation (129). Task identity and that process ID are used
 only in memory to reject unrelated events. Absolute timestamps, process IDs,
-arguments, context strings and raw log text never enter the report. The two
+arguments, context strings and raw log text never enter the report. All three
 responses must bind the same boot. Kernel time-change records invalidate event
 subtraction; missing/disabled logs, incomplete queries and missing events stay
 explicit flags or absent offsets. These event-clock offsets are not subtracted
@@ -597,8 +597,24 @@ manifest records `boot_event_logs`; existing images and normal builds are
 unchanged. This flag is refused outside image capture. It changes no task,
 priority, service ordering, key generation or readiness gate. Reusing the task's
 recorded process ID avoids relying on the unavailable classic engine boundary. The
-diagnostic image and cold-boot trace still require explicit elevation and live
-validation; no further optimization is justified by the missing offsets.
+diagnostic image passed capture in 190.566 s with logging acknowledged, sanitation,
+clean shutdown, publication and owned cleanup. Its cold boot passed all normal
+readiness/rendering/cleanup gates and returned task start/process/action at
+2.734 s after the kernel-recorded start; the first script instruction was at
+21.187 s guest uptime, and the agent-running checkpoint at 23.281 s. Console
+queries completed but supplied no matching startup events. The one-shot trace
+refused complete-attribution status because those boundaries were missing.
+These are different clock origins: their numerical difference is not yet a
+measured process-initialization duration.
+
+A third fixed read-only query now samples guest TickCount immediately around
+the kernel-relative UTC observation. All three bounded clock fields must be
+present together, with a sample span at most 20 ms, no observed clock changes,
+and the same boot marker across queries. It also projects only a bounded count
+of console-start events and a Boolean indicating whether the fixed task's
+process path matches the expected PowerShell executable. No path, PID, absolute
+time or event text is retained. This calibration must be validated live before
+subtracting the two clock origins; it changes no image or startup setting.
 
 ## Desktop validation checkpoints
 
