@@ -702,6 +702,63 @@ even with loopback reported disabled. The broker now applies this recipe as
 described above. Private-peer and lifecycle tests remain necessary; no
 production isolation guarantee is inferred from the prototype.
 
+### Windows guests through HCS (in progress)
+
+This replaces the App Sandbox provider. Bivouac drives the Host Compute
+Service (`internal/hcs`) itself, so no App Sandbox application or daemon runs.
+The first increment changes only the host: guests still boot an image that
+contains App Sandbox's guest agent and display driver. A later increment
+replaces them with a bivouac guest agent over HvSocket, along with OpenSSH and
+the PowerShell boot steps they need.
+
+HCS and Windows networking refuse ordinary tokens, so the work splits in two:
+
+- The manager stays unprivileged. It holds GitHub credentials and budgets, and
+  it handles everything a guest can influence: transport, runner status, cache
+  traffic and diagnostics.
+- A small VM host runs elevated. It creates and removes compute systems,
+  per-job differencing disks, each VM's network endpoint and firewall policy,
+  and the network guard. Its ownership journal lives in an administrator-only
+  `%ProgramData%` directory. It accepts a fixed set of operations on a local
+  named pipe whose DACL admits only the accounts named in its
+  administrator-protected configuration. It never receives GitHub
+  credentials, job data or guest output.
+
+The VM host runs either as an optional Windows service or as an elevated
+foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
+service implicitly. An administrator installs it explicitly, which needs no
+reboot. Installation grants the configured accounts start and stop rights on
+that one service, so mode changes never need elevation. The service starts from
+the service manager with a clean environment. That closes the same-account UAC
+concern above.
+
+Guests are created with `ShouldTerminateOnLastHandleClosed`, and the VM host
+holds their handles:
+
+- A manager crash leaves guests running for adoption.
+- If the VM host exits, its guests and their network guard end together. On
+  its next start, it confirms each journalled guest is absent and then removes
+  that guest's disk and network.
+- Upgrading the VM host therefore requires draining first.
+- The network endpoint and its policy are attached in the creation document,
+  before the guest's first instruction runs.
+
+Off and Stop release all guest CPU, memory and GPU. When the VM host is
+installed as a service, Off also stops it, leaving the host free for other GPU
+work. An optional warm spare keeps one booted, unregistered guest ready while
+On. It is a durable runtime setting like the mode, so it can be switched without
+editing configuration.
+
+Bivouac never enables Windows features, installs host drivers, changes boot
+configuration or requests a reboot. Hyper-V's compute and network services
+must already be present.
+
+Prepared images are built once from an operator-supplied generalized image and
+published as a single VHDX. At runtime they are pinned by file identity,
+protected ACL and deny-write handles, not hashed per job. Each image records the
+host GPU driver it was built with, and admission refuses a host driver it does
+not match.
+
 ## Optional containers on macOS
 
 `providers.<name>.vz.containers` opts a macOS runner into a disposable

@@ -129,6 +129,17 @@ Open:
   Windows-only tests pass on a Windows host without elevation; the native
   credential round trip is opt-in and was not run.
 
+## Windows: direct HCS (in progress)
+
+Only the typed HCS binding exists, and it is covered by tests only. Its VM
+document matches the one an earlier standalone spike booted live, where HCS ran
+Windows guests with GPU-PV and hardware D3D11 rendering without the App Sandbox
+application, and prepared images skipped first-boot setup. That evidence comes
+from the spike, not from this code.
+
+Open: the VM host and its optional service, the provider, networking at
+creation, the image factory, the warm spare, and all live validation.
+
 ## Windows: Crosvm (Linux GPU guests)
 
 Validated live:
