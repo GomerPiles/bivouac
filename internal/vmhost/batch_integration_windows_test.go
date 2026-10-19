@@ -302,6 +302,7 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 	if err != nil {
 		return fail("identity", err)
 	}
+	defer identity.Clear()
 	dialStarted := time.Now()
 	var agent net.Conn
 	for agent == nil {
@@ -327,7 +328,8 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 	initCtx, done := context.WithTimeout(ctx, 2*time.Minute)
 	a, err := winguest.Initialize(initCtx, agent, identity.PublicKey)
 	done()
-	_ = agent.Close()
+	// Keep the agent session for the guest's life, as the image's builder did.
+	defer func() { _ = agent.Close() }()
 	r.Timings["agent_init"] = ms(time.Since(initStarted))
 	if err != nil || !a.DisplayReady || !a.KeyDeployed {
 		return fail("agent init", errors.Join(err, errors.New("display or key not confirmed")))
