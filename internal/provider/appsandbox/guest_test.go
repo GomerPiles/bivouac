@@ -145,12 +145,6 @@ func TestCacheOutageRemovesPartialAdapterBeforeJIT(t *testing.T) {
 	}
 }
 
-func TestWindowsGuestAdapterRefusesHostExecution(t *testing.T) {
-	if err := RunWindowsGuest(context.Background(), "probe", os.Stdout); err == nil {
-		t.Fatal("guest adapter ran on the host")
-	}
-}
-
 func TestGuestForgetRemovesOnlyThatInstanceHostKey(t *testing.T) {
 	_, _, _, record := engineFixture(t)
 	dir := t.TempDir()

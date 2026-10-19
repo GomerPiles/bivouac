@@ -22,6 +22,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/winhost"
+	"github.com/GomerPiles/bivouac/internal/winrunner"
 )
 
 // GuestOptions contains local transport/package locations, never GitHub
@@ -73,20 +74,6 @@ func (g *SSHGuest) PrepareCache(ctx context.Context, l Lease) error {
 	return err
 }
 
-type guestConfig struct {
-	NativeName    string `json:"native_name"`
-	RunnerName    string `json:"runner_name"`
-	ControllerID  string `json:"controller_id"`
-	User          string `json:"user"`
-	RunnerDir     string `json:"runner_dir"`
-	Address       string `json:"address"`
-	Gateway       string `json:"gateway"`
-	Prefix        int    `json:"prefix"`
-	MAC           string `json:"mac"`
-	Archive       bool   `json:"archive"`
-	ArchiveSHA256 string `json:"archive_sha256"`
-}
-
 func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("windows guest transport requires a Windows host")
@@ -96,7 +83,7 @@ func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) 
 			return nil, errors.New("guest transport requires absolute local paths")
 		}
 	}
-	if !validRunnerPath(opts.RunnerDir) {
+	if !winrunner.ValidRunnerDir(opts.RunnerDir) {
 		return nil, errors.New("guest runner must use a dedicated absolute Windows directory")
 	}
 	if opts.RunnerArchive != "" {
@@ -116,14 +103,6 @@ func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) 
 		return nil, err
 	}
 	return &SSHGuest{opts: opts, commands: commands}, nil
-}
-func validRunnerPath(path string) bool {
-	// Restrict to a fixed local guest drive. Config is delivered as JSON, not
-	// interpolated into a remote command or scheduled-task command line.
-	return len(path) > 3 && strings.EqualFold(path[:3], `C:\`) &&
-		!strings.ContainsAny(path, "\x00\r\n") && !strings.Contains(path, "..") &&
-		!strings.EqualFold(strings.TrimRight(path, `\`), `C:\Windows`) &&
-		!strings.HasPrefix(strings.ToLower(path), `c:\windows\`)
 }
 func verifyArchive(path, expected string) error {
 	f, err := os.Open(path)
@@ -235,14 +214,14 @@ func (g *SSHGuest) Preflight(ctx context.Context, l Lease) error {
 		return err
 	}
 	defer cleanup()
-	data, err := json.Marshal(guestConfig{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User})
+	data, err := json.Marshal(winrunner.Config{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User})
 	if err != nil {
 		return err
 	}
 	for _, file := range []struct {
 		name string
 		data []byte
-	}{{"bivouac-preflight.ps1", []byte(windowsPreflight)}, {"bivouac-config.json", data}} {
+	}{{"bivouac-preflight.ps1", []byte(winrunner.PreflightScript)}, {"bivouac-config.json", data}} {
 		path := filepath.Join(dir, file.name)
 		if err = os.WriteFile(path, file.data, 0o600); err != nil {
 			return err
@@ -280,7 +259,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		return err
 	}
 	defer cleanup()
-	config := guestConfig{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User, RunnerDir: g.opts.RunnerDir, Address: l.Address, Gateway: l.Gateway, Prefix: l.Prefix, MAC: l.MAC, Archive: g.opts.RunnerArchive != "", ArchiveSHA256: g.opts.RunnerSHA256}
+	config := winrunner.Config{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User, RunnerDir: g.opts.RunnerDir, Address: l.Address, Gateway: l.Gateway, Prefix: l.Prefix, MAC: l.MAC, Archive: g.opts.RunnerArchive != "", ArchiveSHA256: g.opts.RunnerSHA256}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -289,7 +268,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		name string
 		data []byte
 	}{
-		{"bivouac-control.ps1", []byte(windowsControl)},
+		{"bivouac-control.ps1", []byte(winrunner.ControlScript)},
 		{"bivouac-config.json", data},
 	} {
 		path := filepath.Join(dir, file.name)

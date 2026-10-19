@@ -27,6 +27,7 @@ internal/hcs         typed Host Compute Service binding for direct Windows guest
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
 internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
 internal/winguest    prepared Windows guest client: App Sandbox guest agent setup, SSH over HvSocket
+internal/winrunner   Windows guest runner adapter (`guest windows`) and its fixed control scripts
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
 internal/redact      credential redaction applied at every sink

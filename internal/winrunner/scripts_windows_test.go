@@ -1,6 +1,6 @@
 //go:build windows
 
-package appsandbox
+package winrunner
 
 import (
 	"context"
@@ -18,7 +18,7 @@ func TestControlScriptParsesInStockWindowsPowerShell(t *testing.T) {
 	directory := t.TempDir()
 	control := filepath.Join(directory, "control.ps1")
 	parser := filepath.Join(directory, "parse.ps1")
-	if err := os.WriteFile(control, []byte(windowsControl+"\n"+windowsJobHook+"\n"+windowsJobCompletedHook), 0o600); err != nil {
+	if err := os.WriteFile(control, []byte(ControlScript+"\n"+jobHook+"\n"+jobCompletedHook), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	const inspect = `param([string]$SourcePath)

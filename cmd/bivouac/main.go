@@ -21,10 +21,10 @@ import (
 	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/paths"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/vm"
+	"github.com/GomerPiles/bivouac/internal/winrunner"
 )
 
 const usage = `usage: bivouac <command> [flags]
@@ -109,7 +109,7 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 			return crosvm.RunLinuxGuest(ctx, args[1], os.Stdin, os.Stdout)
 		}
 		if len(args) == 2 && args[0] == "windows" {
-			return appsandbox.RunWindowsGuest(ctx, args[1], os.Stdout)
+			return winrunner.RunGuest(ctx, args[1], os.Stdout)
 		}
 		return errUsage
 	}
