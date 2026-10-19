@@ -30,8 +30,8 @@ runtime with real scale-set jobs from a baseline with the guest agent:
 - Scale set label arrays: github.com kept extra labels (including
   `self-hosted`) set at creation and assigned matching array jobs to the
   session; verified with a session probe, not a guest.
-- Timings: clone 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“31 s, JIT to listening
-  5ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“1.8 s (power-off).
+- Timings: clone 1ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“6 ms, boot to guest agent 22ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“31 s, JIT to listening
+  5ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“10 s, teardown 1.3ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
 the REST JIT fallback (idle pool of one), off/on with queued work, retained
@@ -231,10 +231,16 @@ retained; no startup speedup is claimed from the earlier script entry. The
 installed provider and production CI are unchanged.
 A read-only `trial --boot-events` collector targets the unaccounted pre-script
 interval using existing kernel, fixed-task process/action and correlated
-PowerShell engine/console events. It preserves image pins and normal startup;
+PowerShell console events. It preserves image pins and normal startup;
 missing channels and clock changes remain explicit unknowns. Local bounded-output,
-clock-change, identity-correlation and readiness-milestone tests pass. Live event
-attribution is pending; no further optimization is claimed. Embedded image assets
+clock-change, identity-correlation and readiness-milestone tests pass. A live
+read-only diagnostic passed normal readiness and cleanup, but Task Scheduler
+Operational was disabled and no usable classic PowerShell engine boundary was returned. No event
+offsets were available; pre-script attribution remains unresolved. An opt-in
+`build-image --boot-event-logs` prepares a separate diagnostic image with guest
+task logging enabled; console events now correlate directly to the task's
+recorded process ID. Live validation is pending, and no further optimization is
+claimed. Embedded image assets
 are byte-pinned with repository LF endings; ordinary-token `image-pins` reports
 the three script hashes, and a regression rejects CRLF drift before a live build.
 No Windows runner-listening/job timing, manager integration, input or networking/

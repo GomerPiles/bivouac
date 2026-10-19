@@ -21,7 +21,7 @@ func TestBootEventResponsesRejectUntrustedOffsetsAndFields(t *testing.T) {
 		`{"boot_marker":1,"clock_stable":true,"process_created_ms":600001}`,
 		`{"boot_marker":1,"clock_stable":true,"process_created_ms":-1}`,
 		`{"boot_marker":0,"clock_stable":true}`,
-		`{"boot_marker":1,"clock_stable":false,"engine_ready_ms":1}`,
+		`{"boot_marker":1,"clock_stable":false,"shell_ready_ms":1}`,
 		`{"raw_event":"discarded-private-fixture"}`,
 		`{} {}`,
 	} {
@@ -68,15 +68,12 @@ function Get-WinEvent($FilterHashtable,$MaxEvents,$ListLog,$ErrorAction,$ErrorVa
  }
  if($FilterHashtable.LogName -eq 'Microsoft-Windows-TaskScheduler/Operational'){
   if($d.mode -eq 'overflow'){foreach($n in 1..129){New-FixtureEvent 100 2 10 20 '<Event/>' ''};return}
+  if($d.kind -eq 'shell'){if($d.mode -eq 'missing'){return};return New-FixtureEvent 129 3 123 20 '<Event><EventData><Data Name="TaskName">\bivouac-hcs-ssh-hostkeys</Data><Data Name="ProcessID">123</Data></EventData></Event>' ''}
   foreach($id in @(100,129,200)){
    New-FixtureEvent $id $(if($id -eq 100){2}else{3}) 123 20 '<Event><EventData><Data Name="TaskName">\bivouac-hcs-ssh-hostkeys</Data><Data Name="ProcessID">123</Data></EventData></Event>' ''
   }
   New-FixtureEvent 129 0.1 456 19 '<Event><EventData><Data Name="TaskName">\discarded-private-fixture</Data></EventData></Event>' ''
   return
- }
- if($FilterHashtable.LogName -eq 'Windows PowerShell'){
-  if($d.mode -eq 'missing'){return}
-  return New-FixtureEvent 400 4 123 30 '<Event/>' 'discarded-private-fixture C:\Windows\AppSandbox\hcs-spike-startup.ps1'
  }
  foreach($id in @(40961,40962)){
   New-FixtureEvent $id $(if($id -eq 40961){3.2}else{5}) 123 40 '<Event/>' ''
@@ -89,15 +86,14 @@ $text=$writer.ToString();if($text.Contains('discarded-private-fixture') -or $tex
 $r=$text|ConvertFrom-Json
 if($r.boot_marker -lt 1){exit 2}
 if($d.mode -eq 'clock'){
- if($r.clock_stable -or $null -ne $r.process_created_ms -or $null -ne $r.engine_ready_ms -or $null -ne $r.shell_start_ms){exit 3};exit 0
+ if($r.clock_stable -or $null -ne $r.process_created_ms -or $null -ne $r.shell_start_ms){exit 3};exit 0
 }
 if(!$r.clock_stable){exit 4}
 if($d.kind -eq 'task'){
  if($d.mode -eq 'disabled' -or $d.mode -eq 'overflow'){if($r.query_complete -or $null -ne $r.process_created_ms){exit 5}}
  elseif(!$r.query_complete -or $r.task_start_ms -ne 2000 -or $r.process_created_ms -ne 3000 -or $r.action_start_ms -ne 3000){exit 6}
 }else{
- if($d.mode -eq 'missing'){if(!$r.log_enabled -or $r.query_complete -or $null -ne $r.engine_ready_ms){exit 10};exit 0}
- if($r.engine_ready_ms -ne 4000){exit 7}
+ if($d.mode -eq 'missing'){if(!$r.log_enabled -or $r.query_complete){exit 10};exit 0}
  if($d.mode -eq 'disabled'){if($r.query_complete -or $null -ne $r.shell_start_ms){exit 8}}
  elseif(!$r.query_complete -or $r.shell_start_ms -ne 3200 -or $r.shell_ready_ms -ne 5000){exit 9}
 }
@@ -168,6 +164,15 @@ func TestNativeBootEventReadOnlyCommand(t *testing.T) {
 		clear(out.data)
 		if err != nil {
 			t.Fatal("native query did not produce bounded event metadata")
+		}
+	}
+}
+
+func TestDiagnosticLoggingFlagCannotAlterOrdinaryTrial(t *testing.T) {
+	for _, mode := range []string{"trial", "plan", "headroom", "cleanup"} {
+		err := RunCLI(context.Background(), []string{mode, "--config", "missing.json", "--boot-event-logs"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "boot-event-logs requires build-image") {
+			t.Fatal("diagnostic image flag passed non-build dispatch", mode, err)
 		}
 	}
 }

@@ -567,8 +567,9 @@ collection has a 30-second deadline within the guest budget. Commands encode onl
 embedded source and stay below the remote command-size limit.
 
 `boot_events` projects kernel-start-relative task start (100), process creation
-(129), action start (200), and the matching PowerShell engine (400) and console
-startup (40961/40962) records. Task identity and the engine's process ID are used
+(129), action start (200), and PowerShell console
+startup (40961/40962) records correlated directly to the fixed task's process
+creation (129). Task identity and that process ID are used
 only in memory to reject unrelated events. Absolute timestamps, process IDs,
 arguments, context strings and raw log text never enter the report. The two
 responses must bind the same boot. Kernel time-change records invalidate event
@@ -580,7 +581,24 @@ The validated-desktop milestone is captured before collection. Collection has a
 separate `timings_ms.guest.boot_events` span and remains included in total/probe
 time. All normal readiness, reserve and owned-cleanup requirements remain active.
 Local synthetic tests cover foreign tasks/processes, clock changes, unavailable
-logs, overflow and redaction; live event attribution remains pending.
+logs, overflow and redaction. A live read-only boot passed all normal checks and
+owned cleanup, but found Task Scheduler Operational disabled and no usable
+classic PowerShell engine boundary. Its first startup instruction was at 23.656 s
+guest uptime and the agent-running checkpoint at 26.937 s. Clock/boot checks
+passed, but no event offsets were available: this does not separate OS boot,
+task dispatch and shell initialization. Event collection took 3.011 s after
+validated readiness; the installed provider and production CI were untouched.
+
+For a separate diagnostic image only, `build-image --boot-event-logs` enables
+Task Scheduler Operational through the guest's fixed `wevtutil sl` argument array
+after normal desktop validation. The authenticated guest must acknowledge and
+verify the enabled channel before sanitation/clean shutdown. The public image
+manifest records `boot_event_logs`; existing images and normal builds are
+unchanged. This flag is refused outside image capture. It changes no task,
+priority, service ordering, key generation or readiness gate. Reusing the task's
+recorded process ID avoids relying on the unavailable classic engine boundary. The
+diagnostic image and cold-boot trace still require explicit elevation and live
+validation; no further optimization is justified by the missing offsets.
 
 ## Desktop validation checkpoints
 

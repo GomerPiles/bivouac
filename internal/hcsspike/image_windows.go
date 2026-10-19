@@ -33,6 +33,7 @@ var autologonSecret string
 // ImageManifest is public provenance, never credential or guest diagnostic data.
 // The runtime disk is an immutable differencing image with one pinned flat parent.
 type ImageManifest struct {
+	BootEventLogs     bool       `json:"boot_event_logs,omitempty"`
 	SanitationSHA256  string     `json:"sanitation_sha256"`
 	AutologonSHA256   string     `json:"autologon_sha256"`
 	BuildID           string     `json:"build_id"`
@@ -370,7 +371,7 @@ func publishImage(ctx context.Context, c Config, sourceJournal, imageJournal *jo
 			runnerHash = a.SHA256
 		}
 	}
-	m := ImageManifest{SanitationSHA256: sanitationHash(), AutologonSHA256: autologonHash(), BuildID: c.InstanceID, BuildOwner: c.owner(), Image: PinnedFile{Source: dest, SHA256: hash}, Parent: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, GuestComputerName: c.name(), GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: runnerHash, CleanShutdown: true, Sanitized: true}
+	m := ImageManifest{BootEventLogs: r.BootEventLogsEnabled, SanitationSHA256: sanitationHash(), AutologonSHA256: autologonHash(), BuildID: c.InstanceID, BuildOwner: c.owner(), Image: PinnedFile{Source: dest, SHA256: hash}, Parent: PinnedFile{Source: c.Baseline, SHA256: c.BaselineSHA256}, GuestComputerName: c.name(), GuestUser: c.GuestUser, ProbeSHA256: c.RenderProbe.SHA256, ValidationSHA256: validationHash(), RunnerSHA256: runnerHash, CleanShutdown: true, Sanitized: true}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return errors.New("cannot encode prepared image provenance")

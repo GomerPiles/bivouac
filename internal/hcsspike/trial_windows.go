@@ -82,6 +82,7 @@ type Report struct {
 	Boot                       *GuestBootTimings `json:"boot,omitempty"`
 	CredentialRotated          bool              `json:"credential_rotated"`
 	InstanceID                 string            `json:"instance_id,omitempty"`
+	BootEventLogsEnabled       bool              `json:"boot_event_logs_enabled,omitempty"`
 	ImageSanitized             bool              `json:"image_sanitized"`
 	ImageShutdownAcknowledged  bool              `json:"image_shutdown_acknowledged"`
 	CleanShutdown              bool              `json:"clean_shutdown"`

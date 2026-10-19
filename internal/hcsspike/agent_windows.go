@@ -309,6 +309,12 @@ func (a *native) Probe(ctx context.Context, c Config, runtimeID string) (Report,
 			if err = a.verify(ctx, c, runtimeID); err != nil {
 				return report, err
 			}
+			if a.bootEventLogs {
+				if err = enableBootEventLogs(sshCtx, client); err != nil {
+					return report, err
+				}
+				report.BootEventLogsEnabled = true
+			}
 			if err = sanitizeImageGuest(sshCtx, client, c); err != nil {
 				return report, err
 			}

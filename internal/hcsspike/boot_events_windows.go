@@ -37,7 +37,6 @@ type BootEvents struct {
 	TaskStartMS        *uint64 `json:"task_start_ms,omitempty"`
 	ProcessCreatedMS   *uint64 `json:"process_created_ms,omitempty"`
 	ActionStartMS      *uint64 `json:"action_start_ms,omitempty"`
-	EngineReadyMS      *uint64 `json:"engine_ready_ms,omitempty"`
 	ShellStartMS       *uint64 `json:"shell_start_ms,omitempty"`
 	ShellReadyMS       *uint64 `json:"shell_ready_ms,omitempty"`
 }
@@ -52,7 +51,6 @@ type bootEventSnapshot struct {
 	TaskStartMS      *uint64 `json:"task_start_ms"`
 	ProcessCreatedMS *uint64 `json:"process_created_ms"`
 	ActionStartMS    *uint64 `json:"action_start_ms"`
-	EngineReadyMS    *uint64 `json:"engine_ready_ms"`
 	ShellStartMS     *uint64 `json:"shell_start_ms"`
 	ShellReadyMS     *uint64 `json:"shell_ready_ms"`
 }
@@ -67,7 +65,7 @@ func parseBootEventSnapshot(b []byte) (bootEventSnapshot, error) {
 	if d.Decode(new(any)) != io.EOF || r.BootMarker > 3155378975999999999 || (r.ClockStable && r.BootMarker == 0) {
 		return r, errors.New("invalid boot event identity")
 	}
-	for _, v := range []*uint64{r.TaskStartMS, r.ProcessCreatedMS, r.ActionStartMS, r.EngineReadyMS, r.ShellStartMS, r.ShellReadyMS} {
+	for _, v := range []*uint64{r.TaskStartMS, r.ProcessCreatedMS, r.ActionStartMS, r.ShellStartMS, r.ShellReadyMS} {
 		if v != nil && (*v > 600000 || !r.ClockStable) {
 			return r, errors.New("invalid boot event offset or changed clock")
 		}
@@ -88,7 +86,6 @@ func joinBootEvents(task, shell bootEventSnapshot) *BootEvents {
 		r.TaskStartMS = task.TaskStartMS
 		r.ProcessCreatedMS = task.ProcessCreatedMS
 		r.ActionStartMS = task.ActionStartMS
-		r.EngineReadyMS = shell.EngineReadyMS
 		r.ShellStartMS = shell.ShellStartMS
 		r.ShellReadyMS = shell.ShellReadyMS
 	}
@@ -114,4 +111,21 @@ func (a *native) collectBootEvents(ctx context.Context, client *ssh.Client, c Co
 		}
 	}
 	return joinBootEvents(snapshots[0], snapshots[1]), nil
+}
+
+// This fixed command runs only inside a verified, authenticated image-build guest,
+// after desktop validation and before normal sanitation/acknowledged shutdown.
+const enableTaskEventsScript = `$ErrorActionPreference='Stop'
+& 'C:\Windows\System32\wevtutil.exe' @('sl','Microsoft-Windows-TaskScheduler/Operational','/e:true') *> $null
+if($LASTEXITCODE -or !(Get-WinEvent -ListLog 'Microsoft-Windows-TaskScheduler/Operational' -ErrorAction Stop).IsEnabled){exit 1}
+[Console]::Out.Write('task-events-enabled')`
+
+func enableBootEventLogs(ctx context.Context, client *ssh.Client) error {
+	command := "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(enableTaskEventsScript)
+	out, _, err := runGuestSSH(ctx, client, command, nil)
+	defer clear(out)
+	if err != nil || string(out) != "task-events-enabled" {
+		return errors.New("diagnostic guest task event logging was not acknowledged")
+	}
+	return nil
 }
