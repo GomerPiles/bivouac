@@ -139,7 +139,7 @@ while sessions fail; one successful poll resets the delay.
   Label updates returned success but changed nothing.
 - After a controller crash, the existing session can cause temporary 409
   conflicts. A live guest is adopted independently; polling retries until
-  GitHub expires the dead session (128ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ129 s in the crash tests). A job
+  GitHub expires the dead session (128ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“129 s in the crash tests). A job
   queued during that conflict window was assigned after the adopted job
   completed, then passed in a fresh guest without operator intervention.
 
@@ -422,7 +422,7 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦] [--display WxH[@PPI]]
+  [--input] [--share <dir>] [--softnet ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦] [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk, NAT or
@@ -876,9 +876,9 @@ priority provides no repeatable readiness benefit: validated-desktop spans exclu
 image verification are 36.225/39.224/40.077 s for control and
 36.535/42.138/44.436 s for normal priority. The default below-normal task priority
 (7) is retained. Script entry alone is not a readiness milestone; an earlier
-entry can be offset by slower subsequent work. OS boot, task dispatch and
-PowerShell initialization still require finer attribution before replacing the
-startup path. Security/service ordering and host CI settings are unchanged.
+entry can be offset by slower subsequent work. The calibrated trace below
+separates process creation from script execution; the internal process-startup
+work remains unseparated. Security/service ordering and host CI settings are unchanged.
 An opt-in `trial --boot-events` reads existing guest kernel boot, fixed-task
 start/process/action and correlated PowerShell console events after all
 readiness gates pass. It does not enable logs, change startup, or rebuild images.
@@ -890,21 +890,25 @@ unavailable/overflowing channels suppress uncertain offsets. This event-clock
 view is separate from monotonic guest checkpoints and host timings. A monotonic
 readiness milestone precedes collection, whose duration is reported separately;
 normal trials are unchanged. Local synthetic correlation/privacy tests pass.
-The live read-only collection passed normal gates but returned no offsets: task
-logging was disabled and no usable classic PowerShell engine boundary was returned. Attribution
-remains unresolved. `build-image --boot-event-logs` explicitly enables only guest
-Task Scheduler Operational logging, after validated readiness and before normal
-sanitation/clean shutdown; the manifest records this diagnostic provenance. It
-is refused in other CLI modes and changes no startup/security behavior. Console
-events correlate directly to the fixed task's process-creation record. The diagnostic
-capture/cold boot passed normal gates and owned cleanup. Task process creation
-was 2.734 s after kernel-recorded start, versus script entry at 21.187 s guest
-uptime; console boundaries remained unavailable. A third fixed query samples
-both clock origins together with a bounded at-most-20-ms bracket. Calibration
-requires one boot, no observed clock steps and a complete bounded sample; live
-validation is pending. A bounded console-event count and expected-process-path
-Boolean retain no raw event or identity text. No initialization duration or
-optimization is inferred by directly subtracting different clock origins.
+`build-image --boot-event-logs` explicitly enables only guest Task Scheduler
+Operational logging, after validated readiness and before normal sanitation/clean
+shutdown; the manifest records this diagnostic provenance. It is refused in
+other CLI modes and changes no startup/security behavior. Console events
+correlate directly to the fixed task's process-creation record. A third fixed
+query samples both clock origins with a bounded at-most-20-ms bracket; a complete
+sample, one boot and no observed clock steps are required before subtraction.
+A bounded console-event count and expected-process-path Boolean retain no raw
+event or identity text.
+Diagnostic capture and calibrated cold-boot validation pass normal gates and
+owned cleanup. The 16-ms sample maps task/process/action start to about 3.0 s
+guest uptime; script entry is 22.187 s. About 19.2 s is therefore after the
+PowerShell process exists but before its first script instruction. The expected
+executable path is confirmed; zero console-start events leave process scheduling,
+loading and engine initialization unseparated. Key generation and ordered SSH/
+agent startup take another 2.172 s. This supports a controlled native-bootstrap
+comparison retaining every existing gate, not an assumed speedup or a change
+to task priority. No replacement bootstrap is implemented or deployed. Production
+CI and the installed provider remain untouched.
 The experiment is not wired into
 the manager/provider contract.
 The optional `trial --boot-only` mode skips guest initialization and tests only

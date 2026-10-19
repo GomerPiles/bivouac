@@ -574,8 +574,8 @@ only in memory to reject unrelated events. Absolute timestamps, process IDs,
 arguments, context strings and raw log text never enter the report. All three
 responses must bind the same boot. Kernel time-change records invalidate event
 subtraction; missing/disabled logs, incomplete queries and missing events stay
-explicit flags or absent offsets. These event-clock offsets are not subtracted
-from guest TickCount or host stopwatches.
+explicit flags or absent offsets. Event-clock offsets are not subtracted from guest TickCount without the
+validated calibration below, and are never subtracted from host stopwatches.
 
 The validated-desktop milestone is captured before collection. Collection has a
 separate `timings_ms.guest.boot_events` span and remains included in total/probe
@@ -604,8 +604,8 @@ readiness/rendering/cleanup gates and returned task start/process/action at
 21.187 s guest uptime, and the agent-running checkpoint at 23.281 s. Console
 queries completed but supplied no matching startup events. The one-shot trace
 refused complete-attribution status because those boundaries were missing.
-These are different clock origins: their numerical difference is not yet a
-measured process-initialization duration.
+Those uncalibrated clock origins alone do not measure a process-initialization
+duration; the subsequent calibrated run below resolves that boundary.
 
 A third fixed read-only query now samples guest TickCount immediately around
 the kernel-relative UTC observation. All three bounded clock fields must be
@@ -613,8 +613,44 @@ present together, with a sample span at most 20 ms, no observed clock changes,
 and the same boot marker across queries. It also projects only a bounded count
 of console-start events and a Boolean indicating whether the fixed task's
 process path matches the expected PowerShell executable. No path, PID, absolute
-time or event text is retained. This calibration must be validated live before
-subtracting the two clock origins; it changes no image or startup setting.
+time or event text is retained. Live calibration passes without changing the image or startup settings. The
+three responses bind the same boot with no observed clock steps; all normal
+identity/readiness/rendering checks and owned cleanup pass. At the sample,
+uptime was 38.718 s, event-clock elapsed time 38.601 s, and the sampling bracket
+16 ms. Task start, process creation and action start were all at 2.872 s on the
+event clock, mapping to approximately 3.0 s guest uptime. The recorded process
+path matches the fixed PowerShell executable. The operational console query
+returned zero startup events across all processes, so absence is not a PID
+matching result.
+
+| Stage | Calibrated cold boot |
+| --- | --- |
+| Boot through PowerShell process creation | Approximately 3.0 s |
+| Process creation through first script instruction | Approximately 19.2 s |
+| First script instruction (guest uptime) | 22.187 s |
+| Script entry through key-generation entry | 0.672 s |
+| Fresh server-key generation | 0.609 s |
+| Start SSH after fresh keys | 0.282 s |
+| Start agent after SSH | 0.609 s |
+| Agent-running checkpoint (guest uptime) | 24.359 s |
+| Agent connection (host span) | 24.756 s |
+| Validated desktop, excluding image verification (host span) | 37.740 s |
+
+The 16-ms bracket maps process creation to 2.989-3.005 s guest uptime and the
+subsequent pre-script span to 19.182-19.198 s before timer granularity. Report
+these as approximate tenths of a second: [Windows tick timing](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-gettickcount)
+has finite resolution. Diagnostic collection took a separate 3.607 s after the
+readiness milestone. Image verification was 11.895 s; it is excluded only from
+the explicitly labelled desktop row.
+
+This localizes most delay after process creation and before script execution,
+not to repeated setup, server-key generation or service-start checks. It does
+not distinguish process scheduling, executable/assembly loading and engine
+initialization. A native bootstrap preserving fresh keys, service ordering,
+checkpoint refusal and all readiness gates is a justified candidate for a
+controlled comparison; bypassing PowerShell has not been implemented or measured.
+The earlier priority comparison supplies no reason to change task priority.
+Production CI and the installed provider remain untouched.
 
 ## Desktop validation checkpoints
 
