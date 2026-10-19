@@ -732,6 +732,28 @@ HCS and Windows networking refuse ordinary tokens, so the work splits in two:
   confirmed that an unelevated account is refused services it was not
   granted.
 
+The pipe (`\\.\pipe\bivouac-vmhost`) carries one bounded JSON request per
+connection: info, create, status, destroy or list.
+
+- Authorization:
+  - The client dials at identification level. After reading the request,
+    the VM host impersonates the client on a dedicated thread to learn its
+    account, and refuses accounts outside its configuration.
+  - Anonymous callers are refused.
+  - The DACL grants accounts read and write data only. It never grants
+    create-instance, so no account can serve the name.
+  - The client refuses a server that is neither elevated nor SYSTEM, so a
+    process that squats on the name is not trusted.
+- Each guest belongs to the account that created it. Status, destroy and list
+  see only that account's guests.
+- A create names a configured image, not a path. The VM host sets each
+  HvSocket service's descriptor to the caller's account.
+- The VM host reserves instance, CPU and memory capacity against its
+  configured limits before any HCS call. Info reports the shared totals, so
+  every manager budgets against the same host.
+- A create whose outcome is unknown keeps its reservation until a later VM
+  host's Recover settles it.
+
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
 service implicitly. An administrator installs it explicitly, which needs no
