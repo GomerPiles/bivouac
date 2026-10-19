@@ -283,6 +283,57 @@ During owned policy cleanup, resetting the last boolean overrides to
 persistent policy before issuing another remove, and confirm its absence;
 do not infer complete cleanup from a successful default-action removal.
 
+## Direct HCS VM host
+
+The VM host is the elevated half of the direct HCS provider. You can run it
+either way:
+
+- as an optional service, installed once by an administrator; or
+- in the foreground from an elevated shell, with one UAC prompt per start.
+
+Nothing reboots, enables Windows features or installs drivers. Hyper-V's
+compute and network services must already be running.
+
+1. Place `bivouac.exe` in an administrator-protected directory, such as
+   `%ProgramFiles%\bivouac`. The service runs that file as SYSTEM, so the
+   ordinary user must not be able to replace it.
+2. Write the configuration in a protected directory too, for example
+   `%ProgramData%\bivouac\vmhost.json`:
+
+   ```json
+   {
+     "root": "C:\\ProgramData\\bivouac\\vmhost",
+     "controller": "host-1",
+     "accounts": ["<the manager user's SID, from whoami /user>"],
+     "images": {"windows": "D:\\RunnerImages\\prepared.vhdx"},
+     "max_instances": 2,
+     "max_cpu": 8,
+     "max_memory_mb": 16384
+   }
+   ```
+
+   Images must also be administrator-protected; the Hyper-V VM group may
+   read them.
+3. Either install the service or run in the foreground. Both commands are
+   elevated:
+
+   ```powershell
+   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost install --config C:\ProgramData\bivouac\vmhost.json
+   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost run --config C:\ProgramData\bivouac\vmhost.json
+   ```
+
+   Installing creates the protected journal root if it is absent. It
+   registers a manual-start service that restarts after a crash, and grants
+   the configured accounts query, start and stop rights on that service only.
+4. From the ordinary account, use `bivouac vmhost start`, `bivouac vmhost stop`
+   and `bivouac vmhost status`. Stopping the service destroys its guests
+   first.
+5. To remove it, stop it, then run `bivouac vmhost uninstall` elevated. A
+   running service is refused.
+
+The service logs to `vmhost.log` in its root. Any guest left by an earlier VM
+host is settled when it next starts.
+
 ## Direct HCS lab batch
 
 `TestLabBatch` in `internal/vmhost` boots disposable guests from an existing

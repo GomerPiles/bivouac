@@ -51,6 +51,10 @@ Setup:
   vz cleanup       delete orphaned guests that carry bivouac's own metadata
   appsandbox inspect  read-only daemon/version/VM inventory (no startup)
   appsandbox broker   operator-started elevated lifecycle broker
+  vmhost run          elevated foreground VM host (Windows HCS guests)
+  vmhost install      register the optional VM host service (elevated; also: uninstall)
+  vmhost start|stop   start or stop the installed service without elevation
+  vmhost status       service state and VM host limits
   crosvm validate     credential-free Linux GPU/lifecycle/recovery test
   crosvm build-image  prepare and cleanly capture an independent Linux image
   crosvm cleanup      retry one exact recorded native validation instance
@@ -111,6 +115,9 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 	if cmd == "appsandbox" {
 		return appsandboxCmd(ctx, args, os.Stdout)
+	}
+	if cmd == "vmhost" {
+		return vmhostCmd(ctx, args, os.Stdout)
 	}
 	if cmd == "guest-agent" {
 		if len(args) != 0 {

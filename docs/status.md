@@ -173,9 +173,14 @@ window, the task's SSH host-key generation takes 5.6-5.8 s instead of
 Desktop validation takes about 11 s. Its own console, GPU and render waits
 account for about 5 s of that; the rest is PowerShell work in the image.
 
+Built since, covered by tests only: the VM host's authorized pipe API, the
+optional service and its install and control commands. A real named-pipe
+test covers caller identification, refusal of anonymous callers and refusal
+of an unprivileged server. The service has not yet been installed live.
+
 Open:
 
-- The VM host's pipe API and optional service.
+- Installing and running the VM host service live.
 - The provider.
 - Networking at creation.
 - The image factory.
