@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package vmhost is the privileged half of the Windows HCS provider. It owns
 // compute systems, their per-job differencing disks and a journal proving
 // which guests it created. It never holds GitHub credentials, job data or guest
