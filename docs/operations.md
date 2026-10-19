@@ -379,7 +379,7 @@ launchd's default low-priority I/O throttling. Install the updated plist during
 offline image preparation and shut down cleanly before importing the image;
 rebuilding the host binary does not update existing baseline LaunchAgents.
 
-**Startup timing and helper reuse.** The daemon writes `macos startup stage`
+**Startup timing.** The daemon writes `startup stage`
 records to its normal redacted log, with provider, guest name, `stage`,
 `duration_ms` and `success`. The stages are:
 
@@ -389,24 +389,23 @@ records to its normal redacted log, with provider, guest name, `stage`,
 | `native_start` | Host VM-helper process launch, not completed guest boot |
 | `agent_wait` | Agent availability, including OS boot and Aqua login |
 | `script_install`, `aqua_session_check` | Bootstrap delivery and desktop-session proof |
-| `helper_check`, `helper_upload`, `helper_prepare` | Image helper fingerprint, fallback upload when needed, and total selection/delivery |
+| `helper_upload` | Current helper upload, including source and private destination preparation |
 | `cache_setup` | Optional per-clone cache configuration and trust |
 | `jit_generation`, `jit_delivery`, `listener_wait` | Registration request, bootstrap/initial listener launch, and official listener readiness |
 | `dns_setup` | Public DNS setup in optional container-pair guests |
 
-Stages omitted from a path produce no record. A zero duration can mean less
-than one millisecond. Helper check/upload are nested inside helper preparation;
-do not add them again. Existing `clone_ms`, `boot_ms` and `register_ms` retain
-their meanings. Failed stages record their elapsed time without guest output
+The manager emits `jit_generation` and `listener_wait` for every provider; the
+other stages listed above are macOS provider measurements. Stages omitted from
+a path produce no record. A zero duration can mean less than one millisecond.
+Existing `clone_ms`, `boot_ms` and `register_ms` retain their meanings.
+Failed stages record their elapsed time without guest output
 or raw error details; optional helper/cache failures can still fall back to the
 ordinary runner.
 
-`helper_prepare` includes `helper_reused`. Reuse needs the exact current host
-binary at the protected baseline path, not merely a matching agent protocol.
-An older baseline continues to work through a single private helper upload;
-caching no longer uploads a second executable. Only a protocol change requires
-updating the guest agent. Update a baseline through the normal offline image
-process when helper reuse is desired; this feature never changes it in place.
+Every fresh macOS clone receives one private helper upload, shared by telemetry,
+caching and the optional container relay. Caching no longer uploads a second
+executable. The baseline agent needs updating only when its protocol or launch
+policy changes; the host never updates it in place.
 
 **Moving from the Tart CLI runtime.** Drain to idle first: guests started by
 `tart run` are not adopted. Import the baseline, set `type = "vz"`, and

@@ -588,9 +588,7 @@ func (m *Manager) lifecycle(ctx context.Context, r *run, adopted bool) {
 	pcfg := m.o.Config.Providers[inst.Provider]
 	log := m.o.Log.With("instance", inst.ID, "name", inst.Name, "provider", inst.Provider)
 	startupStage := func(stage string, started time.Time, err error) {
-		if pcfg.Type == "vz" {
-			log.Info("macos startup stage", "stage", stage, "duration_ms", time.Since(started).Milliseconds(), "success", err == nil)
-		}
+		log.Info("startup stage", "stage", stage, "duration_ms", time.Since(started).Milliseconds(), "success", err == nil)
 	}
 	var launchLog *os.File
 	defer func() {

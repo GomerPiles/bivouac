@@ -61,8 +61,9 @@ type Provider struct {
 func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
 
 // New returns the provider for VMs in store (paths.Layout.VMs). rt may be
-// nil for the real VM runtime.
-func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime) (*Provider, error) {
+// nil for the real VM runtime. log is the caller's redacted sink; nil disables
+// startup timing records.
+func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime, log *slog.Logger) (*Provider, error) {
 	if !filepath.IsAbs(store) {
 		return nil, fmt.Errorf("VM store %q is not absolute", store)
 	}
@@ -73,7 +74,7 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the VM store path is

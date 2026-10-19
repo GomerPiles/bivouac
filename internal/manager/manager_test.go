@@ -117,7 +117,25 @@ func (h *harness) run(ctx context.Context) <-chan error {
 }
 
 func TestOneJobPerGuest(t *testing.T) {
-	h := newHarness(t, nil)
+	for _, providerType := range []string{"vz", "appsandbox", "crosvm"} {
+		t.Run(providerType, func(t *testing.T) { testOneJobPerGuest(t, providerType) })
+	}
+}
+
+func testOneJobPerGuest(t *testing.T, providerType string) {
+	h := newHarness(t, func(c *config.Config) {
+		p := c.Providers["macos"]
+		p.Type = providerType
+		switch providerType {
+		case "appsandbox":
+			p.VZ = nil
+			p.AppSandbox = &config.AppSandbox{Baseline: "fixture", RunnerDir: `C:\actions-runner`}
+		case "crosvm":
+			p.VZ = nil
+			p.Crosvm = &config.Crosvm{BaselineName: "fixture"}
+		}
+		c.Providers["macos"] = p
+	})
 	var stageLog bytes.Buffer
 	h.m.o.Log = slog.New(slog.NewJSONHandler(&stageLog, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,6 +187,8 @@ func TestOneJobPerGuest(t *testing.T) {
 	decoder := json.NewDecoder(&stageLog)
 	for decoder.More() {
 		var record struct {
+			Message    string `json:"msg"`
+			Provider   string `json:"provider"`
 			Stage      string `json:"stage"`
 			DurationMS int64  `json:"duration_ms"`
 			Success    bool   `json:"success"`
@@ -177,14 +197,14 @@ func TestOneJobPerGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		if record.Stage != "" {
-			if !record.Success || record.DurationMS < 0 {
+			if record.Message != "startup stage" || record.Provider != inst.Provider || !record.Success || record.DurationMS < 0 {
 				t.Fatal("invalid registration timing")
 			}
 			stages[record.Stage] = true
 		}
 	}
 	if !stages["jit_generation"] || !stages["listener_wait"] {
-		t.Fatal("macOS registration stages missing")
+		t.Fatal("registration stages missing")
 	}
 }
 

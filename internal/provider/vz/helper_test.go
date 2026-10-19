@@ -3,13 +3,10 @@ package vz
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,24 +14,6 @@ import (
 	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/engine"
 )
-
-func selfFingerprint(t *testing.T) string {
-	t.Helper()
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		t.Fatal(err)
-	}
-	return hex.EncodeToString(hash.Sum(nil))
-}
 
 func enableFixtureCache(t *testing.T, p *Provider) {
 	t.Helper()
@@ -58,89 +37,73 @@ func helperUploads(r *recorder, name string) int {
 }
 
 func TestRunnerSharesOneHelperWithCache(t *testing.T) {
-	fingerprint := selfFingerprint(t)
-	for _, report := range []string{"absent", "untrusted", strings.Repeat("0", 64), fingerprint} {
-		t.Run(report[:min(10, len(report))], func(t *testing.T) {
-			p, r := ownedFixture(t)
-			r.helperReport = report + "\n"
-			enableFixtureCache(t, p)
-			var logs bytes.Buffer
-			p.SetLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
-			if err := p.StartRunner(context.Background(), fixtureName, []byte("synthetic-private-jit")); err != nil {
-				t.Fatal(err)
-			}
-			want := 1
-			if report == fingerprint {
-				want = 0
-			}
-			if got := helperUploads(r, fixtureName); got != want {
-				t.Fatalf("uploaded %d macOS helpers, want %d", got, want)
-			}
-			if _, ok := r.stdin["Exec "+fixtureName+" dd of=/tmp/bivouac/cache-config.json status=none"]; !ok {
-				t.Fatal("cache bootstrap was not delivered")
-			}
-			linked := false
-			prepared := false
-			for _, call := range r.calls {
-				joined := strings.Join(call, " ")
-				if strings.Contains(joined, "bivouac-cache-client") || strings.Contains(joined, "of="+engine.GuestHelper) || strings.Contains(joined, "synthetic-private-jit") {
-					t.Fatal("duplicate helper destination or private input in argv")
-				}
-				linked = linked || joined == "Exec "+fixtureName+" /bin/ln -s "+preparedHelper+" "+guestHelper
-				if len(call) > 3 && (call[2] == "/usr/bin/install" || call[2] == "/bin/ln") && call[len(call)-1] == guestHelper && !prepared {
-					t.Fatal("runtime leaf was not removed before installing/linking a helper")
-				}
-				prepared = prepared || joined == "Exec "+fixtureName+" rm -f "+guestHelper
-			}
-			if linked != (report == fingerprint) {
-				t.Fatal("baseline helper used without an exact fingerprint")
-			}
-			if strings.Contains(logs.String(), "synthetic-private-jit") || strings.Contains(logs.String(), fingerprint) || strings.Contains(logs.String(), "BEGIN CERTIFICATE") {
-				t.Fatal("startup logs retain private input or helper report")
-			}
-			stages := map[string]map[string]any{}
-			decoder := json.NewDecoder(&logs)
-			for decoder.More() {
-				var record map[string]any
-				if err := decoder.Decode(&record); err != nil {
-					t.Fatal(err)
-				}
-				if record["msg"] != "macos startup stage" || record["success"] != true || record["name"] != fixtureName || record["duration_ms"].(float64) < 0 {
-					t.Fatal("missing or invalid startup observation")
-				}
-				stages[record["stage"].(string)] = record
-			}
-			for _, stage := range []string{"helper_check", "helper_prepare", "cache_setup", "jit_delivery"} {
-				if stages[stage] == nil {
-					t.Fatalf("missing %s timing", stage)
-				}
-			}
-			if stages["helper_prepare"]["helper_reused"] != (report == fingerprint) {
-				t.Fatal("helper reuse outcome missing")
-			}
-		})
+	p, r := ownedFixture(t)
+	enableFixtureCache(t, p)
+	var logs bytes.Buffer
+	p.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	if err := p.StartRunner(context.Background(), fixtureName, []byte("synthetic-private-jit")); err != nil {
+		t.Fatal(err)
+	}
+	if got := helperUploads(r, fixtureName); got != 1 {
+		t.Fatalf("uploaded %d macOS helpers, want 1", got)
+	}
+	if _, ok := r.stdin["Exec "+fixtureName+" dd of=/tmp/bivouac/cache-config.json status=none"]; !ok {
+		t.Fatal("cache bootstrap was not delivered")
+	}
+	prepared := false
+	for _, call := range r.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "bivouac-cache-client") || strings.Contains(joined, "of="+engine.GuestHelper) || strings.Contains(joined, "synthetic-private-jit") {
+			t.Fatal("duplicate helper destination or private input in argv")
+		}
+		if len(call) > 3 && call[2] == "/usr/bin/install" && call[len(call)-1] == guestHelper && !prepared {
+			t.Fatal("runtime leaf was not removed before installing a helper")
+		}
+		prepared = prepared || joined == "Exec "+fixtureName+" rm -f "+guestHelper
+	}
+	if strings.Contains(logs.String(), "synthetic-private-jit") || strings.Contains(logs.String(), "BEGIN CERTIFICATE") {
+		t.Fatal("startup logs retain private input")
+	}
+	stages := map[string]bool{}
+	decoder := json.NewDecoder(&logs)
+	for decoder.More() {
+		var record struct {
+			Message    string `json:"msg"`
+			Name       string `json:"name"`
+			Provider   string `json:"provider"`
+			Stage      string `json:"stage"`
+			DurationMS int64  `json:"duration_ms"`
+			Success    bool   `json:"success"`
+		}
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Message != "startup stage" || !record.Success || record.Name != fixtureName || record.Provider != p.name || record.DurationMS < 0 {
+			t.Fatal("missing or invalid startup observation")
+		}
+		stages[record.Stage] = true
+	}
+	for _, stage := range []string{"helper_upload", "cache_setup", "jit_delivery"} {
+		if !stages[stage] {
+			t.Fatalf("missing %s timing", stage)
+		}
 	}
 }
 
-func TestHelperProbeFailureDoesNotUploadOrRetainGuestOutput(t *testing.T) {
-	for _, report := range []string{"malformed-private-report", strings.Repeat("x", 129), "transport"} {
-		p, r := ownedFixture(t)
-		r.helperReport = report
-		if report == "transport" {
-			r.helperErr = errors.New("synthetic-private-transport-error")
-		}
-		var logs bytes.Buffer
-		p.SetLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
-		err := p.installGuestHelper(context.Background(), fixtureName)
-		if err == nil || helperUploads(r, fixtureName) != 0 {
-			t.Fatal("failed probe triggered an upload")
-		}
-		if strings.Contains(err.Error(), "private") || strings.Contains(logs.String(), "private") {
-			t.Fatal("guest-controlled data retained")
-		}
-		if !strings.Contains(logs.String(), `"stage":"helper_check"`) || !strings.Contains(logs.String(), `"success":false`) {
-			t.Fatal("failed stage timing missing")
-		}
+func TestHelperUploadFailureDoesNotRetainGuestOutput(t *testing.T) {
+	p, r := ownedFixture(t)
+	p.rt = callRuntime{&failedHelper{recorder: r}}
+	var logs bytes.Buffer
+	p.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	err := p.installGuestHelper(context.Background(), fixtureName)
+	if err == nil {
+		t.Fatal("failed upload succeeded")
+	}
+	if strings.Contains(err.Error(), "private") || strings.Contains(logs.String(), "private") {
+		t.Fatal("guest-controlled data retained")
+	}
+	if !strings.Contains(logs.String(), `"stage":"helper_upload"`) || !strings.Contains(logs.String(), `"success":false`) {
+		t.Fatal("failed stage timing missing")
 	}
 }
 
@@ -221,7 +184,10 @@ type failedHelper struct {
 func (f *failedHelper) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	if strings.Contains(strings.Join(args, " "), "dd of="+guestHelper) {
 		f.copyFailed = true
-		return errors.New("synthetic partial copy failure")
+		if _, err := io.WriteString(stdout, "synthetic-private-guest-output"); err != nil {
+			return err
+		}
+		return errors.New("synthetic-private-copy-error")
 	}
 	if f.copyFailed && f.cleanupFails && len(args) >= 3 && args[len(args)-1] == guestHelper && args[len(args)-3] == "rm" {
 		return errors.New("synthetic cleanup failure")

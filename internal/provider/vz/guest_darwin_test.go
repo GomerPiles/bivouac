@@ -3,10 +3,7 @@ package vz
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,38 +15,6 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/perf"
 )
-
-// Execute only the fixed fingerprint probe against host fixtures. No guest,
-// manager, production binary or baseline is started or modified.
-func TestPreparedHelperProbeNativePaths(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	f, err := os.Open("/bin/sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = f.Close() }()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(t.TempDir(), "helper")
-	if err := os.Symlink("/bin/sh", link); err != nil {
-		t.Fatal(err)
-	}
-	for _, candidate := range []string{"/bin/sh", link, link + "-absent"} {
-		cmd := exec.CommandContext(ctx, "/bin/sh", "-s", "--", candidate)
-		cmd.Stdin = strings.NewReader(helperProbe)
-		out, err := cmd.Output()
-		if err != nil {
-			t.Fatal("fixed helper probe failed", err)
-		}
-		matches, err := helperMatches(out, hex.EncodeToString(hash.Sum(nil)))
-		if err != nil || matches != (candidate == "/bin/sh") {
-			t.Fatal("probe accepted an unprotected path or rejected a protected file", err)
-		}
-	}
-}
 
 // Exercise the wrapper's real child process and recorder together, including
 // an official-listener failure. The fixture never registers or launches a VM.

@@ -313,16 +313,12 @@ startup intact. No detached logging process, extra service, host endpoint or
 workflow change is needed. Hook output on a lost guest may be unavailable, while
 its last retained report remains eligible for normal diagnostics.
 
-The macOS provider selects one native helper per disposable clone, shared by
-telemetry, optional caching and the macOS side of optional container pairs.
-Before executing the baseline's `/usr/local/bin/bivouac`, a fixed stdin probe
-checks the file and every ancestor for root ownership, no group/other mutation
-permissions and no symlinks, then compares SHA-256 with the selected host binary.
-An exact match gets a private runtime symlink at `/tmp/bivouac-helper`; an absent,
-stale or untrusted image helper gets one private upload instead. The same opened
-host file is fingerprinted and uploaded. A transport failure or malformed probe
-response never triggers an upload. Protocol compatibility alone does not prove
-that the image carries the current telemetry/cache implementation.
+The macOS provider uploads the current host binary once per disposable clone
+at `/tmp/bivouac-helper`, shared by telemetry, optional caching and the macOS
+side of optional container pairs. It removes the runtime leaf before uploading
+so a stale symlink cannot redirect the write into the baseline agent.
+The baseline agent need only match the guest protocol; helper delivery does
+not depend on its binary version or filesystem ownership.
 
 Its listener wrapper starts
 the official runner in the same Aqua session, records the actual listener PID
@@ -504,18 +500,17 @@ The runner package is baked into the baseline; `doctor` reports its version.
 A host-cached package copied at boot is a later option if baseline updates
 lag runner releases.
 
-Structured `macos startup stage` records use the daemon's redacted sink and
-host-monotonic durations. They distinguish clone, VM-helper process launch,
-agent availability (including OS boot and Aqua login), bootstrap script delivery,
-Aqua session verification, helper check/upload/preparation, optional cache setup,
-JIT generation/delivery and waiting for the official listener. Container pairs
-also time companion agent/helper preparation and DNS setup. Each visited stage
-records milliseconds and success even on failure; helper preparation additionally
-records whether the baseline helper was reused. No command arguments, stdin,
-guest output, credential material or raw errors enter these records. Nested
-helper timings overlap their preparation parent; they must not be added twice.
-The existing manager clone/boot/registration totals remain authoritative for
-end-to-end startup, and adoption does not repeat helper delivery or registration.
+Structured `startup stage` records use the daemon's redacted sink and
+host-monotonic durations, with provider and guest identity, fixed stage names,
+milliseconds and success even on failure. The manager records JIT generation
+and official listener readiness for every provider. The macOS provider adds
+clone, VM-helper launch, agent availability, script delivery, Aqua verification,
+helper upload, optional cache setup and JIT delivery; container pairs also time
+companion agent/helper preparation and DNS setup. No command arguments, stdin,
+guest output, credential material or raw errors enter these records. The sink
+is supplied at provider construction. Existing manager clone/boot/registration
+totals retain their meaning, and adoption repeats neither helper delivery nor
+registration. See [operations](operations.md) for stage definitions.
 
 ### Windows foundation and App Sandbox (experimental integration)
 
