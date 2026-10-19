@@ -166,11 +166,22 @@ func TestFillFailuresHaveSafeReasonsAndKeepUpstreamFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			_, _ = io.Copy(io.Discard, response.Body)
 			_ = response.Body.Close()
-			waitSummary(t, s, Summary{Archives: Counters{Bypasses: 1, Failures: 1}})
-			want := map[string]string{"status": "upstream_status", "identity": "upstream_identity", "body": "upstream_body"}[mode]
-			if response.StatusCode != http.StatusTemporaryRedirect || !strings.Contains(logs.String(), want) || strings.Contains(logs.String(), "synthetic-private") || strings.Contains(logs.String(), backend.URL) {
+			// Before the first byte the guest is sent upstream. A short body has
+			// already streamed: the fill resumes, this upstream ignores the range,
+			// and the response ends early, as a failed direct download would.
+			wantStatus, wantSummary := http.StatusTemporaryRedirect, Summary{Archives: Counters{Bypasses: 1, Failures: 1}}
+			if mode == "body" {
+				wantStatus, wantSummary = http.StatusOK, Summary{Archives: Counters{Misses: 1, MissBytes: 5, Failures: 1}}
+			}
+			waitSummary(t, s, wantSummary)
+			want := map[string]string{"status": "upstream_status", "identity": "upstream_identity", "body": "upstream_resume"}[mode]
+			if response.StatusCode != wantStatus || !strings.Contains(logs.String(), want) || strings.Contains(logs.String(), "synthetic-private") || strings.Contains(logs.String(), backend.URL) {
 				t.Fatal("unsafe or missing diagnostic", logs.String())
+			}
+			if mode == "body" && !strings.Contains(logs.String(), `"msg":"cache fill resumed","object"`) {
+				t.Fatal("short body was not resumed", logs.String())
 			}
 		})
 	}

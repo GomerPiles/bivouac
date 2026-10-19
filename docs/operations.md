@@ -539,8 +539,9 @@ a copy; any relay failure sends the rest of that save directly to GitHub.
 Every save is stored, evicting the least recently used objects, so size
 `max_gb` for the archives saved between restores as well as those restored.
 Upload storage is validated on macOS guests only; leave it off on a Windows
-host until its guests are validated live. A service outage returns lease requests to upstream;
-a failed fill redirects upstream. No upload/storage quota reduction is
+host until its guests are validated live. A service outage returns lease requests to upstream.
+A miss streams to the guest as it fills; a fill that fails before its first
+byte redirects upstream. No upload/storage quota reduction is
 claimed. Logs report object class, hit/miss, size and a per-session object
 label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
 size; eviction never touches instance state. Corrupt and incomplete objects are discarded.
@@ -580,8 +581,12 @@ session) through `cache object discarded` (`reason=capacity` or `invalid`),
 `release cache bypass` and `cache response incomplete`. `cache store opened`
 shows what survived a restart; `cache store summary` totals losses each minute.
 Fill reasons are `capacity`, `object_limit`, `upstream_status`,
-`upstream_identity`, `upstream_body`, `upstream_transport`, `length_mismatch`,
-`timeout`, `canceled`, and `store_*` for local filesystem failures.
+`upstream_identity`, `upstream_body`, `upstream_transport`, `upstream_idle`
+(a minute without bytes), `upstream_resume` (a resume found a different object
+or no range support), `length_mismatch`, `timeout`, `canceled`, and `store_*`
+for local filesystem failures. `cache fill resumed` names the reason and
+offset of each resume. `cache reader left during fill` is a guest that stopped
+waiting while another request's fill ran; that fill continues.
 `cache SSH transport ended during requests` names a guest whose transport
 dropped mid-transfer. Keep the cache while investigating; it is evidence.
 

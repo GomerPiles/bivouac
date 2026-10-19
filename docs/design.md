@@ -902,8 +902,16 @@ stores archives, not a second cache-key database. Each new read validates its fr
 an upstream HEAD, including on a local hit; expired or denied capabilities
 cannot expose cached bytes. Object identity excludes URL query credentials.
 A lease request carries only that URL. HEAD on a lease answers from the
-lease's upstream metadata without filling; the 15-minute write bound starts
-after a fill completes.
+lease's upstream metadata without filling.
+
+The cache never holds a transfer back to buffer it. A plain GET that starts a
+fill, of an archive or a release, receives the bytes as they arrive while the
+store keeps them; ranged and concurrent readers wait for the verified object.
+Fills belong to the service, not to the request that started them: a guest
+that disconnects or times out leaves its fill running, and a retry joins it.
+Each upstream attempt ends after a minute without bytes rather than at a total
+deadline, and a fill resumes from its offset with an If-Match range request,
+up to three times. Upload relays stream every request body to Azure.
 
 `cache.release_proxy` optionally adds a general GitHub release proxy. A
 loopback bridge in the guest accepts standard HTTP proxy clients and carries
@@ -945,8 +953,11 @@ The guest bridge uses direct upstream transport when the host is unavailable
 before CONNECT succeeds, and retries failed idempotent forward downloads directly.
 It does not replay ambiguous uploads. A transfer already inside a tunnel can fail
 if the service disappears; the caller's retry behavior applies. The Actions
-adapter separately returns to upstream when lease creation is unavailable, and
-failed archive fills redirect to their original signed URLs.
+adapter separately returns to upstream when lease creation is unavailable. A
+fill that fails before its first byte sends the guest upstream: an archive
+redirects to its original signed URL, a release is forwarded. One that fails
+after streaming began ends that response early, as a failed direct download
+would.
 
 TLS keys, guest capabilities, and signed URLs exist only in memory on the
 host; private bootstrap files exist only in the disposable guest and are
@@ -993,7 +1004,8 @@ controller session. Hits/misses classify resolved cache GETs; bytes count actual
 response-body bytes accepted by the client writer, including partial ranges.
 Conditional reads can count as hits with zero body bytes. Bypasses and transfer
 failures are separate; failed fills redirected upstream have no observable
-fallback body bytes. HEAD, cache-service metadata and opaque tunnels are
+fallback body bytes, and a streamed fill that fails counts its delivered bytes
+as a failed miss. HEAD, cache-service metadata and opaque tunnels are
 excluded, and concurrent coalesced reads count as hits. Proxy bypass totals
 include uncached forwarded GETs, not only release assets. These are delivered
 bytes, not unique stored bytes, total upstream traffic or a bandwidth benchmark.

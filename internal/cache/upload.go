@@ -228,17 +228,12 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 
 	guest := &guestBody{r: r.Body}
 	var body io.Reader = guest
-	var list []string
-	listed := false
+	// Every body streams to Azure as it arrives. A block list is also kept, at
+	// most maxBlockListBytes, to read the committed order once Azure accepts it.
+	var listed bytes.Buffer
 	var staged *stageWriter
 	if op.kind == putBlockList {
-		data, err := io.ReadAll(guest)
-		if err != nil {
-			s.fallBack(w, id, u, "guest_body")
-			return
-		}
-		body = bytes.NewReader(data)
-		list, listed = parseBlockList(data)
+		body = io.TeeReader(guest, &listed)
 	} else if staged = u.reserve(r.ContentLength); staged != nil {
 		body = io.TeeReader(guest, staged)
 	}
@@ -291,7 +286,8 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 			u.addBlock("", staged)
 			s.storeUpload(id, u, []string{""}, true, response.Header.Get("ETag"))
 		case putBlockList:
-			s.storeUpload(id, u, list, listed, response.Header.Get("ETag"))
+			list, ok := parseBlockList(listed.Bytes())
+			s.storeUpload(id, u, list, ok, response.Header.Get("ETag"))
 		}
 	}
 	for key, values := range response.Header {

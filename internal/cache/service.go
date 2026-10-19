@@ -67,9 +67,10 @@ type Service struct {
 	transports  map[string]io.Closer
 	closed      bool
 	storing     atomic.Bool
-	work        context.Context // Canceled by Close; owns upload commits.
+	work        context.Context // Canceled by Close; owns fills and upload commits.
 	stopWork    context.CancelFunc
 	commits     sync.WaitGroup
+	fillIdle    time.Duration // An upstream attempt that receives nothing for this long ends.
 	crl         []byte
 	crlExpires  time.Time
 }
@@ -106,7 +107,7 @@ func Start(dir, listen, host string, maxBytes, maxObject int64, ttl time.Duratio
 		_ = listener.Close()
 		return nil, err
 	}
-	s := &Service{store: store, client: publicClient(), log: logger, url: "https://" + net.JoinHostPort(host, port), ca: ca, grants: map[string]grant{}, leases: map[string]lease{}, uploads: map[string]*uploadLease{}, connections: map[net.Conn]string{}, ttl: ttl, validate: allowedURL}
+	s := &Service{store: store, client: publicClient(), log: logger, url: "https://" + net.JoinHostPort(host, port), ca: ca, grants: map[string]grant{}, leases: map[string]lease{}, uploads: map[string]*uploadLease{}, connections: map[net.Conn]string{}, ttl: ttl, validate: allowedURL, fillIdle: time.Minute}
 	s.work, s.stopWork = context.WithCancel(context.Background())
 	s.certificate = certificate
 	s.transports = map[string]io.Closer{}
@@ -301,12 +302,44 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	f, hit, err := s.store.Get(r.Context(), l.key, l.size, func(ctx context.Context, out io.Writer) error { return s.fetch(ctx, l, out) })
+	label := s.store.label(l.key)
+	measured := &transferWriter{ResponseWriter: w, status: http.StatusOK}
+	controller := http.NewResponseController(w)
+	var tee *streamTee
+	f, hit, err := s.store.Get(r.Context(), l.key, l.size, func(_ context.Context, out io.Writer) error {
+		if plainGet(r) {
+			// This guest started the fill: it receives the bytes as they arrive.
+			tee = &streamTee{store: out, open: func() io.Writer {
+				s.objectHeaders(w, l)
+				w.Header().Set("Accept-Ranges", "bytes")
+				w.Header().Set("Content-Length", strconv.FormatInt(l.size, 10))
+				measured.WriteHeader(http.StatusOK)
+				return measured
+			}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }}
+			out = tee
+		}
+		if err := s.fetch(l, label, out); err != nil {
+			return err
+		}
+		if tee != nil && tee.storeErr != nil {
+			return tee.storeErr
+		}
+		return nil
+	})
+	if tee.started() {
+		s.finishStream(l, label, f, err, tee, measured)
+		return
+	}
+	if err != nil && r.Context().Err() != nil {
+		// This guest left while another request's fill ran; the fill continues.
+		s.log.Info("cache reader left during fill", "kind", "actions_archive", "object", label)
+		return
+	}
 	// The listener's write timeout started before the fill. Bound only serving.
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(serveTimeout))
+	_ = controller.SetWriteDeadline(time.Now().Add(serveTimeout))
 	if err != nil {
 		reason, status := failureDetails(err)
-		s.log.Warn("cache fill unavailable", "kind", "actions_archive", "object", s.store.label(l.key), "reason", reason, "status", status, "bytes", l.size)
+		s.log.Warn("cache fill unavailable", "kind", "actions_archive", "object", label, "reason", reason, "status", status, "bytes", l.size)
 		s.recordTransfer(l.token, false, cacheBypass, 0, true)
 		// The original signed URL is a GitHub-issued capability. Redirect remains
 		// authorized by the upstream; no local object is exposed after a failed fill.
@@ -316,8 +349,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = f.Close() }()
 	s.objectHeaders(w, l)
-	s.log.Info("cache object served", "kind", "actions_archive", "object", s.store.label(l.key), "hit", hit, "bytes", l.size)
-	measured := &transferWriter{ResponseWriter: w, status: http.StatusOK}
+	s.log.Info("cache object served", "kind", "actions_archive", "object", label, "hit", hit, "bytes", l.size)
 	http.ServeContent(measured, r, "archive", time.Time{}, f)
 	outcome := cacheMiss
 	if hit {
@@ -335,9 +367,28 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if reason == "" {
 			reason = "length_mismatch"
 		}
-		s.log.Warn("cache response incomplete", "kind", "actions_archive", "object", s.store.label(l.key), "reason", reason, "status", measured.status, "expected_bytes", length, "delivered_bytes", measured.bytes)
+		s.log.Warn("cache response incomplete", "kind", "actions_archive", "object", label, "reason", reason, "status", measured.status, "expected_bytes", length, "delivered_bytes", measured.bytes)
 	}
 	s.recordTransfer(l.token, false, outcome, measured.bytes, measured.failed || incomplete)
+}
+
+// finishStream accounts for a miss streamed to the guest that started its fill.
+// The response is committed: a failed fill ends it early, as a failed direct
+// download would.
+func (s *Service) finishStream(l lease, label string, f *Object, err error, tee *streamTee, measured *transferWriter) {
+	if f != nil {
+		_ = f.Close()
+	}
+	if err != nil {
+		reason, status := failureDetails(err)
+		s.log.Warn("cache fill unavailable", "kind", "actions_archive", "object", label, "reason", reason, "status", status, "bytes", l.size, "delivered_bytes", measured.bytes)
+	} else {
+		s.log.Info("cache object served", "kind", "actions_archive", "object", label, "hit", false, "bytes", l.size)
+	}
+	if err == nil && (tee.clientErr != nil || measured.bytes != l.size) {
+		s.log.Warn("cache response incomplete", "kind", "actions_archive", "object", label, "reason", deliveryFailure(tee.clientErr), "status", http.StatusOK, "expected_bytes", l.size, "delivered_bytes", measured.bytes)
+	}
+	s.recordTransfer(l.token, false, cacheMiss, measured.bytes, err != nil || tee.clientErr != nil || measured.bytes != l.size)
 }
 
 func (s *Service) objectHeaders(w http.ResponseWriter, l lease) {
@@ -485,34 +536,23 @@ func archiveKey(u *url.URL, etag string, size int64) string {
 	return u.Host + u.EscapedPath() + "\x00" + etag + "\x00" + strconv.FormatInt(size, 10)
 }
 
-func (s *Service) fetch(ctx context.Context, l lease, out io.Writer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.upstream, nil)
+func (s *Service) fetch(l lease, label string, out io.Writer) error {
+	req, err := http.NewRequest(http.MethodGet, l.upstream, nil)
 	if err != nil {
 		return errors.New("invalid upstream")
 	}
-	req.Header.Set("If-Match", l.etag)
-	response, err := s.client.Do(req)
-	if err != nil {
-		return upstreamFailure(err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return &fault{reason: "upstream_status", status: response.StatusCode}
-	}
-	if response.Header.Get("ETag") != l.etag {
-		return failure("upstream_identity")
-	}
-	if response.ContentLength >= 0 && response.ContentLength != l.size {
-		return failure("length_mismatch")
-	}
-	n, err := io.Copy(out, response.Body)
-	if err != nil {
-		return bodyFailure(ctx, err)
-	}
-	if n != l.size {
-		return failure("length_mismatch")
-	}
-	return nil
+	return s.download(req, label, l.etag, l.size, func(response *http.Response) error {
+		if response.StatusCode != http.StatusOK {
+			return &fault{reason: "upstream_status", status: response.StatusCode}
+		}
+		if response.Header.Get("ETag") != l.etag {
+			return failure("upstream_identity")
+		}
+		if response.ContentLength >= 0 && response.ContentLength != l.size {
+			return failure("length_mismatch")
+		}
+		return nil
+	}, out)
 }
 
 func allowedURL(u *url.URL) bool {

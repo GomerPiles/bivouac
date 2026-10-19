@@ -169,11 +169,14 @@ func TestPartialTransferAndFailedFillDoNotFabricateBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	got, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusTemporaryRedirect {
-		t.Fatal("failed fill did not preserve fallback")
+	// The short body streamed before the fill failed: the guest has exactly the
+	// bytes it received, counted as a failed miss.
+	if response.StatusCode != http.StatusOK || string(got) != "short" {
+		t.Fatal("streamed fill failure misreported", response.StatusCode, string(got))
 	}
-	waitSummary(t, s, Summary{Archives: Counters{Bypasses: 1, Failures: 1}})
+	waitSummary(t, s, Summary{Archives: Counters{Misses: 1, MissBytes: 5, Failures: 1}})
 }
 
 func TestGuestCacheSummaryNumericPrivateBoundedAndOptional(t *testing.T) {
