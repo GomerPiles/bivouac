@@ -41,6 +41,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("the VM host must run elevated")
 	}
+	if err := protectedRoot(cfg.Root); err != nil {
+		return err
+	}
 	host, err := Open(cfg.Root, cfg.Controller)
 	if err != nil {
 		return err

@@ -71,6 +71,9 @@ type GuestInfo struct {
 	// Network is the guest's isolated endpoint, or nil while the VM host
 	// attaches none.
 	Network *NetworkLease `json:"network,omitempty"`
+	// ProtectedBeforeStart, reported on create, says the port policy was in
+	// place before the guest's first instruction rather than right after.
+	ProtectedBeforeStart bool `json:"protected_before_start,omitempty"`
 }
 
 // NetworkLease is the static IPv4 configuration the guest must apply to the

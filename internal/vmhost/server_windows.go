@@ -243,7 +243,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 		return failure(err)
 	}
 	reservation.guest = g
-	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings), Labels: c.Labels, Network: lease(g)}}
+	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings), Labels: c.Labels, Network: lease(g), ProtectedBeforeStart: g.Timings.ProtectedBeforeStart}}
 }
 
 // claim marks the caller's guest busy for one operation.

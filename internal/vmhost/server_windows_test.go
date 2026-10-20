@@ -320,11 +320,12 @@ func TestFailedCreateWhoseCleanupFailsKeepsItsReservation(t *testing.T) {
 
 func TestPipeNetworkLeaseInCreateStatusAndList(t *testing.T) {
 	s, _, f := networkServerFixture(t)
+	f.portBeforeStart = true
 	g := createNetworkRequest(t, s)
 	p := f.networks[g.Name]
 	want := &NetworkLease{Address: p.Address, Gateway: p.Gateway, Prefix: 28, MAC: p.MAC}
-	if !reflect.DeepEqual(g.Network, want) {
-		t.Fatal("create omitted or changed network lease", g.Network)
+	if _, timed := g.TimingsMS["protect"]; !reflect.DeepEqual(g.Network, want) || !g.ProtectedBeforeStart || !timed {
+		t.Fatal("create omitted or changed network lease or protect path", g.Network)
 	}
 	status := call(t, s, alice, Request{Op: "status", Name: g.Name})
 	list := call(t, s, alice, Request{Op: "list"})

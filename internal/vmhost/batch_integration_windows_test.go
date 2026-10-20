@@ -548,8 +548,9 @@ func childDial(target string) int {
 	return 0
 }
 
-// pinImage verifies the image hash and holds a handle that denies writers and
-// deletion for the whole batch.
+// pinImage holds a handle that denies writers and deletion for the whole
+// batch, then verifies the image hash through a second read-only handle. The
+// pin is never wrapped in an os.File, whose finalizer could close it.
 func pinImage(path, sha string) (windows.Handle, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -559,7 +560,12 @@ func pinImage(path, sha string) (windows.Handle, error) {
 	if err != nil {
 		return 0, fmt.Errorf("cannot pin image: %w", err)
 	}
-	f := os.NewFile(uintptr(h), path)
+	f, err := os.Open(path)
+	if err != nil {
+		_ = windows.CloseHandle(h)
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
 	sum := sha256.New()
 	if _, err = io.Copy(sum, f); err != nil || !strings.EqualFold(hex.EncodeToString(sum.Sum(nil)), sha) {
 		_ = windows.CloseHandle(h)
