@@ -189,12 +189,17 @@ booted yet.
 Open:
 
 - Installing and running the VM host service live.
-- Networking live (lab batch 2), with Windows CI drained, because a new host
-  vEthernet adapter trips the App Sandbox broker's interface guard:
-  - public DNS and HTTPS work;
-  - the host LAN, gateway and IPv6 are denied, with positive controls;
+- Networking live. Lab batch 2 (`TestLabNetworkBatch`) is written but has not
+  run. It needs Windows CI drained, because a new host vEthernet adapter trips
+  the App Sandbox broker's interface guard. It checks:
+  - that public DNS and HTTPS work;
+  - that the gateway, host LAN, host link-local IPv6 and public IPv6 are
+    denied, with host-side listener controls;
   - which protect path runs;
-  - whether the layer survives the guest's boot.
+  - that the layer survives the guest's boot and readiness.
+
+  Its controls do not remove the deny layer, so a refused host listener does
+  not rule out the host firewall. That control stays open.
 - The provider running live.
 - The image factory.
 - The warm spare.

@@ -322,9 +322,10 @@ compute and network services must already be running.
    & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost run --config C:\ProgramData\bivouac\vmhost.json
    ```
 
-   Installing creates the protected journal root if it is absent. It
-   registers a manual-start service that restarts after a crash, and grants
-   the configured accounts query, start and stop rights on that service only.
+   Either command creates the protected journal root if it is absent.
+   Installing registers a manual-start service that restarts after a crash,
+   and grants the configured accounts query, start and stop rights on that
+   service only.
 4. From the ordinary account, use `bivouac vmhost start`, `bivouac vmhost stop`
    and `bivouac vmhost status`. Stopping the service destroys its guests
    first.
@@ -404,6 +405,73 @@ cleanup confirmed absence. Nothing in them is guest-controlled text. If a run
 retains storage, the batch stops. Rerunning a VM host's `Recover` on the same
 directory settles anything it retained; never delete the directory by hand
 while a guest may exist.
+
+## Direct HCS network lab batch
+
+`TestLabNetworkBatch` in `internal/provider/hcsvm` is batch 2. It runs the
+real VM host in the test process, with its pipe, caller check and network
+guard, and drives it through the `hcs` provider as the manager would. Each run
+is a production-sized cold boot (4 CPU, 8 GiB, GPU) with an isolated network:
+
+1. Create records the VM host's timings and whether the port policy was in
+   place before start.
+2. WaitReady applies the lease through the winrunner preflight and prepare
+   steps.
+3. The guest probes its network:
+   - It must reach public DNS, HTTPS, TCP and UDP DNS.
+   - It must not reach its gateway's DNS proxy, public IPv6, or host
+     listeners on the gateway, the LAN source address and the switch
+     adapter's IPv6 link-local address.
+   - Each listener first proves the host can reach it, and counts any other
+     connection.
+4. The guest must still be running after two guard intervals.
+5. Delete must leave no guest, no reservation and no switch adapter.
+
+**Windows CI must be drained first.** Each guest's switch adds a host vEthernet
+adapter. The App Sandbox broker's interface guard then quarantines its guests
+and closes admission until the broker restarts.
+
+Without a layer-removed control, a host listener's refusal could also come
+from the host firewall. The gateway's DNS proxy is the stronger denial check,
+because connection sharing normally opens it on the shared switch. If Windows
+offers to allow the test binary through the firewall, choose Cancel.
+
+1. Turn Windows CI Off (`Control.ps1 -Action Off`, or `bivouac off --wait`)
+   and wait until no App Sandbox guest remains.
+2. Build unelevated. The helper is sent into each guest as its adapter:
+
+   ```powershell
+   go build -o bin\lab\bivouac.exe .\cmd\bivouac
+   go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
+   ```
+
+3. Launch it once through UAC. Use the batch 1 image and pins. The lab root
+   must not exist yet; the VM host creates it protected.
+   - If the image has no runner, add `-lab.runner-archive` and
+     `-lab.runner-sha256` for an official runner ZIP.
+   - `-lab.peer=<ip:port>` adds an owner-controlled private peer that the
+     host can reach.
+
+   ```powershell
+   Start-Process -Verb RunAs -FilePath bin\lab\hcs-network-lab.test.exe -ArgumentList @(
+     '-test.run=^TestLabNetworkBatch$', '-test.timeout=60m', '-lab.windows-ci-drained',
+     '"-lab.root=<protected parent>\VMHost-Network"',
+     '"-lab.results=<user path>\network-results.jsonl"',
+     '"-lab.image=<prepared image>.vhdx"', '-lab.image-sha256=<hash>',
+     '-lab.guest-name=<computer name>', '-lab.guest-user=<user>',
+     "`"-lab.helper=$PWD\bin\lab\bivouac.exe`"")
+   ```
+
+4. Results are JSON lines: start, image verification, one line per run, end.
+   The VM host's log is written beside them. Probe outcomes use a fixed
+   vocabulary; no addresses or guest text are recorded.
+5. Restart the App Sandbox broker the way this host normally starts it (see
+   `docs/windows.md`). Check that `bivouac doctor` reaches the authenticated
+   broker, then turn Windows CI On and watch the first guest become ready.
+
+If a run retains a guest, the batch stops. To settle it, run
+`bivouac vmhost run` elevated, with a configuration naming the same root and
+controller `lab-network`. It recovers on start; then stop it.
 
 ## GitHub App (separate App can follow cutover)
 
