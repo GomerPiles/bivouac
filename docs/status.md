@@ -15,8 +15,9 @@ in the hosted Linux/macOS/Windows workflow.
 ## macOS
 
 Bivouac runs macOS guests itself (Virtualization.framework through
-purego, its own guest agent). Validated on this
-runtime with real scale-set jobs from a baseline with the guest agent:
+purego, its own guest agent). Production runs on this runtime from an
+imported baseline with the guest agent, with the release proxy and upload
+storage on. Validated on this runtime with real scale-set jobs:
 
 - Jobs run in the Aqua session of a fresh guest (sentinel check), back to
   back, through assigned-job and sweep runners.
@@ -59,12 +60,11 @@ not establish full workload performance or an end-to-end runner speedup.
 Tests cover a single shared helper upload, partial-copy cleanup, cache failure
 fallback, container-pair helper preservation, and provider-independent manager
 JIT/listener stage logging. The simplified upload path has not been benchmarked
-on live guests. The LaunchAgent policy and startup changes are not deployed to
-the installed controller or source baseline.
+on live guests. The startup changes are deployed to the installed controller;
+the LaunchAgent policy is not in the source baseline.
 
 Open:
 
-- Production cutover to a baseline with the guest agent installed.
 - Softnet launched by the VM helper (container pairs) and Linux guests on
   this runtime.
 - Host reboot persistence of drain, stop, and off.
@@ -179,7 +179,15 @@ oversize (relayed without a copy), storage off and caching disabled behaved as
 documented. In an earlier run of this code one relayed upload fell back
 mid-upload with an upstream transport error; its save finished directly.
 Windows and Linux guests are unvalidated; leave upload storage off on
-Windows hosts.
+Windows hosts. Production's first job on it stored a relayed save and hit
+locally on two restores.
+
+Misses stream as they fill, and a stalled upstream resumes from its offset.
+Isolated macOS jobs with production cache limits passed with storage on
+(relayed saves, including block lists, restored locally), storage off (24 and
+192 MiB restores and a release miss streamed) and the controller stopped
+mid-job (transfers finished directly). Not yet deployed to production, where
+misses still wait for the whole fill.
 
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,

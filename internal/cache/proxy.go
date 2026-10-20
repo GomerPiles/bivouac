@@ -340,48 +340,77 @@ func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token str
 	source := response.Request.URL
 	etag := response.Header.Get("ETag")
 	key := "release:" + source.Host + source.EscapedPath() + "\x00" + etag + "\x00" + strconv.FormatInt(response.ContentLength, 10)
-	object, hit, err := s.store.Get(r.Context(), key, response.ContentLength, func(ctx context.Context, out io.Writer) error {
-		get := r.Clone(ctx)
+	size := response.ContentLength
+	label := s.store.label(key)
+	cleanHeaders(response.Header)
+	controller := http.NewResponseController(w)
+	var tee *streamTee
+	object, hit, err := s.store.Get(r.Context(), key, size, func(_ context.Context, out io.Writer) error {
+		// This guest started the fill: it receives the bytes as they arrive.
+		tee = &streamTee{store: out, open: func() io.Writer {
+			for key, values := range response.Header {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(http.StatusOK)
+			return w
+		}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }, flush: controller.Flush}
+		get := r.Clone(context.Background())
 		get.URL = source
 		get.Host = source.Host
-		get.Header.Set("If-Match", etag)
-		fetched, e := s.client.Do(get) // #nosec G704 -- source is the validated HEAD result; publicClient revalidates DNS and redirects for this fetch.
-		if e != nil {
-			return upstreamFailure(e)
+		err := s.download(get, label, etag, size, func(fetched *http.Response) error {
+			if !reusableResponse(fetched, s.store.maxObject) || fetched.Header.Get("ETag") != etag || fetched.ContentLength != size {
+				return &fault{reason: "upstream_identity_or_policy", status: fetched.StatusCode}
+			}
+			return nil
+		}, tee)
+		if err == nil && tee.storeErr != nil {
+			err = tee.storeErr
 		}
-		defer func() { _ = fetched.Body.Close() }()
-		if !reusableResponse(fetched, s.store.maxObject) || fetched.Header.Get("ETag") != etag || fetched.ContentLength != response.ContentLength {
-			return &fault{reason: "upstream_identity_or_policy", status: fetched.StatusCode}
-		}
-		n, e := io.Copy(out, fetched.Body)
-		if e != nil {
-			return bodyFailure(ctx, e)
-		}
-		if n != response.ContentLength {
-			return failure("length_mismatch")
-		}
-		return nil
+		return err
 	})
+	if tee.started() {
+		// The response is committed: a failed fill ends it early, as a failed
+		// direct download would.
+		if object != nil {
+			_ = object.Close()
+		}
+		delivered := tee.delivered
+		if err != nil {
+			reason, status := failureDetails(err)
+			s.log.Warn("cache fill unavailable", "kind", "github_release", "object", label, "reason", reason, "status", status, "bytes", size, "delivered_bytes", delivered)
+		} else {
+			s.log.Info("cache object served", "kind", "github_release", "object", label, "hit", false, "bytes", size)
+			if tee.clientErr != nil || delivered != size {
+				s.log.Warn("cache response incomplete", "kind", "github_release", "object", label, "reason", deliveryFailure(tee.clientErr), "expected_bytes", size, "delivered_bytes", delivered)
+			}
+		}
+		s.recordTransfer(token, true, cacheMiss, delivered, err != nil || tee.clientErr != nil || delivered != size)
+		return true
+	}
+	if err != nil && r.Context().Err() != nil {
+		// This guest left while another request's fill ran; the fill continues.
+		s.log.Info("cache reader left during fill", "kind", "github_release", "object", label)
+		return true
+	}
 	if err != nil {
 		reason, status := failureDetails(err)
-		s.log.Info("release cache bypass", "object", s.store.label(key), "reason", reason, "status", status, "bytes", response.ContentLength)
+		s.log.Info("release cache bypass", "object", label, "reason", reason, "status", status, "bytes", size)
 		return false
 	}
 	defer func() { _ = object.Close() }()
 	// Preserve the caller-visible response metadata; no header/URL is persisted.
-	cleanHeaders(response.Header)
 	for key, values := range response.Header {
 		w.Header()[key] = values
 	}
-	s.log.Info("cache object served", "kind", "github_release", "object", s.store.label(key), "hit", hit, "bytes", response.ContentLength)
+	s.log.Info("cache object served", "kind", "github_release", "object", label, "hit", hit, "bytes", size)
 	w.WriteHeader(http.StatusOK)
 	n, copyErr := io.Copy(w, object)
-	if copyErr != nil || n != response.ContentLength {
+	if copyErr != nil || n != size {
 		reason := deliveryFailure(copyErr)
 		if r.Context().Err() != nil {
 			reason = deliveryFailure(r.Context().Err())
 		}
-		s.log.Warn("cache response incomplete", "kind", "github_release", "object", s.store.label(key), "reason", reason, "expected_bytes", response.ContentLength, "delivered_bytes", n)
+		s.log.Warn("cache response incomplete", "kind", "github_release", "object", label, "reason", reason, "expected_bytes", size, "delivered_bytes", n)
 	}
 	outcome := cacheMiss
 	if hit {

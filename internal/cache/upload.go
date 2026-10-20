@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"crypto/subtle"
@@ -228,17 +227,12 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 
 	guest := &guestBody{r: r.Body}
 	var body io.Reader = guest
-	var list []string
-	listed := false
+	// Every body streams to Azure as it arrives. A block list is also kept, at
+	// most maxBlockListBytes, to read the committed order once Azure accepts it.
+	listed := &blockListCopy{size: r.ContentLength}
 	var staged *stageWriter
 	if op.kind == putBlockList {
-		data, err := io.ReadAll(guest)
-		if err != nil {
-			s.fallBack(w, id, u, "guest_body")
-			return
-		}
-		body = bytes.NewReader(data)
-		list, listed = parseBlockList(data)
+		body = io.TeeReader(guest, listed)
 	} else if staged = u.reserve(r.ContentLength); staged != nil {
 		body = io.TeeReader(guest, staged)
 	}
@@ -291,7 +285,12 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 			u.addBlock("", staged)
 			s.storeUpload(id, u, []string{""}, true, response.Header.Get("ETag"))
 		case putBlockList:
-			s.storeUpload(id, u, list, listed, response.Header.Get("ETag"))
+			data, complete := listed.seal()
+			if !complete {
+				u.abandon("block_list_incomplete")
+			}
+			list, ok := parseBlockList(data)
+			s.storeUpload(id, u, list, ok, response.Header.Get("ETag"))
 		}
 	}
 	for key, values := range response.Header {
@@ -301,6 +300,44 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 	}
 	w.WriteHeader(response.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(response.Body, maxRelayReply))
+}
+
+// blockListCopy owns a bounded copy while the transport reads the request.
+// seal transfers exclusive ownership of the bytes to the handler; later
+// transport writes are ignored. A valid XML prefix is not a complete body.
+type blockListCopy struct {
+	mu     sync.Mutex
+	data   []byte
+	size   int64
+	sealed bool
+	failed bool
+}
+
+func (b *blockListCopy) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.sealed && !b.failed {
+		if int64(len(b.data))+int64(len(p)) > b.size || len(p) > maxBlockListBytes-len(b.data) {
+			b.failed = true
+			b.data = nil
+		} else {
+			b.data = append(b.data, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *blockListCopy) seal() ([]byte, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	complete := !b.sealed && !b.failed && int64(len(b.data)) == b.size
+	b.sealed = true
+	data := b.data
+	b.data = nil
+	if !complete {
+		return nil, false
+	}
+	return data, true
 }
 
 // guestBody records whether reading the guest's request failed, so a relay

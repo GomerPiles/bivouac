@@ -539,9 +539,9 @@ a copy; any relay failure sends the rest of that save directly to GitHub.
 Every save is stored, evicting the least recently used objects, so size
 `max_gb` for the archives saved between restores as well as those restored.
 Upload storage is validated on macOS guests only; leave it off on a Windows
-host until its guests are validated live. A service outage returns lease requests to upstream;
-a failed fill redirects upstream. No upload/storage quota reduction is
-claimed. Logs report object class, hit/miss, size and a per-session object
+host until its guests are validated live. Misses stream as they fill. A service
+outage, or a fill that fails before its first byte, sends the request upstream.
+No upload/storage quota reduction is claimed. Logs report object class, hit/miss, size and a per-session object
 label without source URLs or credentials. Limits include in-flight reservations of each fill's declared
 size; eviction never touches instance state. Corrupt and incomplete objects are discarded.
 
@@ -580,8 +580,12 @@ session) through `cache object discarded` (`reason=capacity` or `invalid`),
 `release cache bypass` and `cache response incomplete`. `cache store opened`
 shows what survived a restart; `cache store summary` totals losses each minute.
 Fill reasons are `capacity`, `object_limit`, `upstream_status`,
-`upstream_identity`, `upstream_body`, `upstream_transport`, `length_mismatch`,
-`timeout`, `canceled`, and `store_*` for local filesystem failures.
+`upstream_identity`, `upstream_body`, `upstream_transport`, `upstream_idle`
+(a minute waiting on upstream), `upstream_resume` (the object changed or ranges
+are unsupported), `length_mismatch`, `timeout`, `canceled`, and `store_*` for
+local filesystem failures. `cache fill resumed` names each resume's reason and
+offset. `cache reader left during fill` is a guest that stopped waiting for
+another request's fill, which continues.
 `cache SSH transport ended during requests` names a guest whose transport
 dropped mid-transfer. Keep the cache while investigating; it is evidence.
 
@@ -591,6 +595,8 @@ A relayed save logs `cache upload relayed` with its `guest`, then
 `unsupported_request`, `concurrency`, `expired`, `revoked`, `guest_body` and the
 upstream transport reasons above. Repeated `unsupported_request` or
 `concurrency` means the official action changed how it uploads.
+Not-stored reasons include `block_list` (unparseable) and
+`block_list_incomplete` (Azure accepted it before the host had all of it).
 `cache upload not relayed` (`upload_limit`, `expired`) means the save went
 directly; `cache uploads abandoned` counts relays open at revocation or shutdown.
 

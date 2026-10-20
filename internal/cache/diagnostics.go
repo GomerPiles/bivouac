@@ -43,17 +43,6 @@ func upstreamFailure(err error) error {
 	return failure(reason)
 }
 
-func bodyFailure(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	var f *fault
-	if errors.As(err, &f) {
-		return f
-	}
-	return failure("upstream_body")
-}
-
 // Delivery errors can contain connection addresses or filesystem paths. Keep
 // only a fixed category, including when an error is observed by a writer.
 func deliveryFailure(err error) string {
