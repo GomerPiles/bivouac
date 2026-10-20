@@ -182,15 +182,12 @@ Windows and Linux guests are unvalidated; leave upload storage off on
 Windows hosts. Production's first job on it stored a relayed save and hit
 locally on two restores.
 
-Misses now stream: the guest receives a fill as it downloads, and a stalled
-upstream resumes from its offset instead of restarting. Isolated macOS jobs
-passed with this code and production cache limits: with storage on, relayed
-saves (including block lists) were stored and restored as local hits; with
-storage off, 24 and 192 MiB restores streamed as misses and a release miss
-streamed, then hit; with the controller stopped mid-job, saves, restores and
-releases finished directly. Production still runs the earlier code, where the
-host sent nothing until a fill completed and the official action's client gave
-up after three idle minutes: a 109 MB miss took 4.5 minutes.
+Misses stream as they fill, and a stalled upstream resumes from its offset.
+Isolated macOS jobs with production cache limits passed with storage on
+(relayed saves, including block lists, restored locally), storage off (24 and
+192 MiB restores and a release miss streamed) and the controller stopped
+mid-job (transfers finished directly). Not yet deployed to production, where
+misses still wait for the whole fill.
 
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,

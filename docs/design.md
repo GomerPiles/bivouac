@@ -904,17 +904,13 @@ cannot expose cached bytes. Object identity excludes URL query credentials.
 A lease request carries only that URL. HEAD on a lease answers from the
 lease's upstream metadata without filling.
 
-The cache never holds a transfer back to buffer it. A plain GET that starts a
-fill, of an archive or a release, receives each chunk as it arrives while the
-store keeps it, except the last byte, which waits until the body has ended at
-exactly the declared length; ranged and concurrent readers wait for the
-verified object.
-Fills belong to the service, not to the request that started them: a guest
-that disconnects or times out leaves its fill running, and a retry joins it.
-An upstream attempt ends after a minute waiting for bytes (time spent writing
-them is not counted) rather than at a total deadline, and a fill resumes from
-its offset with an If-Match range request, up to three times. An overlong body
-is not resumed. Upload relays stream every request body to Azure.
+A plain GET that starts a fill, of an archive or a release, receives bytes as
+they arrive, except the last, which waits until the body ends at the declared
+length; ranged and concurrent readers wait for the verified object. Fills
+belong to the service: a guest that disconnects leaves its fill running, and a
+retry joins it. An attempt ends after a minute waiting on upstream, not at a
+total deadline; the fill then resumes from its offset with an If-Match range
+request, up to three times. Upload relays stream every request body to Azure.
 
 `cache.release_proxy` optionally adds a general GitHub release proxy. A
 loopback bridge in the guest accepts standard HTTP proxy clients and carries
@@ -957,10 +953,9 @@ before CONNECT succeeds, and retries failed idempotent forward downloads directl
 It does not replay ambiguous uploads. A transfer already inside a tunnel can fail
 if the service disappears; the caller's retry behavior applies. The Actions
 adapter separately returns to upstream when lease creation is unavailable. A
-fill that fails before its first byte sends the guest upstream: an archive
-redirects to its original signed URL, a release is forwarded. One that fails
-after streaming began ends that response early, as a failed direct download
-would.
+fill that fails before its first byte sends the guest upstream (an archive to
+its signed URL, a release forwarded); later, the response ends early, like a
+failed direct download.
 
 TLS keys, guest capabilities, and signed URLs exist only in memory on the
 host; private bootstrap files exist only in the disposable guest and are
@@ -976,13 +971,13 @@ creation response's signed upload URL with a host relay URL. The host sends
 each Put Blob, Put Block and Put Block List to Azure itself, appending only the
 operation's own parameters to the signed query, and stages the bytes it sent.
 When Azure accepts the commit, the staged blocks in committed order become the
-object that a restore's HEAD identifies by blob path, ETag and size. If Azure
-accepts a block list before the host has its whole body, the host relays the
-reply and stores nothing. The host never accepts guest bytes on any other
-path. A guest holding the signed URL can still write blocks to Azure directly,
-so the copy can differ from Azure's blob, but only for an entry that guest can
-write, whose readers already accept its bytes. A guest that can only read an entry cannot place it locally. Relay
-requests need the relay ID and the guest's own token: the official action logs
+object that a restore's HEAD identifies by blob path, ETag and size; if Azure
+accepts a block list before the host has all of it, nothing is stored. The
+host never accepts guest bytes on any other path. A guest holding the signed
+URL can still write blocks to Azure directly, so the copy can differ from
+Azure's blob, but only for an entry that guest can write, whose readers already
+accept its bytes. A guest that can only read an entry cannot place it locally.
+Relay requests need the relay ID and the guest's own token: the official action logs
 the ID in debug output, and the macOS listener is reachable beyond the guest.
 
 Staging counts against cache capacity, evicting idle objects as needed, and an
