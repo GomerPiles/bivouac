@@ -3,8 +3,12 @@
 package vmhost
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/GomerPiles/bivouac/internal/hcs"
 )
 
 const testService = "a5b0cafe-0001-4000-8000-000000000001"
@@ -71,5 +75,24 @@ func TestDocumentGrantsOnlyNamedAccountsAndBacksMemoryAsRequested(t *testing.T) 
 	s.Services = nil
 	if document("owner", s, `C:\Host\x`, nil).VirtualMachine.Devices.HvSocket != nil {
 		t.Fatal("empty HvSocket table emitted")
+	}
+}
+
+func TestFirmwareBootsOnlyTheGuestDisk(t *testing.T) {
+	doc := document("owner", validSpec(), `C:\Host\bivouac-lab-1`, nil)
+	uefi := doc.VirtualMachine.Chipset.Uefi
+	if uefi == nil || uefi.BootThis == nil || !uefi.StopOnBootFailure {
+		t.Fatal("firmware may fall back to another boot device")
+	}
+	boot := *uefi.BootThis
+	if boot.DeviceType != hcs.BootScsiDrive || boot.DiskNumber != 0 {
+		t.Fatal("firmware boot entry is not a SCSI disk", boot)
+	}
+	if _, ok := doc.VirtualMachine.Devices.Scsi[boot.DevicePath].Attachments[strconv.Itoa(int(boot.DiskNumber))]; !ok {
+		t.Fatal("firmware boot entry names no attached disk", boot)
+	}
+	b, err := json.Marshal(uefi)
+	if err != nil || !strings.Contains(string(b), `"BootThis":{"DeviceType":"ScsiDrive","DevicePath":"Primary","DiskNumber":0}`) {
+		t.Fatal("boot entry does not serialize with its disk number", string(b))
 	}
 }

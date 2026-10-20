@@ -205,7 +205,8 @@ through an in-process foreground VM host and the `hcs` provider. Every run:
 
 In both runs the switch port appeared only at start, so the layer was
 installed about 1 s after the guest began running, not before its first
-instruction.
+instruction. Design accepts that window because nothing untrusted reaches the
+guest before the layer is verified.
 
 An earlier attempt passed the same network checks but could not delete the
 network: hostnet waited for the stopped guest's port to vanish, which it does
@@ -223,8 +224,7 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- Closing the roughly 1 s between start and the deny layer, for example with
-  an endpoint policy that applies from creation.
+- A live boot with the firmware pinned to the guest disk, added since batch 2.
 - The provider running live as part of the manager.
 - The image factory.
 - The warm spare.

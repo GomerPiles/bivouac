@@ -820,6 +820,19 @@ allows public IPv4.
   path ran. Either way, the started guest's runtime ID must match the
   endpoint's VM binding. So far the port has appeared only at start, so a
   guest runs for about a second before its layer is in place.
+- **Invariant:** nothing untrusted reaches a guest before its layer is
+  verified. Ordering guarantees this, not timing:
+  - The VM host reports a create only after the layer is installed and
+    verified, and the provider sends nothing to the guest before that.
+  - Until then only the pinned image runs, from a fresh differencing disk and
+    fresh firmware state.
+  - The firmware boots only that disk and stops on failure, so it never tries
+    network boot.
+
+  The window after start is accepted on these terms. A change that lets
+  anything untrusted run earlier must close the window first. Examples are
+  reusing a guest or disk across jobs, or a guest agent that takes input
+  before readiness.
 - **Teardown:** the endpoint and switch are deleted only after the compute
   system is confirmed absent and its port is disconnected, retrying while it
   stays connected. The disconnected port itself remains until its endpoint is
