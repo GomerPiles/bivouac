@@ -315,7 +315,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Length", strconv.FormatInt(l.size, 10))
 				measured.WriteHeader(http.StatusOK)
 				return measured
-			}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }}
+			}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }, flush: controller.Flush}
 			out = tee
 		}
 		if err := s.fetch(l, label, out); err != nil {

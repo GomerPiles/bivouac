@@ -353,7 +353,7 @@ func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token str
 			}
 			w.WriteHeader(http.StatusOK)
 			return w
-		}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }}
+		}, deadline: func() { _ = controller.SetWriteDeadline(time.Now().Add(s.fillIdle)) }, flush: controller.Flush}
 		get := r.Clone(context.Background())
 		get.URL = source
 		get.Host = source.Host

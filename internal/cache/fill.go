@@ -29,6 +29,7 @@ func (e resumable) Unwrap() error { return e.error }
 func (s *Service) download(base *http.Request, label string, etag string, size int64, check func(*http.Response) error, out io.Writer) error {
 	// No total timeout: progress bounds each attempt instead.
 	client := &http.Client{Transport: s.client.Transport, CheckRedirect: s.client.CheckRedirect}
+	verified := &verifiedWriter{out: out, left: size}
 	var done int64
 	for resumes := 0; ; resumes++ {
 		ctx, cancel := context.WithCancel(s.work)
@@ -37,14 +38,17 @@ func (s *Service) download(base *http.Request, label string, etag string, size i
 		if done > 0 {
 			req.Header.Set("Range", "bytes="+strconv.FormatInt(done, 10)+"-")
 		}
-		n, err := s.attempt(client, req, cancel, etag, size, done, check, out)
+		n, err := s.attempt(client, req, cancel, etag, size, done, check, verified)
 		cancel()
 		done += n
 		if err != nil && s.work.Err() != nil {
 			return s.work.Err()
 		}
 		var again resumable
-		if err == nil || done == 0 || resumes == fillResumes || !errors.As(err, &again) {
+		if err == nil {
+			return verified.finish()
+		}
+		if done == 0 || done >= size || resumes == fillResumes || !errors.As(err, &again) {
 			return err
 		}
 		reason, _ := failureDetails(err)
@@ -52,7 +56,7 @@ func (s *Service) download(base *http.Request, label string, etag string, size i
 	}
 }
 
-func (s *Service) attempt(client *http.Client, req *http.Request, cancel context.CancelFunc, etag string, size, offset int64, check func(*http.Response) error, out io.Writer) (int64, error) {
+func (s *Service) attempt(client *http.Client, req *http.Request, cancel context.CancelFunc, etag string, size, offset int64, check func(*http.Response) error, out *verifiedWriter) (int64, error) {
 	response, err := client.Do(req) // #nosec G704 -- callers pass a URL that passed upstream admission; the public transport refuses host networks.
 	if err != nil {
 		return 0, resumable{upstreamFailure(err)}
@@ -66,15 +70,14 @@ func (s *Service) attempt(client *http.Client, req *http.Request, cancel context
 		response.Header.Get("Content-Range") != "bytes "+strconv.FormatInt(offset, 10)+"-"+strconv.FormatInt(size-1, 10)+"/"+strconv.FormatInt(size, 10) {
 		return 0, &fault{reason: "upstream_resume", status: response.StatusCode}
 	}
-	body := &idleReader{r: response.Body, limit: s.fillIdle}
-	body.timer = time.AfterFunc(s.fillIdle, func() { body.idle.Store(true); cancel() })
-	defer body.timer.Stop()
+	body := &idleReader{r: response.Body, limit: s.fillIdle, cancel: cancel}
 	n, err := io.Copy(out, body)
+	if out.err != nil {
+		return n, out.err // Writer failures, including an overlong body, are final.
+	}
 	switch {
 	case err == nil && offset+n == size:
 		return n, nil // Complete, even if the idle timer fired since.
-	case err != nil && body.err == nil:
-		return n, err // The writer failed.
 	case body.idle.Load():
 		return n, resumable{failure("upstream_idle")}
 	case err != nil:
@@ -84,22 +87,76 @@ func (s *Service) attempt(client *http.Client, req *http.Request, cancel context
 	}
 }
 
-// idleReader ends an attempt that receives nothing for limit.
+// verifiedWriter withholds the final byte until the attempt has read EOF with
+// exactly the declared length. Overlong bodies are final writer failures;
+// failed framing after the declared bytes cannot resume past the object end.
+type verifiedWriter struct {
+	out     io.Writer
+	left    int64
+	tail    [1]byte
+	pending bool
+	err     error // Writer failure, even when the upstream read also failed.
+}
+
+func (w *verifiedWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.left {
+		w.err = failure("length_mismatch")
+		return 0, w.err
+	}
+	data := p
+	if len(p) > 0 && int64(len(p)) == w.left {
+		w.tail[0] = p[len(p)-1]
+		w.pending = true
+		data = p[:len(p)-1]
+	}
+	if len(data) > 0 {
+		n, err := w.out.Write(data)
+		if err != nil || n != len(data) {
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			w.err = err
+			return n, err
+		}
+	}
+	w.left -= int64(len(p))
+	return len(p), nil
+}
+
+func (w *verifiedWriter) finish() error {
+	if w.left != 0 {
+		return failure("length_mismatch")
+	}
+	if !w.pending {
+		return nil // An empty object has no tail.
+	}
+	n, err := w.out.Write(w.tail[:])
+	if err == nil && n != 1 {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+// idleReader arms its bound only while waiting in an upstream Read. Stopping
+// and joining a fired callback before returning keeps destination writes out
+// of the idle budget, including the guest's separate write deadline.
 type idleReader struct {
-	r     io.Reader
-	limit time.Duration
-	timer *time.Timer
-	idle  atomic.Bool
-	err   error // The first read error other than EOF.
+	r      io.Reader
+	limit  time.Duration
+	cancel context.CancelFunc
+	idle   atomic.Bool
 }
 
 func (b *idleReader) Read(p []byte) (int, error) {
+	fired := make(chan struct{})
+	timer := time.AfterFunc(b.limit, func() {
+		b.idle.Store(true)
+		b.cancel()
+		close(fired)
+	})
 	n, err := b.r.Read(p)
-	if n > 0 {
-		b.timer.Reset(b.limit)
-	}
-	if err != nil && err != io.EOF && b.err == nil {
-		b.err = err
+	if !timer.Stop() {
+		<-fired
 	}
 	return n, err
 }
@@ -111,6 +168,7 @@ type streamTee struct {
 	store     io.Writer
 	open      func() io.Writer // Sends the response headers.
 	deadline  func()           // Bounds each write to the guest.
+	flush     func() error     // Publishes each write; failures end guest delivery.
 	client    io.Writer
 	delivered int64 // Bytes the guest accepted.
 	clientErr error
@@ -124,12 +182,18 @@ func (t *streamTee) Write(p []byte) (int, error) {
 		}
 	}
 	if t.clientErr == nil {
+		t.deadline()
 		if t.client == nil {
 			t.client = t.open()
 		}
-		t.deadline()
 		n, err := t.client.Write(p)
 		t.delivered += int64(n)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		if err == nil {
+			err = t.flush()
+		}
 		if err != nil {
 			t.clientErr = err
 		}

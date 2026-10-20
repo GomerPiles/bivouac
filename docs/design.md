@@ -905,13 +905,16 @@ A lease request carries only that URL. HEAD on a lease answers from the
 lease's upstream metadata without filling.
 
 The cache never holds a transfer back to buffer it. A plain GET that starts a
-fill, of an archive or a release, receives the bytes as they arrive while the
-store keeps them; ranged and concurrent readers wait for the verified object.
+fill, of an archive or a release, receives each chunk as it arrives while the
+store keeps it, except the last byte, which waits until the body has ended at
+exactly the declared length; ranged and concurrent readers wait for the
+verified object.
 Fills belong to the service, not to the request that started them: a guest
 that disconnects or times out leaves its fill running, and a retry joins it.
-Each upstream attempt ends after a minute without bytes rather than at a total
-deadline, and a fill resumes from its offset with an If-Match range request,
-up to three times. Upload relays stream every request body to Azure.
+An upstream attempt ends after a minute waiting for bytes (time spent writing
+them is not counted) rather than at a total deadline, and a fill resumes from
+its offset with an If-Match range request, up to three times. An overlong body
+is not resumed. Upload relays stream every request body to Azure.
 
 `cache.release_proxy` optionally adds a general GitHub release proxy. A
 loopback bridge in the guest accepts standard HTTP proxy clients and carries

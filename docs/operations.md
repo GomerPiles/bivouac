@@ -582,9 +582,10 @@ session) through `cache object discarded` (`reason=capacity` or `invalid`),
 shows what survived a restart; `cache store summary` totals losses each minute.
 Fill reasons are `capacity`, `object_limit`, `upstream_status`,
 `upstream_identity`, `upstream_body`, `upstream_transport`, `upstream_idle`
-(a minute without bytes), `upstream_resume` (a resume found a different object
-or no range support), `length_mismatch`, `timeout`, `canceled`, and `store_*`
-for local filesystem failures. `cache fill resumed` names the reason and
+(a minute waiting on an upstream read, excluding destination writes),
+`upstream_resume` (a resume found a different object or no range support),
+`length_mismatch`, `timeout`, `canceled`, and `store_*` for local filesystem
+failures. `cache fill resumed` names the reason and
 offset of each resume. `cache reader left during fill` is a guest that stopped
 waiting while another request's fill ran; that fill continues.
 `cache SSH transport ended during requests` names a guest whose transport

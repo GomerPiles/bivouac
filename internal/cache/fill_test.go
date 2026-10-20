@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -268,5 +269,288 @@ func TestUploadRelayStreamsBodiesToAzure(t *testing.T) {
 		if status := <-done; status != http.StatusCreated {
 			t.Fatal("relayed upload failed", op.query, status)
 		}
+	}
+}
+
+type fillTransport func(*http.Request) (*http.Response, error)
+
+func (f fillTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type immediateBody struct {
+	ctx  context.Context
+	left int
+}
+
+func (b *immediateBody) Read(p []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if b.left == 0 {
+		return 0, io.EOF
+	}
+	p[0] = 'x'
+	b.left--
+	return 1, nil
+}
+func (b *immediateBody) Close() error { return nil }
+
+type slowFillWriter struct{ data bytes.Buffer }
+
+func (w *slowFillWriter) Write(p []byte) (int, error) {
+	time.Sleep(60 * time.Millisecond)
+	return w.data.Write(p)
+}
+
+func TestFillIdleExcludesDestinationWrites(t *testing.T) {
+	var attempts atomic.Int32
+	s := &Service{work: context.Background(), fillIdle: 20 * time.Millisecond, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.client = &http.Client{Transport: fillTransport(func(r *http.Request) (*http.Response, error) {
+		attempts.Add(1)
+		offset := 0
+		if value := r.Header.Get("Range"); value != "" {
+			_, _ = fmt.Sscanf(value, "bytes=%d-", &offset)
+		}
+		h := http.Header{"Etag": {`"id"`}}
+		status := http.StatusOK
+		if offset > 0 {
+			status = http.StatusPartialContent
+			h.Set("Content-Range", fmt.Sprintf("bytes %d-9/10", offset))
+		}
+		return &http.Response{StatusCode: status, Header: h, Body: &immediateBody{ctx: r.Context(), left: 10 - offset}, Request: r}, nil
+	})}
+	req, _ := http.NewRequest(http.MethodGet, "https://example.invalid/object", nil)
+	out := &slowFillWriter{}
+	err := s.download(req, "object", `"id"`, 10, func(*http.Response) error { return nil }, out)
+	if err != nil || out.data.String() != strings.Repeat("x", 10) || attempts.Load() != 1 {
+		t.Fatalf("healthy upstream with slow writer: attempts=%d bytes=%d error=%v", attempts.Load(), out.data.Len(), err)
+	}
+}
+
+// Both callers must keep the final byte private until length and HTTP framing
+// have been checked, even when all declared bytes arrived in an earlier read.
+func TestStreamWaitsForVerifiedEOF(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		for _, mode := range []string{"valid", "overlong", "short", "framing"} {
+			t.Run(fmt.Sprintf("release=%t/%s", release, mode), func(t *testing.T) {
+				const size = 65536
+				prefix := make(chan struct{})
+				gate := make(chan struct{})
+				var once sync.Once
+				unblock := func() { once.Do(func() { close(gate) }) }
+				defer unblock()
+				var gets atomic.Int32
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("ETag", `"id"`)
+					if r.Method == http.MethodHead {
+						w.Header().Set("Content-Length", strconv.Itoa(size))
+						return
+					}
+					gets.Add(1)
+					if r.Header.Get("Range") != "" {
+						w.WriteHeader(http.StatusPreconditionFailed)
+						return
+					}
+					// Release admission requires the GET's declared Content-Length. A test
+					// transport below supplies it while preserving the real chunked body.
+					n := size
+					if mode == "short" {
+						n--
+					}
+					_, _ = w.Write(bytes.Repeat([]byte("x"), n))
+					w.(http.Flusher).Flush()
+					close(prefix)
+					<-gate
+					switch mode {
+					case "overlong":
+						_, _ = w.Write([]byte("extra"))
+					case "framing":
+						panic(http.ErrAbortHandler)
+					}
+				})
+				var s *Service
+				var client *http.Client
+				var source string
+				if release {
+					s, client, _ = proxyFixture(t, handler)
+					source = "https://github.com/example/arbitrary/releases/download/v1/arbitrary.tar.xz"
+					real := s.client.Transport
+					s.client.Transport = fillTransport(func(r *http.Request) (*http.Response, error) {
+						response, err := real.RoundTrip(r)
+						if err == nil && r.Method == http.MethodGet {
+							response.ContentLength = size
+						}
+						return response, err
+					})
+				} else {
+					backend := httptest.NewTLSServer(handler)
+					defer backend.Close()
+					var b Bootstrap
+					s, b, client = testService(t, backend)
+					source = makeLease(t, b, client, backend.URL+"/object?sig=fixture")
+				}
+				type result struct {
+					data   []byte
+					err    error
+					status int
+				}
+				done := make(chan result, 1)
+				go func() {
+					r, err := client.Get(source)
+					if err != nil {
+						done <- result{err: err}
+						return
+					}
+					data, err := io.ReadAll(r.Body)
+					_ = r.Body.Close()
+					done <- result{data: data, err: err, status: r.StatusCode}
+				}()
+				<-prefix
+				select {
+				case got := <-done:
+					unblock()
+					t.Fatalf("guest completed before upstream EOF: status=%d bytes=%d error=%v", got.status, len(got.data), got.err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				unblock()
+				var got result
+				select {
+				case got = <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("stream did not finish")
+				}
+				if mode == "valid" {
+					if got.err != nil || len(got.data) != size {
+						t.Fatalf("valid stream: bytes=%d error=%v", len(got.data), got.err)
+					}
+				} else {
+					if got.status != http.StatusOK || got.err == nil || len(got.data) >= size {
+						t.Fatalf("invalid stream completed: status=%d bytes=%d error=%v", got.status, len(got.data), got.err)
+					}
+					if mode == "overlong" && gets.Load() != 1 {
+						t.Fatalf("overlong body resumed: gets=%d", gets.Load())
+					}
+				}
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					objects, _, reserved := s.store.Stats()
+					if reserved == 0 && (mode != "valid" || objects == 1) {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("fill cleanup pending: objects=%d reserved=%d", objects, reserved)
+					}
+					time.Sleep(time.Millisecond)
+				}
+				objects, _, reserved := s.store.Stats()
+				if reserved != 0 || (mode != "valid" && objects != 0) {
+					t.Fatalf("invalid fill retained: objects=%d reserved=%d", objects, reserved)
+				}
+			})
+		}
+	}
+}
+
+func TestStreamFlushesSmallProgress(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
+			gate := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(gate) }) }
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", `"id"`)
+				w.Header().Set("Content-Length", "2048")
+				if r.Method == http.MethodHead {
+					return
+				}
+				_, _ = w.Write(bytes.Repeat([]byte("a"), 1024))
+				w.(http.Flusher).Flush()
+				<-gate
+				_, _ = w.Write(bytes.Repeat([]byte("b"), 1024))
+			})
+			var client *http.Client
+			var source string
+			if release {
+				_, client, _ = proxyFixture(t, handler)
+				source = "https://github.com/example/arbitrary/releases/download/v1/arbitrary.tar.xz"
+			} else {
+				backend := httptest.NewTLSServer(handler)
+				defer backend.Close()
+				_, b, c := testService(t, backend)
+				client = c
+				source = makeLease(t, b, c, backend.URL+"/object?sig=fixture")
+			}
+			defer unblock()
+			done := make(chan error, 1)
+			go func() {
+				r, err := client.Get(source)
+				if err == nil {
+					_, err = io.ReadFull(r.Body, make([]byte, 1023))
+					_ = r.Body.Close()
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("small upstream progress was not flushed")
+			}
+		})
+	}
+}
+
+type failingFlushWriter struct {
+	*httptest.ResponseRecorder
+	flushes int
+}
+
+func (w *failingFlushWriter) FlushError() error {
+	w.flushes++
+	return io.ErrClosedPipe
+}
+
+func TestStreamFlushFailureKeepsFill(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		t.Run(fmt.Sprintf("release=%t", release), func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", `"id"`)
+				w.Header().Set("Content-Length", "65536")
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(bytes.Repeat([]byte("x"), 65536))
+				}
+			})
+			w := &failingFlushWriter{ResponseRecorder: httptest.NewRecorder()}
+			var s *Service
+			if release {
+				var b Bootstrap
+				s, _, b = proxyFixture(t, handler)
+				req, _ := http.NewRequest(http.MethodGet, "https://github.com/example/arbitrary/releases/download/v1/arbitrary.tar.xz", nil)
+				if !s.cacheRelease(w, req, b.Token) {
+					t.Fatal("release not cached")
+				}
+			} else {
+				backend := httptest.NewTLSServer(handler)
+				defer backend.Close()
+				var b Bootstrap
+				var client *http.Client
+				s, b, client = testService(t, backend)
+				local := makeLease(t, b, client, backend.URL+"/object?sig=fixture")
+				s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, local, nil))
+			}
+			summary := s.Snapshot()
+			counters := summary.Archives
+			if release {
+				counters = summary.Releases
+			}
+			if w.flushes != 1 || counters.Failures != 1 || w.Body.Len() >= 65536 {
+				t.Fatalf("flush failure not treated as a guest write failure: flushes=%d bytes=%d counters=%+v", w.flushes, w.Body.Len(), counters)
+			}
+			objects, _, reserved := s.store.Stats()
+			if objects != 1 || reserved != 0 {
+				t.Fatalf("guest flush failure stopped fill: objects=%d reserved=%d", objects, reserved)
+			}
+		})
 	}
 }
