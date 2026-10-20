@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -498,6 +499,40 @@ func TestStreamFlushesSmallProgress(t *testing.T) {
 				t.Fatal("small upstream progress was not flushed")
 			}
 		})
+	}
+}
+
+// Close joins a fill in progress: once it returns, no fill file is open, so
+// the store directory can be removed even on Windows.
+func TestCloseJoinsFill(t *testing.T) {
+	gate := make(chan struct{})
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"id"`)
+		w.Header().Set("Content-Length", "2048")
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = w.Write(bytes.Repeat([]byte("a"), 1024))
+		w.(http.Flusher).Flush()
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+		}
+	}))
+	defer backend.Close()
+	defer close(gate)
+	s, b, c := testService(t, backend)
+	r, err := c.Get(makeLease(t, b, c, backend.URL+"/object?sig=fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Body.Close() }()
+	if _, err = io.ReadFull(r.Body, make([]byte, 1023)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if left, _ := filepath.Glob(filepath.Join(s.store.dir, "fill-*")); len(left) != 0 {
+		t.Fatalf("Close returned with fill files %v", left)
 	}
 }
 

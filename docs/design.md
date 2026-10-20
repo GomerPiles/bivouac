@@ -908,7 +908,8 @@ A plain GET that starts a fill, of an archive or a release, receives bytes as
 they arrive, except the last, which waits until the body ends at the declared
 length; ranged and concurrent readers wait for the verified object. Fills
 belong to the service: a guest that disconnects leaves its fill running, and a
-retry joins it. An attempt ends after a minute waiting on upstream, not at a
+retry joins it. Shutdown cancels fills and waits for every fill, reader, relay
+and commit with store files open. An attempt ends after a minute waiting on upstream, not at a
 total deadline; the fill then resumes from its offset with an If-Match range
 request, up to three times. Upload relays stream every request body to Azure.
 
