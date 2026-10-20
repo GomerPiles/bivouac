@@ -56,8 +56,13 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		return fmt.Errorf("cannot serve the VM host pipe: %w", err)
 	}
 	server := NewServer(host, cfg)
+	guardCtx, stopGuard := context.WithCancel(ctx)
+	guarded := make(chan struct{})
+	go func() { defer close(guarded); server.Guard(guardCtx, GuardInterval) }()
 	log.Info("VM host serving", "controller", cfg.Controller, "max_instances", cfg.MaxInstances)
 	err = server.Serve(ctx, l)
+	stopGuard()
+	<-guarded
 	cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if destroyErr := server.DestroyAll(cleanup); destroyErr != nil {

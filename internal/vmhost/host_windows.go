@@ -17,6 +17,7 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/hcs"
+	"github.com/GomerPiles/bivouac/internal/hostnet"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/Microsoft/go-winio/vhd"
 )
@@ -65,10 +66,23 @@ func (n hcsNative) CreateGuestStateFiles(guestState, runtimeState string) error 
 func (hcsNative) CreateDisk(child, parent string) error { return vhd.CreateDiffVhd(child, parent, 0) }
 func (hcsNative) CheckImage(path string) error          { return winhost.CheckProtected(path) }
 
+// network is hostnet's Manager, or a fake.
+type network interface {
+	Plan(ctx context.Context, guest string, retained []hostnet.Plan) (hostnet.Plan, error)
+	Create(ctx context.Context, p hostnet.Plan, guest string) error
+	Port(ctx context.Context, p hostnet.Plan) (exists, connected bool, err error)
+	Protect(ctx context.Context, p hostnet.Plan, guest, runtimeID string) (hostnet.Plan, error)
+	Verify(ctx context.Context, p hostnet.Plan, guest string) error
+	Block(ctx context.Context, p hostnet.Plan) error
+	Delete(ctx context.Context, p hostnet.Plan, guest string) error
+}
+
 // Host owns one administrator-protected journal directory and the handles of
 // every guest it creates. One Host at a time holds the directory's lock.
 type Host struct {
 	native native
+	net    network // nil when this host cannot attach networks; see netErr
+	netErr error
 	dir    string
 	root   *os.Root
 	owner  string
@@ -101,6 +115,11 @@ func Open(dir, controller string) (*Host, error) {
 		return nil, err
 	}
 	h.lock = lock
+	if manager, err := hostnet.Open(); err != nil {
+		h.netErr = fmt.Errorf("guest networking unavailable: %w", err)
+	} else {
+		h.net = manager
+	}
 	return h, nil
 }
 
@@ -131,10 +150,11 @@ const (
 )
 
 type record struct {
-	Owner     string `json:"owner"`
-	Spec      Spec   `json:"spec"`
-	Phase     phase  `json:"phase"`
-	RuntimeID string `json:"runtime_id,omitempty"`
+	Owner     string        `json:"owner"`
+	Spec      Spec          `json:"spec"`
+	Phase     phase         `json:"phase"`
+	RuntimeID string        `json:"runtime_id,omitempty"`
+	Network   *hostnet.Plan `json:"network,omitempty"`
 }
 
 type marker struct {
@@ -185,9 +205,13 @@ func (h *Host) write(name string, value any, exclusive bool) error {
 	return err
 }
 
-// Timings are host-monotonic spans of one guest's creation.
+// Timings are host-monotonic spans of one guest's creation. Network covers
+// the switch and endpoint; Protect covers the port's policy.
 type Timings struct {
-	Disk, StateFiles, Grants, Create, Start, GPU time.Duration
+	Disk, StateFiles, Grants, Network, Create, Protect, Start, GPU time.Duration
+	// ProtectedBeforeStart records whether the port existed, and its policy
+	// was installed, before the guest ran its first instruction.
+	ProtectedBeforeStart bool
 }
 
 // Guest is a running guest whose handle this Host holds.
@@ -195,7 +219,9 @@ type Guest struct {
 	Name      string
 	RuntimeID string
 	Timings   Timings
-	system    system
+	// Network is the guest's committed isolated endpoint, or nil.
+	Network *hostnet.Plan
+	system  system
 }
 
 func (h *Host) prove(name string, r record, p hcs.Properties) error {
@@ -223,6 +249,20 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		return nil, openErr
 	}
 	r := record{Owner: h.owner, Spec: spec, Phase: phaseIntent}
+	if spec.Network {
+		if h.net == nil {
+			return nil, h.netErr
+		}
+		retained, err := h.retainedNetworks()
+		if err != nil {
+			return nil, err
+		}
+		plan, err := h.net.Plan(ctx, spec.Name, retained)
+		if err != nil {
+			return nil, err
+		}
+		r.Network = &plan
+	}
 	if err = h.write(recordName(spec.Name), r, true); err != nil {
 		return nil, fmt.Errorf("cannot journal guest intent: %w", err)
 	}
@@ -262,12 +302,19 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		}
 	}
 	g.Timings.Grants = time.Since(started)
+	if r.Network != nil {
+		started = time.Now()
+		if err = h.net.Create(ctx, *r.Network, spec.Name); err != nil {
+			return nil, err
+		}
+		g.Timings.Network = time.Since(started)
+	}
 	r.Phase = phaseDispatched
 	if err = h.write(recordName(spec.Name), r, false); err != nil {
 		return nil, err
 	}
 	started = time.Now()
-	held, err = h.native.Create(ctx, spec.Name, document(h.owner, spec, dir))
+	held, err = h.native.Create(ctx, spec.Name, document(h.owner, spec, dir, r.Network))
 	g.Timings.Create = time.Since(started)
 	if err != nil {
 		if hcs.OutcomeUnknown(err) {
@@ -290,6 +337,20 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 	if err = h.prove(spec.Name, r, p); err != nil {
 		return nil, err
 	}
+	// Install the port policy before the guest's first instruction when the
+	// switch port already exists; otherwise immediately after start.
+	if r.Network != nil {
+		exists, connected, portErr := h.net.Port(ctx, *r.Network)
+		if portErr != nil {
+			return nil, portErr
+		}
+		if exists && connected {
+			if err = h.protect(ctx, &r, g, ""); err != nil {
+				return nil, err
+			}
+			g.Timings.ProtectedBeforeStart = true
+		}
+	}
 	started = time.Now()
 	if err = held.Start(ctx); err != nil {
 		return nil, err
@@ -308,6 +369,19 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 	if err = h.write(recordName(spec.Name), r, false); err != nil {
 		return nil, err
 	}
+	if r.Network != nil {
+		if !g.Timings.ProtectedBeforeStart {
+			if err = h.protect(ctx, &r, g, p.RuntimeID); err != nil {
+				return nil, err
+			}
+		} else if !strings.EqualFold(strings.Trim(r.Network.VMRuntimeID, "{}"), strings.Trim(p.RuntimeID, "{}")) {
+			return nil, ErrForeign
+		}
+		if err = h.net.Verify(ctx, *r.Network, spec.Name); err != nil {
+			return nil, err
+		}
+		g.Network = r.Network
+	}
 	if spec.GPU {
 		started = time.Now()
 		if err = held.Modify(ctx, hcs.AssignDefaultGPU()); err != nil {
@@ -318,6 +392,60 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 	g.RuntimeID = p.RuntimeID
 	g.system = held
 	return g, nil
+}
+
+// protect installs the port policy and journals the endpoint's committed
+// runtime binding.
+func (h *Host) protect(ctx context.Context, r *record, g *Guest, runtimeID string) error {
+	started := time.Now()
+	plan, err := h.net.Protect(ctx, *r.Network, r.Spec.Name, runtimeID)
+	g.Timings.Protect = time.Since(started)
+	if err != nil {
+		return err
+	}
+	r.Network = &plan
+	return h.write(recordName(r.Spec.Name), *r, false)
+}
+
+// retainedNetworks lists every journalled plan, so a new subnet never
+// overlaps a network still awaiting cleanup.
+func (h *Host) retainedNetworks() ([]hostnet.Plan, error) {
+	entries, err := fs.ReadDir(h.root.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
+	var plans []hostnet.Plan
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || entry.IsDir() || !strings.HasPrefix(name, NamePrefix) {
+			continue
+		}
+		var r record
+		if err := h.read(entry.Name(), &r); err != nil {
+			return nil, err
+		}
+		if r.Network != nil {
+			plans = append(plans, *r.Network)
+		}
+	}
+	return plans, nil
+}
+
+// VerifyNetwork reproves a networked guest's endpoint, port policy and the
+// host's effective denial. A guest without a network passes.
+func (h *Host) VerifyNetwork(ctx context.Context, g *Guest) error {
+	if g.Network == nil {
+		return nil
+	}
+	return h.net.Verify(ctx, *g.Network, g.Name)
+}
+
+// BlockNetwork blocks a networked guest's port, for quarantine.
+func (h *Host) BlockNetwork(ctx context.Context, g *Guest) error {
+	if g.Network == nil {
+		return nil
+	}
+	return h.net.Block(ctx, *g.Network)
 }
 
 // Running reproves that this exact guest instance is still running.
@@ -399,6 +527,9 @@ func (h *Host) destroy(ctx context.Context, name string, held system) error {
 		} else if !errors.Is(err, hcs.ErrNotFound) {
 			return err
 		}
+		if err := h.deleteNetwork(ctx, r); err != nil {
+			return err
+		}
 		return h.removeStorage(name)
 	}
 	s := held
@@ -444,7 +575,32 @@ func (h *Host) destroy(ctx context.Context, name string, held system) error {
 	if err := h.write(recordName(name), r, false); err != nil {
 		return err
 	}
+	if err := h.deleteNetwork(ctx, r); err != nil {
+		return err
+	}
 	return h.removeStorage(name)
+}
+
+// deleteNetwork removes a guest's endpoint and switch once its port is gone.
+// The port can outlive confirmed VM absence briefly, so it retries within ctx.
+func (h *Host) deleteNetwork(ctx context.Context, r record) error {
+	if r.Network == nil {
+		return nil
+	}
+	if h.net == nil {
+		return errors.Join(errors.New("guest network cleanup unavailable; retained"), h.netErr)
+	}
+	for {
+		err := h.net.Delete(ctx, *r.Network, r.Spec.Name)
+		if err == nil || errors.Is(err, hostnet.ErrForeign) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(errors.New("guest network deletion unconfirmed; retained"), err)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // removeStorage deletes only the fixed files this host creates, then the

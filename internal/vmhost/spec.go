@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/hcs"
+	"github.com/GomerPiles/bivouac/internal/hostnet"
 )
 
 // NamePrefix marks compute systems and journal entries bivouac created.
@@ -29,9 +30,11 @@ type Spec struct {
 	CPU      uint32 `json:"cpu"`
 	MemoryMB uint64 `json:"memory_mb"`
 	// LazyMemory backs guest RAM with host virtual memory committed on use.
-	LazyMemory bool      `json:"lazy_memory,omitempty"`
-	GPU        bool      `json:"gpu"`
-	Services   []Service `json:"services,omitempty"`
+	LazyMemory bool `json:"lazy_memory,omitempty"`
+	GPU        bool `json:"gpu"`
+	// Network attaches an isolated endpoint with the hostnet policy.
+	Network  bool      `json:"network,omitempty"`
+	Services []Service `json:"services,omitempty"`
 	// Labels are the creator's own bounded ownership metadata, such as its
 	// controller and instance IDs. They grant nothing.
 	Labels map[string]string `json:"labels,omitempty"`
@@ -116,8 +119,9 @@ const (
 )
 
 // document builds the creation document for a validated spec whose storage
-// lives in dir. There is no NIC, share, clipboard, audio or display transport.
-func document(owner string, s Spec, dir string) hcs.ComputeSystem {
+// lives in dir. Its only NIC is the planned endpoint, if any; there is no
+// share, clipboard, audio or display transport.
+func document(owner string, s Spec, dir string, network *hostnet.Plan) hcs.ComputeSystem {
 	services := map[string]hcs.HvSocketService{}
 	for _, service := range s.Services {
 		services[service.ID] = hcs.HvSocketService{BindSecurityDescriptor: descriptor(service.Bind), ConnectSecurityDescriptor: descriptor(service.Connect)}
@@ -130,6 +134,9 @@ func document(owner string, s Spec, dir string) hcs.ComputeSystem {
 	}
 	if len(services) != 0 {
 		devices.HvSocket = &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}
+	}
+	if network != nil {
+		devices.NetworkAdapters = map[string]hcs.NetworkAdapter{network.EndpointID: {EndpointID: network.EndpointID, MacAddress: network.MAC}}
 	}
 	return hcs.ComputeSystem{
 		Owner:                       owner,

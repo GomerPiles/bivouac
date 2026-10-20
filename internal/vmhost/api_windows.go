@@ -39,6 +39,7 @@ type CreateRequest struct {
 	MemoryMB   uint64            `json:"memory_mb"`
 	LazyMemory bool              `json:"lazy_memory,omitempty"`
 	GPU        bool              `json:"gpu"`
+	Network    bool              `json:"network,omitempty"`
 	Services   []string          `json:"services,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 }

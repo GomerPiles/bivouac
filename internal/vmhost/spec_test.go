@@ -47,7 +47,7 @@ func TestSpecValidationRefusesUnsafeInput(t *testing.T) {
 
 func TestDocumentGrantsOnlyNamedAccountsAndBacksMemoryAsRequested(t *testing.T) {
 	s := validSpec()
-	doc := document("owner", s, `C:\Host\bivouac-lab-1`)
+	doc := document("owner", s, `C:\Host\bivouac-lab-1`, nil)
 	if !doc.TerminateOnLastHandleClosed || doc.Owner != "owner" {
 		t.Fatal("guest lifetime is not bound to its VM host")
 	}
@@ -65,11 +65,11 @@ func TestDocumentGrantsOnlyNamedAccountsAndBacksMemoryAsRequested(t *testing.T) 
 		t.Fatal("physically backed memory requested lazily")
 	}
 	s.LazyMemory = true
-	if m := document("owner", s, `C:\Host\x`).VirtualMachine.ComputeTopology.Memory; !m.AllowOvercommit || !m.EnableDeferredCommit {
+	if m := document("owner", s, `C:\Host\x`, nil).VirtualMachine.ComputeTopology.Memory; !m.AllowOvercommit || !m.EnableDeferredCommit {
 		t.Fatal("lazy memory not requested")
 	}
 	s.Services = nil
-	if document("owner", s, `C:\Host\x`).VirtualMachine.Devices.HvSocket != nil {
+	if document("owner", s, `C:\Host\x`, nil).VirtualMachine.Devices.HvSocket != nil {
 		t.Fatal("empty HvSocket table emitted")
 	}
 }

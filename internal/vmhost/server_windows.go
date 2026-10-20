@@ -33,7 +33,9 @@ type Server struct {
 
 	mu      sync.Mutex
 	closing bool
-	guests  map[string]*owned
+	// admission is set while a guard pass fails or a guest is quarantined.
+	admission error
+	guests    map[string]*owned
 }
 
 // owned is a guest or a reservation for one being created.
@@ -43,7 +45,10 @@ type owned struct {
 	cpu      uint32
 	memoryMB uint64
 	labels   map[string]string
-	busy     bool // a request is operating on it
+	busy     bool // a request or the guard is operating on it
+	// quarantined guests failed a network guard pass: their port is blocked
+	// (or they were destroyed) and they report stopped until destroyed.
+	quarantined bool
 }
 
 func NewServer(host *Host, cfg Config) *Server {
@@ -171,7 +176,7 @@ func (s *Server) list(sid string) Response {
 	guests := []GuestInfo{}
 	for name, o := range s.guests {
 		if o.owner == sid && o.guest != nil {
-			guests = append(guests, GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: StateRunning, Labels: o.labels})
+			guests = append(guests, GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: o.state(), Labels: o.labels, Network: lease(o.guest)})
 		}
 	}
 	sort.Slice(guests, func(i, j int) bool { return guests[i].Name < guests[j].Name })
@@ -183,7 +188,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 	if !ok {
 		return refused("unknown image")
 	}
-	spec := Spec{Name: c.Name, Image: image, CPU: c.CPU, MemoryMB: c.MemoryMB, LazyMemory: c.LazyMemory, GPU: c.GPU, Labels: c.Labels}
+	spec := Spec{Name: c.Name, Image: image, CPU: c.CPU, MemoryMB: c.MemoryMB, LazyMemory: c.LazyMemory, GPU: c.GPU, Network: c.Network, Labels: c.Labels}
 	for _, id := range c.Services {
 		spec.Services = append(spec.Services, Service{ID: id, Connect: []string{sid}})
 	}
@@ -194,6 +199,10 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 	if s.closing {
 		s.mu.Unlock()
 		return refused("VM host is stopping")
+	}
+	if s.admission != nil {
+		s.mu.Unlock()
+		return refused("network guard closed admission: " + s.admission.Error())
 	}
 	if _, exists := s.guests[c.Name]; exists {
 		s.mu.Unlock()
@@ -226,7 +235,7 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 		return failure(err)
 	}
 	reservation.guest = g
-	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings), Labels: c.Labels}}
+	return Response{Guest: &GuestInfo{Name: g.Name, RuntimeID: g.RuntimeID, State: StateRunning, TimingsMS: durations(g.Timings), Labels: c.Labels, Network: lease(g)}}
 }
 
 // claim marks the caller's guest busy for one operation.
@@ -256,13 +265,13 @@ func (s *Server) status(ctx context.Context, sid, name string) Response {
 		return resp
 	}
 	defer s.release(o)
-	state := StateRunning
+	state := o.state()
 	if err := s.host.Running(ctx, o.guest); errors.Is(err, ErrForeign) {
 		return failure(err)
 	} else if err != nil {
 		state = StateStopped
 	}
-	return Response{Guest: &GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: state, Labels: o.labels}}
+	return Response{Guest: &GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: state, Labels: o.labels, Network: lease(o.guest)}}
 }
 
 func (s *Server) destroy(ctx context.Context, sid, name string) Response {
@@ -345,4 +354,96 @@ func pipeDescriptor(accounts []string) string {
 		fmt.Fprintf(&b, "(A;;0x%x;;;%s)", clientAccess|windows.READ_CONTROL, sid)
 	}
 	return b.String()
+}
+
+func (o *owned) state() string {
+	if o.quarantined {
+		return StateStopped
+	}
+	return StateRunning
+}
+
+func lease(g *Guest) *NetworkLease {
+	if g == nil || g.Network == nil {
+		return nil
+	}
+	return &NetworkLease{Address: g.Network.Address, Gateway: g.Network.Gateway, Prefix: 28, MAC: g.Network.MAC}
+}
+
+// GuardInterval is how often Guard reproves every networked guest.
+const GuardInterval = 10 * time.Second
+
+// Guard reproves each networked guest's endpoint, port policy and the host's
+// effective denial every interval until ctx ends. A guest that fails is
+// quarantined: its port is blocked, or the guest is destroyed if blocking
+// fails, and it reports stopped until its owner destroys it. Admission stays
+// closed while any guest is quarantined or a pass is incomplete. This polls;
+// it is not an atomic reaction to a host interface change.
+func (s *Server) Guard(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		s.guardPass(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) guardPass(ctx context.Context) {
+	s.mu.Lock()
+	var claimed []*owned
+	incomplete := false
+	for _, o := range s.guests {
+		switch {
+		case o.guest == nil || o.guest.Network == nil || o.quarantined:
+		case o.busy:
+			incomplete = true // creating or destroying; checked next pass
+		default:
+			o.busy = true
+			claimed = append(claimed, o)
+		}
+	}
+	s.mu.Unlock()
+	var failures []error
+	for _, o := range claimed {
+		passCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := s.host.VerifyNetwork(passCtx, o.guest)
+		if err != nil && ctx.Err() == nil {
+			failures = append(failures, err)
+			if blockErr := s.host.BlockNetwork(passCtx, o.guest); blockErr != nil {
+				// A port that cannot be blocked ends its guest.
+				_ = s.host.Destroy(passCtx, o.guest)
+			}
+		}
+		cancel()
+		s.mu.Lock()
+		o.busy = false
+		if err != nil && ctx.Err() == nil {
+			o.quarantined = true
+		}
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	quarantined := 0
+	for _, o := range s.guests {
+		if o.quarantined {
+			quarantined++
+		}
+	}
+	switch {
+	case ctx.Err() != nil:
+		// A canceled pass proves nothing; admission keeps its last state.
+	case len(failures) != 0:
+		s.admission = errors.Join(failures...)
+	case quarantined != 0:
+		s.admission = errors.New("quarantined guests await destruction")
+	case incomplete:
+		// Leave admission unchanged until every guest has been checked.
+	default:
+		s.admission = nil
+	}
 }
