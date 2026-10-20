@@ -92,7 +92,9 @@ func TestJITAmbiguousRegistrationCleanup(t *testing.T) {
 		t.Fatal("failed pool registration retried without backoff")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestJITRestartPreservesIdleRegistration(t *testing.T) {
@@ -105,7 +107,9 @@ func TestJITRestartPreservesIdleRegistration(t *testing.T) {
 	h.fp.MarkReady(inst.Name)
 	h.eventually("idle", func() bool { return h.instanceNamed(state.PhaseListening) != nil })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	// Simulate a crash between connection and persisting listening.
 	_, err := h.store.Update(inst.ID, func(i *state.Instance) { i.Phase = state.PhaseReady })
 	if err != nil {

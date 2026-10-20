@@ -113,13 +113,13 @@ func GuestDial(ctx context.Context, engine string) error {
 	defer func() { _ = c.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = c.Close(); _ = os.Stdin.Close() })
 	defer stop()
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		_, e := io.Copy(c, os.Stdin)
+		defer close(done)
+		_, _ = io.Copy(c, os.Stdin)
 		if half, ok := c.(interface{ CloseWrite() error }); ok {
 			_ = half.CloseWrite()
 		}
-		done <- e
 	}()
 	_, err = io.Copy(os.Stdout, c)
 	_ = c.Close()

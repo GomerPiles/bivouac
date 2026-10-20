@@ -62,7 +62,9 @@ func TestGuestLossReleasesCapacityWhileBusyCleanupSurvivesRestart(t *testing.T) 
 				}
 			}
 			cancel()
-			<-done
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
 			// Reopen the durable file and make a new controller, not just a new loop.
 			var err error
 			h.store, err = state.Open(h.dir, func() string { return "unused" })
@@ -99,7 +101,9 @@ func TestGuestLossReleasesCapacityWhileBusyCleanupSurvivesRestart(t *testing.T) 
 			h.gh.SetRunnerRemoveError(first.RunnerID, nil)
 			h.eventually("backlog cleared unattended", func() bool { return len(h.store.List()) == 0 && !h.gh.Registered(first.Name) })
 			cancel2()
-			<-done
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -132,7 +136,9 @@ func TestRepeatedGuestLossBoundsCleanupBacklog(t *testing.T) {
 	h.setMode(control.ModeStop)
 	h.eventually("clean", func() bool { return len(h.store.List()) == 0 && len(h.fp.Names()) == 0 })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 type uncertainDeletion struct {

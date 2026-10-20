@@ -69,13 +69,14 @@ func TestConcurrentStreamsBackpressureAndTransportLoss(t *testing.T) {
 			go func() { defer func() { _ = c.Close() }(); _, _ = io.Copy(c, c) }()
 		}
 	}()
-	relayDone, guestDone := make(chan error, 1), make(chan error, 1)
+	relayDone, guestDone := make(chan struct{}), make(chan struct{})
 	go func() {
-		relayDone <- Relay(ctx, left, func(ctx context.Context) (net.Conn, error) {
+		defer close(relayDone)
+		_ = Relay(ctx, left, func(ctx context.Context) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, server.Addr().Network(), server.Addr().String())
 		})
 	}()
-	go func() { guestDone <- Listen(ctx, right, l) }()
+	go func() { defer close(guestDone); _ = Listen(ctx, right, l) }()
 	var wg sync.WaitGroup
 	for _, i := range []byte{0, 1, 2, 3} {
 		wg.Add(1)
@@ -106,7 +107,7 @@ func TestConcurrentStreamsBackpressureAndTransportLoss(t *testing.T) {
 	}
 	wg.Wait()
 	_ = left.Close()
-	for _, done := range []chan error{relayDone, guestDone} {
+	for _, done := range []chan struct{}{relayDone, guestDone} {
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -199,13 +200,14 @@ func TestHalfClosedUpload(t *testing.T) {
 		}
 	}()
 	a, b := net.Pipe()
-	done := make(chan error, 2)
+	done := make(chan struct{}, 2)
 	go func() {
-		done <- Relay(ctx, a, func(ctx context.Context) (net.Conn, error) {
+		_ = Relay(ctx, a, func(ctx context.Context) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, backend.Addr().Network(), backend.Addr().String())
 		})
+		done <- struct{}{}
 	}()
-	go func() { done <- Listen(ctx, b, api) }()
+	go func() { _ = Listen(ctx, b, api); done <- struct{}{} }()
 	c, err := net.Dial(api.Addr().Network(), api.Addr().String())
 	if err != nil {
 		t.Fatal(err)

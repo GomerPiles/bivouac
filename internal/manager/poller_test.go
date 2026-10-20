@@ -62,5 +62,7 @@ func TestSessionEnsuresScaleSetLabels(t *testing.T) {
 	want := []string{"bivouac-macos-experimental", "bivouac-lt-a", "self-hosted"}
 	h.eventually("labels ensured", func() bool { return slices.Equal(h.gh.ScaleSetLabels(want[0]), want) })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
