@@ -31,9 +31,9 @@ func TestGuestWrapperOwnsSamplerAndPreservesListenerExit(t *testing.T) {
 	t.Setenv("BIVOUAC_TEST_DIRECTORY", directory)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- runGuest(ctx, "run", directory, runner, &bytes.Buffer{}) }()
-	defer func() { cancel(); <-done }()
+	done, stopped := make(chan error, 1), make(chan struct{})
+	go func() { defer close(stopped); done <- runGuest(ctx, "run", directory, runner, &bytes.Buffer{}) }()
+	defer func() { cancel(); <-stopped }()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		data, _ := os.ReadFile(filepath.Join(directory, "listener.pid"))
@@ -64,8 +64,6 @@ func TestGuestWrapperOwnsSamplerAndPreservesListenerExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = <-done
-	// Put the result back for the deferred join.
-	done <- err
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 7 {
 		t.Fatal("wrapper lost official runner exit", err)

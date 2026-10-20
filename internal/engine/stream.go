@@ -119,8 +119,9 @@ func (s *session) attach(ctx context.Context, id uint32, dial func(context.Conte
 		defer func() { _ = conn.Close() }()
 		stop := context.AfterFunc(cctx, func() { _ = conn.Close() })
 		defer stop()
-		readDone := make(chan error, 1)
+		readDone, readStopped := make(chan error, 1), make(chan struct{})
 		go func() {
+			defer close(readStopped)
 			buf := make([]byte, maxFrame)
 			for {
 				n, err := conn.Read(buf)
@@ -150,9 +151,7 @@ func (s *session) attach(ctx context.Context, id uint32, dial func(context.Conte
 		defer func() {
 			cancel()
 			_ = conn.Close()
-			if readDone != nil {
-				<-readDone
-			}
+			<-readStopped
 		}()
 		readEOF, writeEOF := false, false
 		for !readEOF || !writeEOF {

@@ -65,7 +65,9 @@ func TestStopInterruptsBootingGuest(t *testing.T) {
 		t.Fatalf("stop recorded as a failure: %+v", e)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Off waits for an in-flight guest and joins its goroutine before exiting.
@@ -79,8 +81,8 @@ func TestOffWaitsForInFlightGuest(t *testing.T) {
 	h.eventually("guest booting", func() bool { return h.instanceNamed(state.PhaseBooting) != nil })
 	h.setMode(control.ModeOff)
 	select {
-	case <-done:
-		t.Fatal("daemon exited with a guest booting")
+	case err := <-done:
+		t.Fatal("daemon exited with a guest booting", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 	h.fp.MarkReady(h.instanceNamed("").Name)

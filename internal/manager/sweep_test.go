@@ -61,7 +61,9 @@ func TestSweepOnOpenAndAfterLabelRoutedJob(t *testing.T) {
 		t.Fatalf("a sweep started after a correctly assigned job: %d", n)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDrainKeepsSessionWithZeroCapacity(t *testing.T) {
@@ -84,5 +86,7 @@ func TestDrainKeepsSessionWithZeroCapacity(t *testing.T) {
 	h.gh.Push(&github.Message{MessageID: 2, Statistics: &github.Statistics{TotalAssignedJobs: 2}})
 	h.eventually("guests after on", func() bool { return len(h.store.List()) == 2 })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }

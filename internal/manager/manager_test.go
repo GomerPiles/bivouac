@@ -182,7 +182,9 @@ func testOneJobPerGuest(t *testing.T, providerType string) {
 		t.Fatal("expected polling with no guests")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	stages := map[string]bool{}
 	decoder := json.NewDecoder(&stageLog)
 	for decoder.More() {
@@ -221,7 +223,9 @@ func TestBudgetCapsConcurrency(t *testing.T) {
 		t.Fatalf("budget exceeded: %d guests", n)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestForeignGuestConsumesHostSlot(t *testing.T) {
@@ -242,7 +246,9 @@ func TestForeignGuestConsumesHostSlot(t *testing.T) {
 		t.Fatalf("host VM limit exceeded with a foreign guest running: %d", n)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDrainFinishesActiveJobThenIdles(t *testing.T) {
@@ -273,7 +279,9 @@ func TestDrainFinishesActiveJobThenIdles(t *testing.T) {
 	h.fp.ExitRunner(inst.Name, 0)
 	h.eventually("idle", func() bool { return h.m.Phase() == "idle" && len(h.fp.Names()) == 0 })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStopReclaimsImmediately(t *testing.T) {
@@ -298,7 +306,9 @@ func TestStopReclaimsImmediately(t *testing.T) {
 		t.Fatal("runner left registered after stop")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStopRetriesBusyRegistrationWithoutRestart(t *testing.T) {
@@ -327,7 +337,9 @@ func TestStopRetriesBusyRegistrationWithoutRestart(t *testing.T) {
 	h.gh.SetRemoveError(nil)
 	h.eventually("cleanup retried", func() bool { return len(h.store.List()) == 0 && !h.gh.Registered(inst.Name) })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRestartRetriesRetainedCleanup(t *testing.T) {
@@ -344,7 +356,9 @@ func TestRestartRetriesRetainedCleanup(t *testing.T) {
 	h.setMode(control.ModeStop)
 	h.eventually("retained cleanup", func() bool { return len(h.fp.Names()) == 0 && h.instanceNamed(state.PhaseDeregistering) != nil })
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := h.store.Get(inst.ID); !ok {
 		t.Fatal("shutdown lost the pending registration")
 	}
@@ -355,7 +369,9 @@ func TestRestartRetriesRetainedCleanup(t *testing.T) {
 	h.gh.SetRemoveError(nil)
 	h.eventually("registration removed after restart", func() bool { return len(h.store.List()) == 0 && !h.gh.Registered(inst.Name) })
 	cancel2()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestOffExitsWhenIdle(t *testing.T) {
@@ -396,7 +412,9 @@ func TestIdleRunnerRetired(t *testing.T) {
 		t.Fatal("idle runner still registered")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestVMDeathMidJobRecovers(t *testing.T) {
@@ -416,7 +434,9 @@ func TestVMDeathMidJobRecovers(t *testing.T) {
 		t.Fatal("dead VM's runner still registered")
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestControllerRestartReconciles(t *testing.T) {
@@ -431,7 +451,9 @@ func TestControllerRestartReconciles(t *testing.T) {
 	h.eventually("listening", func() bool { i, _ := h.store.Get(inst.ID); return i != nil && i.Phase == state.PhaseListening })
 	// Controller dies: context cancelled, guest keeps running.
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if len(h.fp.Names()) != 1 {
 		t.Fatal("guest should survive a controller crash")
 	}
@@ -464,7 +486,9 @@ func TestControllerRestartReconciles(t *testing.T) {
 		}
 	}
 	cancel2()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestJITFailureTearsDown(t *testing.T) {
@@ -483,7 +507,9 @@ func TestJITFailureTearsDown(t *testing.T) {
 		t.Fatalf("error not recorded: %v", errs)
 	}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func contains(xs []string, s string) bool {
