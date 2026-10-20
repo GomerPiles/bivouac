@@ -522,8 +522,8 @@ func (m *Manager) Block(ctx context.Context, p Plan) error {
 	return m.vfp.Block(ctx, p)
 }
 
-// Delete removes the endpoint and network only after the guest's port is gone
-// and both match the plan, then confirms native absence.
+// Delete removes the endpoint and network only after the guest's port is
+// disconnected and both match the plan, then confirms native absence.
 func (m *Manager) Delete(ctx context.Context, p Plan, guest string) error {
 	if err := p.Validate(guest); err != nil {
 		return err
@@ -561,9 +561,11 @@ func (m *Manager) Delete(ctx context.Context, p Plan, guest string) error {
 		if !endpointMatches(probe, endpoint) {
 			return ErrForeign
 		}
-		if exists, _, err := m.Port(ctx, p); err != nil {
+		// A stopped guest's port can remain, disconnected, until its endpoint
+		// is deleted; only a connected port means the endpoint is in use.
+		if _, connected, err := m.Port(ctx, p); err != nil {
 			return err
-		} else if exists {
+		} else if connected {
 			return errors.New("owned endpoint still attached; retain cleanup")
 		}
 		if err = m.api.delete("Endpoint", p.EndpointID); err != nil {

@@ -57,10 +57,12 @@ import (
 var lab = struct {
 	root, results, image, imageSHA256, guestName, guestUser *string
 	helper, runnerDir, runnerArchive, runnerSHA256, peer    *string
+	recoverRoot                                             *string
 	runs                                                    *int
 	drained                                                 *bool
 }{
 	root:          flag.String("lab.root", "", "new administrator-protected VM host directory (must not exist)"),
+	recoverRoot:   flag.String("lab.recover-root", "", "an earlier lab root whose retained guests are settled first"),
 	results:       flag.String("lab.results", "", "new results file (JSON lines); the VM host log goes beside it"),
 	image:         flag.String("lab.image", "", "prepared image VHDX"),
 	imageSHA256:   flag.String("lab.image-sha256", "", "prepared image SHA-256"),
@@ -232,6 +234,18 @@ func TestLabNetworkBatch(t *testing.T) {
 	}
 	defer func() { _ = windows.CloseHandle(pin) }()
 	out.write(t, map[string]any{"event": "image-verified", "ms": time.Since(started).Milliseconds()})
+	if *lab.recoverRoot != "" {
+		started := time.Now()
+		err := recoverLab(*lab.recoverRoot)
+		event := map[string]any{"event": "recovered", "ms": time.Since(started).Milliseconds(), "pool_interfaces": poolInterfaces()}
+		if err != nil {
+			event["error"] = err.Error()
+		}
+		out.write(t, event)
+		if err != nil || event["pool_interfaces"] != 0 {
+			t.Fatal("the earlier lab root still retains a guest or network; no guest started")
+		}
+	}
 
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -330,6 +344,7 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 		defer done()
 		err := p.Delete(cleanCtx, spec.Name)
 		r.Timings["delete"] = ms(time.Since(cleanup))
+		deleteErr := err
 		if err == nil || errors.Is(err, provider.ErrNotFound) {
 			// Absent to this account and holding no reservation: a failed
 			// create whose cleanup failed is invisible but still reserved.
@@ -337,8 +352,12 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 			info, infoErr := host.Info(cleanCtx)
 			r.Cleaned = vmhost.IsCode(err, vmhost.CodeNotFound) && infoErr == nil && info.Running == 0
 		}
+		// VM host errors are host text, never guest output.
 		if !r.Cleaned && r.Failure == "" {
 			r.Failure = "delete: guest not confirmed absent"
+			if deleteErr != nil {
+				r.Failure += ": " + deleteErr.Error()
+			}
 		}
 		if created.Network != nil {
 			r.SwitchRemoved = waitInterfaceGone(cleanCtx, created.Network.Gateway)
@@ -346,6 +365,7 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 				r.Failure = "delete: guest switch adapter remained"
 			}
 		}
+		r.Passed = r.Passed && r.Cleaned && (created.Network == nil || r.SwitchRemoved)
 	}()
 	fail := func(stage string, err error) networkRun {
 		r.Failure = stage + ": " + err.Error()
@@ -707,6 +727,18 @@ func waitForHost(host *recordingHost, exited <-chan struct{}) error {
 			return errors.Join(errors.New("VM host did not start serving"), err)
 		}
 	}
+}
+
+// recoverLab settles an earlier lab root's retained guests and networks with
+// a VM host of the same controller, as its next start would.
+func recoverLab(root string) error {
+	h, err := vmhost.Open(root, labController)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	return errors.Join(h.Recover(ctx), h.Close())
 }
 
 // checkReserves leaves the host room beyond the guest, as batch 1 did.

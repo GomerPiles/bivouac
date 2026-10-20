@@ -820,8 +820,9 @@ allows public IPv4.
   path ran. Either way, the started guest's runtime ID must match the
   endpoint's VM binding.
 - **Teardown:** the endpoint and switch are deleted only after the compute
-  system is confirmed absent, retrying while the port lingers. A native network
-  that does not match its plan is retained.
+  system is confirmed absent and its port is disconnected, retrying while it
+  stays connected. The disconnected port itself remains until its endpoint is
+  deleted. A native network that does not match its plan is retained.
 - **Guard:** every 10 s the VM host reproves each networked guest: switch,
   endpoint, runtime binding, connected port, VFP rules, and an unchanged host
   denial.

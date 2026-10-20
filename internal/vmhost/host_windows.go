@@ -587,8 +587,9 @@ func (h *Host) destroy(ctx context.Context, name string, held system) error {
 	return h.removeStorage(name)
 }
 
-// deleteNetwork removes a guest's endpoint and switch once its port is gone.
-// The port can outlive confirmed VM absence briefly, so it retries within ctx.
+// deleteNetwork removes a guest's endpoint and switch once its port is
+// disconnected. The port can stay connected briefly after confirmed VM
+// absence, so it retries within ctx.
 func (h *Host) deleteNetwork(ctx context.Context, r record) error {
 	if r.Network == nil {
 		return nil
