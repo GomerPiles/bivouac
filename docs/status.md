@@ -224,7 +224,11 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- A live boot with the firmware pinned to the guest disk, added since batch 2.
+- A guest whose start fails is retained rather than cleaned up: after the
+  failure, its properties no longer prove ownership. Recover settles it, but
+  until then the VM host keeps its reservation. Seen once, when a creation
+  document pinned the firmware's boot entry and HCS refused to start the guest
+  (HRESULT 0x8007139f).
 - The provider running live as part of the manager.
 - The image factory.
 - The warm spare.

@@ -45,22 +45,7 @@ type Uefi struct {
 	Console                 string `json:"Console,omitempty"`
 	ApplySecureBootTemplate string `json:"ApplySecureBootTemplate,omitempty"`
 	SecureBootTemplateID    string `json:"SecureBootTemplateId,omitempty"`
-	// BootThis is the only boot entry the firmware tries. With
-	// StopOnBootFailure it never falls back to another device, such as
-	// network boot.
-	BootThis          *UefiBootEntry `json:"BootThis,omitempty"`
-	StopOnBootFailure bool           `json:"StopOnBootFailure,omitempty"`
 }
-
-// UefiBootEntry names a boot device. For a ScsiDrive, DevicePath is the SCSI
-// controller's key and DiskNumber its attachment.
-type UefiBootEntry struct {
-	DeviceType string `json:"DeviceType"`
-	DevicePath string `json:"DevicePath"`
-	DiskNumber uint16 `json:"DiskNumber"`
-}
-
-const BootScsiDrive = "ScsiDrive"
 
 type Topology struct {
 	Memory    Memory    `json:"Memory"`

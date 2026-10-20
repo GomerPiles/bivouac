@@ -118,10 +118,6 @@ const (
 	runtimeStateFile = "vm.vmrs"
 )
 
-// bootController is the SCSI controller holding the guest's disk at
-// attachment 0, the firmware's only boot entry.
-const bootController = "Primary"
-
 // document builds the creation document for a validated spec whose storage
 // lives in dir. Its only NIC is the planned endpoint, if any; there is no
 // share, clipboard, audio or display transport.
@@ -131,7 +127,7 @@ func document(owner string, s Spec, dir string, network *hostnet.Plan) hcs.Compu
 		services[service.ID] = hcs.HvSocketService{BindSecurityDescriptor: descriptor(service.Bind), ConnectSecurityDescriptor: descriptor(service.Connect)}
 	}
 	devices := hcs.Devices{
-		Scsi:         map[string]hcs.Scsi{bootController: {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: filepath.Join(dir, diskFile)}}}},
+		Scsi:         map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: filepath.Join(dir, diskFile)}}}},
 		VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768},
 		Keyboard:     &hcs.Keyboard{},
 		Mouse:        &hcs.Mouse{},
@@ -147,10 +143,7 @@ func document(owner string, s Spec, dir string, network *hostnet.Plan) hcs.Compu
 		SchemaVersion:               hcs.Schema21(),
 		TerminateOnLastHandleClosed: true,
 		VirtualMachine: &hcs.VirtualMachine{
-			// The firmware boots only the guest's disk, so it never tries
-			// network boot before the guest's port policy is in place.
-			Chipset: hcs.Chipset{Uefi: &hcs.Uefi{Console: "Default", ApplySecureBootTemplate: "Apply", SecureBootTemplateID: hcs.SecureBootMicrosoftWindows,
-				BootThis: &hcs.UefiBootEntry{DeviceType: hcs.BootScsiDrive, DevicePath: bootController, DiskNumber: 0}, StopOnBootFailure: true}},
+			Chipset: hcs.Chipset{Uefi: &hcs.Uefi{Console: "Default", ApplySecureBootTemplate: "Apply", SecureBootTemplateID: hcs.SecureBootMicrosoftWindows}},
 			ComputeTopology: hcs.Topology{
 				Memory:    hcs.Memory{SizeInMB: s.MemoryMB, AllowOvercommit: s.LazyMemory, EnableDeferredCommit: s.LazyMemory},
 				Processor: hcs.Processor{Count: s.CPU},

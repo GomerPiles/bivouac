@@ -826,8 +826,10 @@ allows public IPv4.
     verified, and the provider sends nothing to the guest before that.
   - Until then only the pinned image runs, from a fresh differencing disk and
     fresh firmware state.
-  - The firmware boots only that disk and stops on failure, so it never tries
-    network boot.
+  - Its firmware could try network boot only if that disk failed to boot. Such
+    a guest never becomes ready, so it receives nothing and is discarded.
+    Pinning the firmware's boot entry to the disk (`BootThis` with
+    `StopOnBootFailure`) made HCS refuse to start the guest, so it is not used.
 
   The window after start is accepted on these terms. A change that lets
   anything untrusted run earlier must close the window first. Examples are
