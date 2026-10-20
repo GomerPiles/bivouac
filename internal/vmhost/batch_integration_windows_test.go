@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,8 +51,9 @@ import (
 
 var lab = struct {
 	root, flattenDir, results, image, imageSHA256, guestName, guestUser *string
-	probeSHA256, validationSHA256, autologonSHA256, dial                *string
+	probeSHA256, validationSHA256, autologonSHA256, dial, only          *string
 }{
+	only:             flag.String("lab.only", "", "comma-separated run labels to run; all when empty"),
 	root:             flag.String("lab.root", "", "new or empty administrator-protected VM host directory"),
 	flattenDir:       flag.String("lab.flatten-dir", "", "new or empty directory for the flattened image"),
 	results:          flag.String("lab.results", "", "new results file (JSON lines)"),
@@ -207,6 +209,9 @@ func TestLabBatch(t *testing.T) {
 		{"production-size-2", 4, 8192, false, false, false},
 	}
 	for _, run := range runs {
+		if *lab.only != "" && !slices.Contains(strings.Split(*lab.only, ","), run.label) {
+			continue
+		}
 		image := *lab.image
 		if run.flatten {
 			started := time.Now()
