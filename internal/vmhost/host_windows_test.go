@@ -18,15 +18,21 @@ import (
 
 // fakeNative models HCS names, owners and lifetimes without Hyper-V.
 type fakeNative struct {
-	mu        sync.Mutex
-	t         *testing.T
-	host      *Host
-	systems   map[string]*fakeSystem
-	createErr error
-	owner     string // overrides the owner HCS reports, if set
-	lingers   int    // absence polls before a terminated guest disappears
-	created   []string
-	sawIntent bool
+	mu             sync.Mutex
+	t              *testing.T
+	host           *Host
+	systems        map[string]*fakeSystem
+	createErr      error
+	owner          string // overrides the owner HCS reports, if set
+	lingers        int    // absence polls before a terminated guest disappears
+	created        []string
+	sawIntent      bool
+	lastDocument   hcs.ComputeSystem
+	beforeMutation func()
+	openCalls      int
+	propertyCalls  int
+	terminateCalls int
+	terminateErr   error
 }
 
 type fakeSystem struct {
@@ -39,6 +45,7 @@ type fakeSystem struct {
 func (n *fakeNative) Open(_ context.Context, name string) (system, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.openCalls++
 	s, ok := n.systems[name]
 	if !ok {
 		return nil, hcs.ErrNotFound
@@ -55,6 +62,8 @@ func (n *fakeNative) Open(_ context.Context, name string) (system, error) {
 func (n *fakeNative) Create(_ context.Context, name string, doc hcs.ComputeSystem) (system, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.mutating()
+	n.lastDocument = doc
 	var r record
 	if err := n.host.read(recordName(name), &r); err != nil || r.Phase != phaseDispatched {
 		n.t.Error("create dispatched before its intent was journalled")
@@ -73,11 +82,22 @@ func (n *fakeNative) Create(_ context.Context, name string, doc hcs.ComputeSyste
 	return s, nil
 }
 
-func (n *fakeNative) GrantVMAccess(string, string) error { return nil }
+func (n *fakeNative) mutating() {
+	if n.beforeMutation != nil {
+		n.beforeMutation()
+	}
+}
+
+func (n *fakeNative) GrantVMAccess(string, string) error {
+	n.mutating()
+	return nil
+}
 func (n *fakeNative) CreateGuestStateFiles(guestState, runtimeState string) error {
+	n.mutating()
 	return errors.Join(os.WriteFile(guestState, nil, 0o600), os.WriteFile(runtimeState, nil, 0o600))
 }
 func (n *fakeNative) CreateDisk(child, _ string) error {
+	n.mutating()
 	return os.WriteFile(child, []byte("disk"), 0o600)
 }
 func (n *fakeNative) CheckImage(string) error { return nil }
@@ -85,6 +105,7 @@ func (n *fakeNative) CheckImage(string) error { return nil }
 func (s *fakeSystem) Properties(context.Context) (hcs.Properties, error) {
 	s.n.mu.Lock()
 	defer s.n.mu.Unlock()
+	s.n.propertyCalls++
 	if live, ok := s.n.systems[s.name]; ok {
 		return live.props, nil
 	}
@@ -94,12 +115,16 @@ func (s *fakeSystem) Start(context.Context) error {
 	s.n.mu.Lock()
 	defer s.n.mu.Unlock()
 	live := s.n.systems[s.name]
-	live.props.State, live.props.RuntimeID = hcs.StateRunning, "11111111-2222-3333-4444-555555555555"
+	live.props.State, live.props.RuntimeID = hcs.StateRunning, fakeRuntimeID
 	return nil
 }
 func (s *fakeSystem) Terminate(context.Context) error {
 	s.n.mu.Lock()
 	defer s.n.mu.Unlock()
+	s.n.terminateCalls++
+	if s.n.terminateErr != nil {
+		return s.n.terminateErr
+	}
 	s.n.systems[s.name].props.State = hcs.StateStopped
 	return nil
 }

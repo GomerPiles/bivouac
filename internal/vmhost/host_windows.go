@@ -251,7 +251,7 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 	r := record{Owner: h.owner, Spec: spec, Phase: phaseIntent}
 	if spec.Network {
 		if h.net == nil {
-			return nil, h.netErr
+			return nil, errors.Join(errors.New("guest networking unavailable"), h.netErr)
 		}
 		retained, err := h.retainedNetworks()
 		if err != nil {

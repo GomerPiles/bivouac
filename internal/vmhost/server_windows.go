@@ -49,6 +49,11 @@ type owned struct {
 	// quarantined guests failed a network guard pass: their port is blocked
 	// (or they were destroyed) and they report stopped until destroyed.
 	quarantined bool
+	// guardChecking permits status to read the recorded state during a check.
+	guardChecking bool
+	// guardDestroyed records confirmed cleanup; the owner still sees stopped
+	// until it acknowledges destruction and releases the reservation.
+	guardDestroyed bool
 }
 
 func NewServer(host *Host, cfg Config) *Server {
@@ -90,7 +95,9 @@ func (s *Server) DestroyAll(ctx context.Context) error {
 	var guests []*Guest
 	for name, o := range s.guests {
 		if o.guest != nil && !o.busy {
-			guests = append(guests, o.guest)
+			if !o.guardDestroyed {
+				guests = append(guests, o.guest)
+			}
 			delete(s.guests, name)
 		}
 	}
@@ -260,10 +267,23 @@ func (s *Server) release(o *owned) {
 }
 
 func (s *Server) status(ctx context.Context, sid, name string) Response {
-	o, resp, ok := s.claim(sid, name)
-	if !ok {
+	s.mu.Lock()
+	o, ok := s.guests[name]
+	if !ok || o.owner != sid || o.guest == nil {
+		s.mu.Unlock()
+		return Response{Code: CodeNotFound, Error: "no such guest for this account"}
+	}
+	if o.guardChecking {
+		resp := Response{Guest: &GuestInfo{Name: name, RuntimeID: o.guest.RuntimeID, State: o.state(), Labels: o.labels, Network: lease(o.guest)}}
+		s.mu.Unlock()
 		return resp
 	}
+	if o.busy {
+		s.mu.Unlock()
+		return refused("guest is busy")
+	}
+	o.busy = true
+	s.mu.Unlock()
 	defer s.release(o)
 	state := o.state()
 	if err := s.host.Running(ctx, o.guest); errors.Is(err, ErrForeign) {
@@ -279,7 +299,10 @@ func (s *Server) destroy(ctx context.Context, sid, name string) Response {
 	if !ok {
 		return resp
 	}
-	err := s.host.Destroy(ctx, o.guest)
+	var err error
+	if !o.guardDestroyed {
+		err = s.host.Destroy(ctx, o.guest)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o.busy = false
@@ -403,6 +426,7 @@ func (s *Server) guardPass(ctx context.Context) {
 			incomplete = true // creating or destroying; checked next pass
 		default:
 			o.busy = true
+			o.guardChecking = true
 			claimed = append(claimed, o)
 		}
 	}
@@ -411,16 +435,19 @@ func (s *Server) guardPass(ctx context.Context) {
 	for _, o := range claimed {
 		passCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := s.host.VerifyNetwork(passCtx, o.guest)
+		destroyed := false
 		if err != nil && ctx.Err() == nil {
 			failures = append(failures, err)
 			if blockErr := s.host.BlockNetwork(passCtx, o.guest); blockErr != nil {
 				// A port that cannot be blocked ends its guest.
-				_ = s.host.Destroy(passCtx, o.guest)
+				destroyed = s.host.Destroy(passCtx, o.guest) == nil
 			}
 		}
 		cancel()
 		s.mu.Lock()
 		o.busy = false
+		o.guardChecking = false
+		o.guardDestroyed = destroyed
 		if err != nil && ctx.Err() == nil {
 			o.quarantined = true
 		}

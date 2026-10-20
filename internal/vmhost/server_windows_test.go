@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -238,5 +240,315 @@ func TestLabelsAreBoundedAndReturnedOnlyToTheOwner(t *testing.T) {
 		if resp := call(t, s, alice, bad); resp.Code != CodeRefused {
 			t.Fatal("invalid labels accepted", labels)
 		}
+	}
+}
+
+func networkServerFixture(t *testing.T) (*Server, *fakeNative, *fakeNetwork) {
+	t.Helper()
+	s, n := serverFixture(t)
+	return s, n, attachNetwork(t, s.host, n)
+}
+
+func createNetworkRequest(t *testing.T, s *Server) *GuestInfo {
+	t.Helper()
+	req := createReq("bivouac-net")
+	req.Create.Network = true
+	resp := call(t, s, alice, req)
+	if resp.Code != "" || resp.Guest == nil {
+		t.Fatal("network create failed", resp)
+	}
+	return resp.Guest
+}
+
+func requireStoppedInStatusAndList(t *testing.T, s *Server, name string) {
+	t.Helper()
+	resp := call(t, s, alice, Request{Op: "status", Name: name})
+	if resp.Code != "" || resp.Guest == nil || resp.Guest.State != StateStopped {
+		t.Fatal("quarantined guest not stopped in status", resp)
+	}
+	resp = call(t, s, alice, Request{Op: "list"})
+	if len(resp.Guests) != 1 || resp.Guests[0].Name != name || resp.Guests[0].State != StateStopped {
+		t.Fatal("quarantined guest not stopped in list", resp)
+	}
+}
+
+func requireGuardRefusesCreate(t *testing.T, s *Server) {
+	t.Helper()
+	resp := call(t, s, alice, createReq("bivouac-next"))
+	if resp.Code != CodeRefused || !strings.Contains(resp.Error, "network guard") {
+		t.Fatal("network guard did not refuse admission", resp)
+	}
+}
+
+func requireOwnerDestroyAbsent(t *testing.T, s *Server, name string) {
+	t.Helper()
+	resp := call(t, s, alice, Request{Op: "destroy", Name: name})
+	if resp.Code != "" || resp.Guest == nil || resp.Guest.State != StateAbsent {
+		t.Fatal("owner could not acknowledge destruction", resp)
+	}
+	info := call(t, s, alice, Request{Op: "info"}).Info
+	if info == nil || info.Running != 0 || info.RunningCPU != 0 || info.RunningMB != 0 || len(s.guests) != 0 {
+		t.Fatal("destroy did not release capacity", info)
+	}
+}
+
+func requireAdmissionReopens(t *testing.T, s *Server) {
+	t.Helper()
+	s.guardPass(t.Context())
+	if resp := call(t, s, alice, createReq("bivouac-next")); resp.Code != "" {
+		t.Fatal("successful full guard pass did not reopen admission", resp)
+	}
+}
+
+func TestPipeNetworkLeaseInCreateStatusAndList(t *testing.T) {
+	s, _, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	p := f.networks[g.Name]
+	want := &NetworkLease{Address: p.Address, Gateway: p.Gateway, Prefix: 28, MAC: p.MAC}
+	if !reflect.DeepEqual(g.Network, want) {
+		t.Fatal("create omitted or changed network lease", g.Network)
+	}
+	status := call(t, s, alice, Request{Op: "status", Name: g.Name})
+	list := call(t, s, alice, Request{Op: "list"})
+	if status.Guest == nil || !reflect.DeepEqual(status.Guest.Network, want) || len(list.Guests) != 1 || !reflect.DeepEqual(list.Guests[0].Network, want) {
+		t.Fatal("status or list omitted network lease", status, list)
+	}
+	resp := call(t, s, alice, createReq("bivouac-offline"))
+	if resp.Code != "" || resp.Guest == nil || resp.Guest.Network != nil {
+		t.Fatal("non-network create returned a lease", resp)
+	}
+	status = call(t, s, alice, Request{Op: "status", Name: "bivouac-offline"})
+	list = call(t, s, alice, Request{Op: "list"})
+	if status.Guest == nil || status.Guest.Network != nil || len(list.Guests) != 2 || list.Guests[1].Network != nil {
+		t.Fatal("non-network status or list returned a lease", status, list)
+	}
+}
+
+func TestGuardQuarantinesByBlockUntilOwnerDestroyAndFullPass(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	f.verify.once = errors.New("policy changed")
+	s.guardPass(t.Context())
+	if f.verify.calls != 2 || f.block.calls != 1 || n.terminateCalls != 0 || !s.guests[g.Name].quarantined || s.guests[g.Name].guardDestroyed {
+		t.Fatal("failed network was not blocked and quarantined")
+	}
+	requireStoppedInStatusAndList(t, s, g.Name)
+	requireGuardRefusesCreate(t, s)
+	s.guardPass(t.Context()) // Verify would pass now, but quarantine is permanent.
+	if f.verify.calls != 2 {
+		t.Fatal("guard reverified a quarantined guest")
+	}
+	requireGuardRefusesCreate(t, s)
+	requireOwnerDestroyAbsent(t, s, g.Name)
+	requireNetworkGone(t, s.host, n, f)
+	requireGuardRefusesCreate(t, s)
+	requireAdmissionReopens(t, s)
+}
+
+func TestGuardQuarantinesByDestroyAndOwnerReleasesReservation(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	f.verify.sticky = errors.New("policy changed")
+	f.block.once = errors.New("block unavailable")
+	s.guardPass(t.Context())
+	if f.block.calls != 1 || !s.guests[g.Name].guardDestroyed || !s.guests[g.Name].quarantined {
+		t.Fatal("unblockable guest was not recorded as destroyed")
+	}
+	requireNetworkGone(t, s.host, n, f)
+	requireStoppedInStatusAndList(t, s, g.Name)
+	info := call(t, s, alice, Request{Op: "info"}).Info
+	if info == nil || info.Running != 1 || info.RunningCPU != 2 || info.RunningMB != 4096 {
+		t.Fatal("reservation released before owner acknowledgement", info)
+	}
+	requireGuardRefusesCreate(t, s)
+	s.guardPass(t.Context())
+	requireGuardRefusesCreate(t, s)
+	opens, properties, deletes := n.openCalls, n.propertyCalls, f.delete.calls
+	requireOwnerDestroyAbsent(t, s, g.Name)
+	if n.openCalls != opens || n.propertyCalls != properties || f.delete.calls != deletes {
+		t.Fatal("owner destroy reentered host after confirmed guard cleanup")
+	}
+	requireGuardRefusesCreate(t, s)
+	requireAdmissionReopens(t, s)
+}
+
+func TestGuardFailedDestroyOwnerRetriesByName(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	f.verify.once = errors.New("policy changed")
+	f.block.once = errors.New("block unavailable")
+	n.terminateErr = errors.New("terminate unavailable")
+	s.guardPass(t.Context())
+	if s.guests[g.Name].guardDestroyed || n.terminateCalls != 1 || len(n.systems) != 1 || f.delete.calls != 0 {
+		t.Fatal("failed guard destroy was treated as confirmed absence")
+	}
+	requireStoppedInStatusAndList(t, s, g.Name)
+	opens := n.openCalls
+	n.terminateErr = nil
+	requireOwnerDestroyAbsent(t, s, g.Name)
+	if n.openCalls <= opens || n.terminateCalls != 2 {
+		t.Fatal("owner did not retry cleanup by name")
+	}
+	requireNetworkGone(t, s.host, n, f)
+}
+
+func TestDestroyAllDropsGuardDestroyedEntries(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	createNetworkRequest(t, s)
+	f.verify.once = errors.New("policy changed")
+	f.block.once = errors.New("block unavailable")
+	s.guardPass(t.Context())
+	opens := n.openCalls
+	if err := s.DestroyAll(t.Context()); err != nil || len(s.guests) != 0 || n.openCalls != opens {
+		t.Fatal("DestroyAll reentered host for a guard-destroyed guest", err)
+	}
+	if info := s.info(); info.Running != 0 || info.RunningCPU != 0 || info.RunningMB != 0 {
+		t.Fatal("DestroyAll retained reservation", info)
+	}
+	requireNetworkGone(t, s.host, n, f)
+}
+
+func TestGuardBusyGuestKeepsAdmissionClosedUntilFullPass(t *testing.T) {
+	s, _, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	s.mu.Lock()
+	s.admission = errors.New("earlier guard failure")
+	s.guests[g.Name].busy = true
+	s.mu.Unlock()
+	s.guardPass(t.Context())
+	if f.verify.calls != 1 {
+		t.Fatal("guard checked a busy guest")
+	}
+	requireGuardRefusesCreate(t, s)
+	s.mu.Lock()
+	s.guests[g.Name].busy = false
+	s.mu.Unlock()
+	requireAdmissionReopens(t, s)
+	if f.verify.calls != 2 {
+		t.Fatal("full pass did not check the networked guest")
+	}
+}
+
+func TestGuardCanceledPassPreservesAdmissionAndQuarantine(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(fmtBool(closed), func(t *testing.T) {
+			s, n, f := networkServerFixture(t)
+			g := createNetworkRequest(t, s)
+			var admission error
+			if closed {
+				admission = errors.New("earlier guard failure")
+			}
+			s.admission = admission
+			f.verify.sticky = errors.New("policy changed")
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			s.guardPass(ctx)
+			o := s.guests[g.Name]
+			if !errors.Is(s.admission, admission) || o.quarantined || o.guardDestroyed || o.busy || o.guardChecking || f.block.calls != 0 || n.terminateCalls != 0 {
+				t.Fatal("canceled guard pass changed admission or quarantine")
+			}
+		})
+	}
+}
+
+func fmtBool(b bool) string {
+	if b {
+		return "closed"
+	}
+	return "open"
+}
+
+func TestGuardNeverVerifiesOrQuarantinesNonNetworkGuests(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	if resp := call(t, s, alice, createReq("bivouac-offline")); resp.Code != "" {
+		t.Fatal(resp)
+	}
+	f.verify.sticky = errors.New("policy changed")
+	s.guardPass(t.Context())
+	if f.verify.calls != 0 || f.block.calls != 0 || n.terminateCalls != 0 || s.guests["bivouac-offline"].quarantined || s.admission != nil {
+		t.Fatal("guard operated on a non-network guest")
+	}
+}
+
+func TestStatusDuringGuardCheckReturnsRecordedStateWithoutNativeCall(t *testing.T) {
+	for _, quarantined := range []bool{false, true} {
+		t.Run(fmtBool(quarantined), func(t *testing.T) {
+			s, n, f := networkServerFixture(t)
+			g := createNetworkRequest(t, s)
+			entered, release := make(chan struct{}), make(chan struct{})
+			f.verifyEntered, f.verifyRelease = entered, release
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			done := make(chan struct{})
+			go func() { defer close(done); s.guardPass(ctx) }()
+			t.Cleanup(func() { cancel(); <-done })
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("guard never entered Verify")
+			}
+			s.mu.Lock()
+			s.guests[g.Name].quarantined = quarantined
+			s.mu.Unlock()
+			n.mu.Lock()
+			opens, properties := n.openCalls, n.propertyCalls
+			n.mu.Unlock()
+			resp := call(t, s, alice, Request{Op: "status", Name: g.Name})
+			want := StateRunning
+			if quarantined {
+				want = StateStopped
+			}
+			if resp.Code != "" || resp.Guest == nil || resp.Guest.State != want || !reflect.DeepEqual(resp.Guest.Network, g.Network) {
+				t.Fatal("guard claim prevented recorded status", resp)
+			}
+			if resp := call(t, s, bob, Request{Op: "status", Name: g.Name}); resp.Code != CodeNotFound {
+				t.Fatal("guard claim bypassed account ownership", resp)
+			}
+			n.mu.Lock()
+			unchanged := n.openCalls == opens && n.propertyCalls == properties
+			n.mu.Unlock()
+			if !unchanged {
+				t.Fatal("status called native backend during guard check")
+			}
+			if resp := call(t, s, alice, Request{Op: "destroy", Name: g.Name}); resp.Code != CodeRefused {
+				t.Fatal("destroy interrupted guard claim", resp)
+			}
+			close(release)
+			<-done
+		})
+	}
+}
+
+func TestStatusDuringRequestClaimRemainsBusy(t *testing.T) {
+	s, n := serverFixture(t)
+	if resp := call(t, s, alice, createReq("bivouac-a")); resp.Code != "" {
+		t.Fatal(resp)
+	}
+	s.mu.Lock()
+	s.guests["bivouac-a"].busy = true
+	s.mu.Unlock()
+	properties := n.propertyCalls
+	if resp := call(t, s, alice, Request{Op: "status", Name: "bivouac-a"}); resp.Code != CodeRefused || !strings.Contains(resp.Error, "busy") || n.propertyCalls != properties {
+		t.Fatal("status bypassed a request claim", resp)
+	}
+}
+
+func TestGuardLoopCancellationLeavesAdmissionAndGuestUnchanged(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	g := createNetworkRequest(t, s)
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.verifyEntered, f.verifyRelease = entered, release
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); s.Guard(ctx, time.Hour) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("Guard did not begin a pass")
+	}
+	cancel()
+	<-done
+	if o := s.guests[g.Name]; o.busy || o.guardChecking || o.quarantined || o.guardDestroyed || s.admission != nil || f.block.calls != 0 || n.terminateCalls != 0 {
+		t.Fatal("canceling Guard changed admission or guest")
 	}
 }

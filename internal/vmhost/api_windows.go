@@ -158,5 +158,5 @@ func DecodeConfig(r io.Reader) (Config, error) {
 
 func durations(t Timings) map[string]int64 {
 	ms := func(d time.Duration) int64 { return d.Milliseconds() }
-	return map[string]int64{"disk": ms(t.Disk), "state_files": ms(t.StateFiles), "grants": ms(t.Grants), "create": ms(t.Create), "start": ms(t.Start), "gpu": ms(t.GPU)}
+	return map[string]int64{"disk": ms(t.Disk), "state_files": ms(t.StateFiles), "grants": ms(t.Grants), "network": ms(t.Network), "create": ms(t.Create), "protect": ms(t.Protect), "start": ms(t.Start), "gpu": ms(t.GPU)}
 }
