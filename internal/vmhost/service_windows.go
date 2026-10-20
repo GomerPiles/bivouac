@@ -46,7 +46,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		return err
 	}
 	defer func() { _ = host.Close() }()
-	if err = host.Recover(ctx); err != nil {
+	// Absence polls and network deletion retry until their context ends, so a
+	// guest or network that never settles must not hold startup forever.
+	recoverCtx, cancelRecover := context.WithTimeout(ctx, 2*time.Minute)
+	err = host.Recover(recoverCtx)
+	cancelRecover()
+	if err != nil {
 		log.Warn("guests retained from an earlier VM host", "error", err)
 	}
 	// ListenPipe creates the first instance exclusively, so an existing

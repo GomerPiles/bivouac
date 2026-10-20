@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"strings"
@@ -300,6 +301,23 @@ func requireAdmissionReopens(t *testing.T, s *Server) {
 	}
 }
 
+func TestFailedCreateWhoseCleanupFailsKeepsItsReservation(t *testing.T) {
+	s, n, f := networkServerFixture(t)
+	f.verify.once = errors.New("policy verification failed")
+	n.terminateErr = errors.New("termination unavailable")
+	req := createReq("bivouac-net")
+	req.Create.Network = true
+	if resp := call(t, s, alice, req); resp.Code != CodeFailed {
+		t.Fatal("failed create reported success", resp)
+	}
+	if info := s.info(); info.Running != 1 || info.RunningCPU != 2 || info.RunningMB != 4096 || len(n.systems) != 1 {
+		t.Fatal("reservation released while the guest may still run", info)
+	}
+	if resp := call(t, s, alice, Request{Op: "status", Name: "bivouac-net"}); resp.Code != CodeNotFound {
+		t.Fatal("retained create became visible as a guest", resp)
+	}
+}
+
 func TestPipeNetworkLeaseInCreateStatusAndList(t *testing.T) {
 	s, _, f := networkServerFixture(t)
 	g := createNetworkRequest(t, s)
@@ -431,7 +449,7 @@ func TestGuardBusyGuestKeepsAdmissionClosedUntilFullPass(t *testing.T) {
 
 func TestGuardCanceledPassPreservesAdmissionAndQuarantine(t *testing.T) {
 	for _, closed := range []bool{false, true} {
-		t.Run(fmtBool(closed), func(t *testing.T) {
+		t.Run(fmt.Sprintf("closed=%t", closed), func(t *testing.T) {
 			s, n, f := networkServerFixture(t)
 			g := createNetworkRequest(t, s)
 			var admission error
@@ -451,13 +469,6 @@ func TestGuardCanceledPassPreservesAdmissionAndQuarantine(t *testing.T) {
 	}
 }
 
-func fmtBool(b bool) string {
-	if b {
-		return "closed"
-	}
-	return "open"
-}
-
 func TestGuardNeverVerifiesOrQuarantinesNonNetworkGuests(t *testing.T) {
 	s, n, f := networkServerFixture(t)
 	if resp := call(t, s, alice, createReq("bivouac-offline")); resp.Code != "" {
@@ -472,7 +483,7 @@ func TestGuardNeverVerifiesOrQuarantinesNonNetworkGuests(t *testing.T) {
 
 func TestStatusDuringGuardCheckReturnsRecordedStateWithoutNativeCall(t *testing.T) {
 	for _, quarantined := range []bool{false, true} {
-		t.Run(fmtBool(quarantined), func(t *testing.T) {
+		t.Run(fmt.Sprintf("quarantined=%t", quarantined), func(t *testing.T) {
 			s, n, f := networkServerFixture(t)
 			g := createNetworkRequest(t, s)
 			entered, release := make(chan struct{}), make(chan struct{})

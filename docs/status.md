@@ -180,10 +180,21 @@ loss and delivers files by scp. A real named-pipe
 test covers caller identification, refusal of anonymous callers and refusal
 of an unprivileged server. The service has not yet been installed live.
 
+Guest networking in the VM host is also covered by tests only, against a fake
+network backend: planning and journalling, protect before or after start,
+teardown after absence, recovery, and the guard's quarantine and admission.
+The provider requests a network for every guest. No networked HCS guest has
+booted yet.
+
 Open:
 
 - Installing and running the VM host service live.
-- Networking at creation; until then the provider refuses readiness.
+- Networking live (lab batch 2), with Windows CI drained, because a new host
+  vEthernet adapter trips the App Sandbox broker's interface guard:
+  - public DNS and HTTPS work;
+  - the host LAN, gateway and IPv6 are denied, with positive controls;
+  - which protect path runs;
+  - whether the layer survives the guest's boot.
 - The provider running live.
 - The image factory.
 - The warm spare.

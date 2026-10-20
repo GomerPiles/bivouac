@@ -356,7 +356,8 @@ runner_dir = 'C:\actions-runner'
 ```
 
 `bivouac doctor` checks that the VM host is serving this image within its
-limits. The provider cannot run jobs until the VM host attaches networking.
+limits. The provider asks for an isolated network on every guest; networked
+guests have not yet passed a live lab batch, so do not route jobs to it.
 
 ## Direct HCS lab batch
 

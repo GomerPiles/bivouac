@@ -26,6 +26,10 @@ import (
 // be this host's. Nothing is stopped or deleted; the record is retained.
 var ErrForeign = errors.New("guest is not provably owned by this VM host; retained")
 
+// errRetained marks a failed create whose cleanup also failed: its guest may
+// still run, so it keeps its reservation until Recover settles it.
+var errRetained = errors.New("failed guest cleanup incomplete; record retained")
+
 type native interface {
 	Open(ctx context.Context, name string) (system, error)
 	Create(ctx context.Context, name string, doc hcs.ComputeSystem) (system, error)
@@ -274,7 +278,9 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
-		err = errors.Join(err, h.destroy(cleanupCtx, spec.Name, held))
+		if destroyErr := h.destroy(cleanupCtx, spec.Name, held); destroyErr != nil {
+			err = errors.Join(err, errRetained, destroyErr)
+		}
 	}()
 	g := &Guest{Name: spec.Name}
 	if err = h.root.Mkdir(spec.Name, 0o700); err != nil {

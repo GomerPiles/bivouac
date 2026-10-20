@@ -722,8 +722,8 @@ HCS and Windows networking refuse ordinary tokens, so the work splits in two:
   traffic and diagnostics.
 - A small VM host runs elevated. It creates and removes compute systems,
   per-job differencing disks, each VM's network endpoint and firewall policy,
-  and the network guard. Its ownership journal lives in an administrator-only
-  `%ProgramData%` directory. It accepts a fixed set of operations on a local
+  and the network guard described below. Its ownership journal lives in an
+  administrator-only `%ProgramData%` directory. It accepts a fixed set of operations on a local
   named pipe whose DACL admits only the accounts named in its
   administrator-protected configuration. It never receives GitHub
   credentials, job data or guest output.
@@ -752,8 +752,10 @@ connection: info, create, status, destroy or list.
 - The VM host reserves instance, CPU and memory capacity against its
   configured limits before any HCS call. Info reports the shared totals, so
   every manager budgets against the same host.
-- A create whose outcome is unknown keeps its reservation until a later VM
-  host's Recover settles it.
+- A create whose outcome is unknown, or whose cleanup after a failure did not
+  finish, keeps its reservation until a later VM host's Recover settles it.
+  That Recover is bounded to 2 minutes, so a guest that never settles cannot
+  hold the VM host's startup.
 
 The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
 
@@ -776,9 +778,11 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   adapter directly, without PowerShell, because status runs every few
   seconds.
 - **JIT** bytes travel only on SSH stdin.
-- **Not yet:** WaitReady refuses a guest without a network lease, because its
-  runner could not reach GitHub. The download cache is not yet supported for
-  these guests.
+- **Network:** every create asks for an isolated endpoint. The lease (address,
+  gateway, prefix and MAC) goes to the guest in its runner configuration.
+  WaitReady still refuses a guest without a lease, because its runner could
+  not reach GitHub.
+- **Not yet:** the download cache is not supported for these guests.
 
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
@@ -796,8 +800,38 @@ holds their handles:
   its next start, it confirms each journalled guest is absent and then removes
   that guest's disk and network.
 - Upgrading the VM host therefore requires draining first.
-- The network endpoint and its policy are attached in the creation document,
-  before the guest's first instruction runs.
+
+Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
+above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated
+/28 from 10.251.0.0/16, with a MAC derived from its name. An owned stateless
+VFP layer on its port denies the host's interface prefixes and all IPv6, and
+allows public IPv4.
+
+- **Plan:** fresh native IDs, the subnet and a snapshot of the host's
+  effective denial are journalled with the intent, before any native
+  mutation. A new plan avoids every journalled subnet. Other guests' switches
+  are private prefixes that are already denied, so they do not change the
+  snapshot.
+- **Create:** the switch and endpoint exist before the compute system, and the
+  endpoint is the creation document's only NIC.
+- **Protect:** if the switch port already exists after create, the VM host
+  installs and verifies the layer before start. Otherwise it does so right
+  after start, before the guest is reported. The guest's timings record which
+  path ran. Either way, the started guest's runtime ID must match the
+  endpoint's VM binding.
+- **Teardown:** the endpoint and switch are deleted only after the compute
+  system is confirmed absent, retrying while the port lingers. A native network
+  that does not match its plan is retained.
+- **Guard:** every 10 s the VM host reproves each networked guest: switch,
+  endpoint, runtime binding, connected port, VFP rules, and an unchanged host
+  denial.
+  - A failing guest is quarantined. Its port is blocked, or the guest is
+    destroyed if blocking fails. It reports stopped until its owner destroys
+    it.
+  - Admission stays closed while a pass fails or any guest is quarantined. It
+    reopens only after a pass that checked every networked guest successfully.
+    A canceled pass changes nothing.
+  - The guard polls. It does not react atomically to an interface change.
 
 Off and Stop release all guest CPU, memory and GPU. When the VM host is
 installed as a service, Off also stops it, leaving the host free for other GPU

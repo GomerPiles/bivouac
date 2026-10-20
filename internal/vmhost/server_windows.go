@@ -234,9 +234,10 @@ func (s *Server) create(ctx context.Context, sid string, c CreateRequest) Respon
 	defer s.mu.Unlock()
 	reservation.busy = false
 	if err != nil {
-		// An unknown outcome keeps its reservation: the journal still holds
-		// the guest until a later VM host's Recover settles it.
-		if !hcs.OutcomeUnknown(err) {
+		// An unknown outcome or a failed cleanup keeps its reservation: the
+		// journal still holds the guest until a later VM host's Recover
+		// settles it.
+		if !hcs.OutcomeUnknown(err) && !errors.Is(err, errRetained) {
 			delete(s.guests, c.Name)
 		}
 		return failure(err)

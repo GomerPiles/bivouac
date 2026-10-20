@@ -161,7 +161,7 @@ func TestCreateRequestsOnlyThisControllersGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := h.creates[0]
-	if r.Image != "windows" || r.CPU != 4 || r.MemoryMB != 8192 || !r.GPU || len(r.Services) != 2 || r.Labels["controller_id"] != controller || r.Labels["instance_id"] != "0a1b2c3d" {
+	if r.Image != "windows" || r.CPU != 4 || r.MemoryMB != 8192 || !r.GPU || !r.Network || len(r.Services) != 2 || r.Labels["controller_id"] != controller || r.Labels["instance_id"] != "0a1b2c3d" {
 		t.Fatal("create request", r)
 	}
 	if st, err := p.Status(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil || !st.Exists || !st.Running || !st.Owned || st.Meta.InstanceID != "0a1b2c3d" {

@@ -137,8 +137,8 @@ func meta(g vmhost.GuestInfo) provider.Metadata {
 	return provider.Metadata{ControllerID: g.Labels["controller_id"], InstanceID: g.Labels["instance_id"], CreatedAt: g.Labels["created_at"]}
 }
 
-// Create asks the VM host to create, start and GPU-assign the guest. The VM
-// host owns its native lifetime from then on.
+// Create asks the VM host to create, start and GPU-assign the guest with an
+// isolated network endpoint. The VM host owns its native lifetime from then on.
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if spec.Meta.ControllerID != p.opts.ControllerID || spec.Name != p.prefix()+spec.Meta.InstanceID {
 		return provider.ErrNotOwned
@@ -148,7 +148,7 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		labels["created_at"] = spec.Meta.CreatedAt
 	}
 	_, err := p.host.Create(ctx, vmhost.CreateRequest{
-		Name: spec.Name, Image: p.opts.Image, CPU: p.opts.CPU, MemoryMB: p.opts.MemoryMB, LazyMemory: p.opts.LazyMemory, GPU: p.opts.GPU,
+		Name: spec.Name, Image: p.opts.Image, CPU: p.opts.CPU, MemoryMB: p.opts.MemoryMB, LazyMemory: p.opts.LazyMemory, GPU: p.opts.GPU, Network: true,
 		Services: []string{winguest.AgentService, winguest.SSHService}, Labels: labels,
 	})
 	return err
