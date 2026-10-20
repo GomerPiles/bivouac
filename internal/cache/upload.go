@@ -217,6 +217,11 @@ func (s *Service) relayUpload(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	defer u.leave()
+	if !s.hold() {
+		s.fallBack(w, id, u, "shutdown")
+		return
+	}
+	defer s.held.Done()
 	// The listener's read and write timeouts suit small requests. A block on a
 	// slow uplink is bounded by the signed URL and grant instead.
 	controller := http.NewResponseController(w)
@@ -408,19 +413,13 @@ func (s *Service) storeUpload(id string, u *uploadLease, order []string, listed 
 		return
 	}
 	key := archiveKey(u.upstream, etag, size)
-	s.mu.Lock()
-	closed := s.closed
-	if !closed {
-		s.commits.Add(1)
-	}
-	s.mu.Unlock()
-	if closed {
+	if !s.hold() {
 		removeBlocks(blocks)
 		st.shrink(st.bytes)
 		return
 	}
 	go func() {
-		defer s.commits.Done()
+		defer s.held.Done()
 		present, err := st.commit(s.work, key, func(ctx context.Context, out io.Writer) error {
 			for _, b := range blocks {
 				if err := ctx.Err(); err != nil {

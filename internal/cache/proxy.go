@@ -316,9 +316,10 @@ func reusableResponse(r *http.Response, limit int64) bool {
 }
 
 func (s *Service) cacheRelease(w http.ResponseWriter, r *http.Request, token string) bool {
-	if !releaseRequest(r) {
+	if !releaseRequest(r) || !s.hold() {
 		return false
 	}
+	defer s.held.Done()
 	head := r.Clone(r.Context())
 	head.Method = http.MethodHead
 	head.Body = nil

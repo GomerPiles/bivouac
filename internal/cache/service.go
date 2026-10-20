@@ -69,8 +69,8 @@ type Service struct {
 	storing     atomic.Bool
 	work        context.Context // Canceled by Close; owns fills and upload commits.
 	stopWork    context.CancelFunc
-	commits     sync.WaitGroup
-	fillIdle    time.Duration // An upstream attempt that receives nothing for this long ends.
+	held        sync.WaitGroup // Work with store files open: fills, readers, relays and commits.
+	fillIdle    time.Duration  // An upstream attempt that receives nothing for this long ends.
 	crl         []byte
 	crlExpires  time.Time
 }
@@ -240,8 +240,19 @@ func (s *Service) Close() {
 	if len(uploads) > 0 {
 		s.log.Info("cache uploads abandoned", "reason", "shutdown", "uploads", len(uploads))
 	}
-	s.commits.Wait()
+	s.held.Wait()
 	s.LogSummary()
+}
+
+// hold registers work that opens store files, so Close joins it before the
+// store directory can be reused or removed. It fails once Close has begun.
+func (s *Service) hold() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.held.Add(1)
+	}
+	return !s.closed
 }
 
 // EnableReleaseProxy is configured before attaching this service to providers.
@@ -302,6 +313,11 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	if !s.hold() {
+		http.Error(w, "cache closed", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.held.Done()
 	label := s.store.label(l.key)
 	measured := &transferWriter{ResponseWriter: w, status: http.StatusOK}
 	controller := http.NewResponseController(w)
