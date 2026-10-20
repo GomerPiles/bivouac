@@ -597,6 +597,8 @@ A relayed save logs `cache upload relayed` with its `guest`, then
 `unsupported_request`, `concurrency`, `expired`, `revoked`, `guest_body` and the
 upstream transport reasons above. Repeated `unsupported_request` or
 `concurrency` means the official action changed how it uploads.
+`cache upload not stored` with `block_list_incomplete` means Azure accepted a
+block list before the host had all of it; `block_list` means it did not parse.
 `cache upload not relayed` (`upload_limit`, `expired`) means the save went
 directly; `cache uploads abandoned` counts relays open at revocation or shutdown.
 

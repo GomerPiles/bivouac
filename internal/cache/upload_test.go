@@ -443,3 +443,114 @@ func TestUploadRelayCapacityAndRevocation(t *testing.T) {
 	// Revocation ends the guest's saves uncounted.
 	waitSummary(t, s, Summary{Uploads: UploadCounters{Relayed: 2, Skipped: 1}})
 }
+
+// Use Go's actual HTTP transport: a successful response may race the
+// transport's still-running request-body writer.
+func TestBlockListEarlyHTTPResponseSkipsIncompleteCopy(t *testing.T) {
+	accepted := make(chan struct{})
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			t.Error(err)
+			return
+		}
+		if r.URL.Query().Get("comp") == "blocklist" {
+			if _, err := io.ReadFull(r.Body, make([]byte, 100)); err != nil {
+				return
+			}
+			w.Header().Set("ETag", `"id"`)
+			w.WriteHeader(http.StatusCreated)
+			w.(http.Flusher).Flush()
+			close(accepted)
+		} else {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusCreated)
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer backend.Close()
+	s, b, client := testService(t, backend)
+	s.EnableUploadStore()
+	relay := createUploadLease(t, b, client, backend.URL+"/object?sig=fixture")
+	if status, _ := relayPut(t, client, b, relay+"?comp=block&blockid=AAAA", nil, []byte("staged")); status != http.StatusCreated {
+		t.Fatal("block not accepted")
+	}
+	in, out := io.Pipe()
+	defer func() { _ = in.Close() }()
+	defer func() { _ = out.Close() }()
+	// A valid XML prefix must not qualify as a complete copy: Azure can respond
+	// before the declared trailing whitespace has even reached the relay.
+	prefix := append(blockList("AAAA"), bytes.Repeat([]byte(" "), 256)...)
+	req, _ := http.NewRequest(http.MethodPut, relay+"?comp=blocklist", in)
+	req.ContentLength = maxBlockListBytes
+	req.Header.Set("Authorization", "Bearer "+b.Token)
+	done := make(chan *http.Response, 1)
+	go func() { r, _ := client.Do(req); done <- r }()
+	if _, err := out.Write(prefix); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream did not receive prefix")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		summary := s.Snapshot().Uploads
+		if summary.Stored+summary.Skipped > 0 {
+			if summary.Stored != 0 || summary.Skipped != 1 {
+				t.Fatalf("incomplete block list was stored: %+v", summary)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("accepted upload was not accounted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	go func() {
+		_, _ = out.Write(bytes.Repeat([]byte(" "), maxBlockListBytes-len(prefix)))
+		_ = out.Close()
+	}()
+	select {
+	case response := <-done:
+		if response == nil {
+			t.Fatal("accepted response lost")
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusCreated {
+			t.Fatal("accepted response changed", response.StatusCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("relay response blocked")
+	}
+	objects, _, reserved := s.store.Stats()
+	if objects != 0 || reserved != 0 {
+		t.Fatalf("incomplete list retained staging: objects=%d reserved=%d", objects, reserved)
+	}
+}
+
+func TestBlockListEarlyHTTPResponseConcurrentBody(t *testing.T) {
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = io.ReadFull(r.Body, make([]byte, 100))
+		w.Header().Set("ETag", `"id"`)
+		w.WriteHeader(http.StatusCreated)
+		w.(http.Flusher).Flush()
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer backend.Close()
+	s, b, client := testService(t, backend)
+	s.EnableUploadStore()
+	relay := createUploadLease(t, b, client, backend.URL+"/object?sig=fixture")
+	ids := make([]string, 100000)
+	for i := range ids {
+		ids[i] = "AAAA"
+	}
+	if status, _ := relayPut(t, client, b, relay+"?comp=blocklist", nil, blockList(ids...)); status != http.StatusCreated {
+		t.Fatal("early success not relayed", status)
+	}
+}

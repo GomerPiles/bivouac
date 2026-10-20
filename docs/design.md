@@ -976,11 +976,12 @@ creation response's signed upload URL with a host relay URL. The host sends
 each Put Blob, Put Block and Put Block List to Azure itself, appending only the
 operation's own parameters to the signed query, and stages the bytes it sent.
 When Azure accepts the commit, the staged blocks in committed order become the
-object that a restore's HEAD identifies by blob path, ETag and size. The host
-never accepts guest bytes on any other path. A guest holding the signed URL can
-still write blocks to Azure directly, so the copy can differ from Azure's blob,
-but only for an entry that guest can write, whose readers already accept its
-bytes. A guest that can only read an entry cannot place it locally. Relay
+object that a restore's HEAD identifies by blob path, ETag and size. If Azure
+accepts a block list before the host has its whole body, the host relays the
+reply and stores nothing. The host never accepts guest bytes on any other
+path. A guest holding the signed URL can still write blocks to Azure directly,
+so the copy can differ from Azure's blob, but only for an entry that guest can
+write, whose readers already accept its bytes. A guest that can only read an entry cannot place it locally. Relay
 requests need the relay ID and the guest's own token: the official action logs
 the ID in debug output, and the macOS listener is reachable beyond the guest.
 
