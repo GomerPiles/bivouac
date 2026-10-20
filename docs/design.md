@@ -818,7 +818,8 @@ allows public IPv4.
   installs and verifies the layer before start. Otherwise it does so right
   after start, before the guest is reported. The guest's timings record which
   path ran. Either way, the started guest's runtime ID must match the
-  endpoint's VM binding.
+  endpoint's VM binding. So far the port has appeared only at start, so a
+  guest runs for about a second before its layer is in place.
 - **Teardown:** the endpoint and switch are deleted only after the compute
   system is confirmed absent and its port is disconnected, retrying while it
   stays connected. The disconnected port itself remains until its endpoint is

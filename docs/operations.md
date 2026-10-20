@@ -465,13 +465,16 @@ offers to allow the test binary through the firewall, choose Cancel.
 4. Results are JSON lines: start, image verification, one line per run, end.
    The VM host's log is written beside them. Probe outcomes use a fixed
    vocabulary; no addresses or guest text are recorded.
-5. Restart the App Sandbox broker the way this host normally starts it (see
-   `docs/windows.md`). Check that `bivouac doctor` reaches the authenticated
-   broker, then turn Windows CI On and watch the first guest become ready.
+5. Turn CI On from its desktop shortcut; the launcher refuses an agent
+   terminal. A broker that recovers admission by itself and had no guest
+   during the batch needs no restart. Otherwise restart it the way this host
+   normally starts it (see `docs/windows.md`). Watch the first Windows guest
+   become ready.
 
-If a run retains a guest, the batch stops. To settle it, run
-`bivouac vmhost run` elevated, with a configuration naming the same root and
-controller `lab-network`. It recovers on start; then stop it.
+If a run retains a guest, the batch stops. Relaunch with
+`-lab.recover-root=<that root>` and a new `-lab.root`: it settles the old root
+first, and refuses to boot anything if a guest or network remains. Never
+delete the root by hand while a guest may exist.
 
 ## GitHub App (separate App can follow cutover)
 

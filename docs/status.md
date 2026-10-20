@@ -180,27 +180,52 @@ loss and delivers files by scp. A real named-pipe
 test covers caller identification, refusal of anonymous callers and refusal
 of an unprivileged server. The service has not yet been installed live.
 
-Guest networking in the VM host is also covered by tests only, against a fake
-network backend: planning and journalling, protect before or after start,
-teardown after absence, recovery, and the guard's quarantine and admission.
-The provider requests a network for every guest. No networked HCS guest has
-booted yet.
+Guest networking passed lab batch 2 (`TestLabNetworkBatch`) with Windows CI
+Off. It ran two networked production-sized cold boots (4 CPU, 8 GiB, GPU)
+through an in-process foreground VM host and the `hcs` provider. Every run:
+
+- Was created and started with its switch, endpoint and deny layer in 4.5-5.1 s.
+- Passed WaitReady, which applied the lease and proved the console and default
+  desktop, 28-29 s after create.
+- Reached public DNS, HTTPS, TCP and UDP DNS.
+- Timed out on the gateway's DNS proxy and on host listeners at the gateway,
+  the LAN source address and the switch adapter's IPv6 link-local address.
+  Public IPv6 was unreachable. Each listener was reachable from the host and
+  saw no other connection.
+- Was still running after two guard passes, so its layer survived boot,
+  readiness and the probes.
+- Was deleted in 1.3 s, with the switch adapter gone.
+
+| Spans (host clock) | Run 1 | Run 2 |
+| --- | --- | --- |
+| Switch and endpoint | 0.57 s | 0.71 s |
+| HCS create | 0.55 s | 0.29 s |
+| Start | 0.58 s | 0.40 s |
+| Deny layer after start | 0.97 s | 0.92 s |
+
+In both runs the switch port appeared only at start, so the layer was
+installed about 1 s after the guest began running, not before its first
+instruction.
+
+An earlier attempt passed the same network checks but could not delete the
+network: hostnet waited for the stopped guest's port to vanish, which it does
+not do until its endpoint is deleted. After the fix, Recover settled that
+leftover in 0.85 s. The App Sandbox broker had no guest during the batch and
+was not restarted.
 
 Open:
 
 - Installing and running the VM host service live.
-- Networking live. Lab batch 2 (`TestLabNetworkBatch`) is written but has not
-  run. It needs Windows CI drained, because a new host vEthernet adapter trips
-  the App Sandbox broker's interface guard. It checks:
-  - that public DNS and HTTPS work;
-  - that the gateway, host LAN, host link-local IPv6 and public IPv6 are
-    denied, with host-side listener controls;
-  - which protect path runs;
-  - that the layer survives the guest's boot and readiness.
-
-  Its controls do not remove the deny layer, so a refused host listener does
-  not rule out the host firewall. That control stays open.
-- The provider running live.
+- Isolation controls that batch 2 did not cover:
+  - A control with the deny layer removed. Without it, a refused host
+    listener does not rule out the host firewall; the gateway's DNS proxy is
+    the stronger evidence.
+  - An owner-controlled private peer.
+  - Guest source-address and MAC changes.
+  - Host interface changes while a guest runs.
+- Closing the roughly 1 s between start and the deny layer, for example with
+  an endpoint policy that applies from creation.
+- The provider running live as part of the manager.
 - The image factory.
 - The warm spare.
 - Runner listening and jobs.
