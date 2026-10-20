@@ -182,10 +182,15 @@ Windows and Linux guests are unvalidated; leave upload storage off on
 Windows hosts. Production's first job on it stored a relayed save and hit
 locally on two restores.
 
-A slow archive miss can take twice its download time or fail: the host sends
-nothing until a fill completes, the official action's HTTP client abandons a
-request after three idle minutes, and that cancels the fill, so the retry
-downloads it again. A 109 MB miss took 4.5 minutes in production.
+Misses now stream: the guest receives a fill as it downloads, and a stalled
+upstream resumes from its offset instead of restarting. Isolated macOS jobs
+passed with this code and production cache limits: with storage on, relayed
+saves (including block lists) were stored and restored as local hits; with
+storage off, 24 and 192 MiB restores streamed as misses and a release miss
+streamed, then hit; with the controller stopped mid-job, saves, restores and
+releases finished directly. Production still runs the earlier code, where the
+host sent nothing until a fill completed and the official action's client gave
+up after three idle minutes: a 109 MB miss took 4.5 minutes.
 
 The cause of a downstream project's earlier Linux release miss and two archive
 fill fallbacks is unknown; legacy logs could not distinguish eviction,
