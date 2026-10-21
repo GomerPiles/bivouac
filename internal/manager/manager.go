@@ -79,17 +79,18 @@ type Options struct {
 type Manager struct {
 	o Options
 
-	admissionMu sync.Mutex // capacity check and durable reservation across pollers
-	mu          sync.Mutex
-	root        context.Context // Run's context; instance lifecycles hang off it, not off a poller
-	accepting   atomic.Bool     // mode is on: capacity may be offered and guests launched
-	runs        map[string]*run // active instance goroutines by instance ID
-	pollers     map[string]*poller
-	events      chan struct{}
-	phase       string
-	wg          sync.WaitGroup
-	poolRetry   map[string]time.Time
-	runtimes    map[string]runtimeState // guarded by mu; separate from pool retries
+	admissionMu  sync.Mutex // capacity check and durable reservation across pollers
+	mu           sync.Mutex
+	root         context.Context // Run's context; instance lifecycles hang off it, not off a poller
+	accepting    atomic.Bool     // mode is on: capacity may be offered and guests launched
+	runs         map[string]*run // active instance goroutines by instance ID
+	pollers      map[string]*poller
+	events       chan struct{}
+	phase        string
+	wg           sync.WaitGroup
+	poolRetry    map[string]time.Time
+	runtimes     map[string]runtimeState // guarded by mu; separate from pool retries
+	previousMode control.Mode            // guarded by mu; last mode observed by the loop
 }
 
 type run struct {
@@ -166,6 +167,9 @@ func (m *Manager) Run(ctx context.Context) error {
 	m.root = runCtx
 	m.mu.Unlock()
 	mode, err := m.o.Files.ReadMode()
+	m.mu.Lock()
+	m.previousMode = mode
+	m.mu.Unlock()
 	m.accepting.Store(err == nil && mode == control.ModeOn)
 	if err := m.activateStartup(runCtx, mode); err != nil {
 		return err
@@ -239,6 +243,7 @@ func (m *Manager) Run(ctx context.Context) error {
 func (m *Manager) apply(ctx context.Context, mode control.Mode) bool {
 	// Keep the session open in drain and stop. Local execution capacity is
 	// zero in those modes; assigned jobs wait for on. Only off closes it.
+	m.observeMode(mode)
 	m.accepting.Store(mode == control.ModeOn)
 	switch mode {
 	case control.ModeOn:
@@ -381,6 +386,9 @@ func (m *Manager) list(ctx context.Context, name string) inventory {
 	lctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	owned, foreign, err := m.o.Providers[name].List(lctx)
+	if err != nil {
+		m.runtimeListFailed(name)
+	}
 	return inventory{owned: owned, foreign: foreign, err: err}
 }
 
@@ -1202,7 +1210,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for name, p := range m.o.Providers {
 		inv := m.list(ctx, name)
 		if inv.err != nil {
-			if !m.runtimeActive(name) && len(m.activeFor(name)) == 0 {
+			if !m.runtimeActive(name) && !m.needsRuntime(name) {
 				m.o.Log.Warn("inactive host runtime unavailable; skipping inventory", "provider", name, "error", inv.err)
 				continue
 			}
@@ -1291,6 +1299,13 @@ func (m *Manager) writeStatus(ctx context.Context, mode control.Mode) {
 		errs = errs[len(errs)-5:]
 	}
 	s.LastErrors = errs
+	m.mu.Lock()
+	for _, name := range names {
+		if e := m.runtimes[name].lastError; e.Message != "" {
+			s.LastErrors = append(s.LastErrors, e)
+		}
+	}
+	m.mu.Unlock()
 	if err := m.o.Files.WriteStatus(s); err != nil {
 		m.o.Log.Warn("write status", "error", err)
 	}

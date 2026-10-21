@@ -52,8 +52,9 @@ func (p *Provider) Activate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if serving, err := p.opts.CheckVMHost(ctx, p.host); serving {
-		return err
+	serving, lastInfoErr := p.opts.CheckVMHost(ctx, p.host)
+	if serving {
+		return lastInfoErr
 	}
 	if p.opts.Service == nil {
 		return errors.New("VM host unavailable: install the service with bivouac vmhost install, or run bivouac vmhost run elevated")
@@ -73,7 +74,7 @@ func (p *Provider) Activate(ctx context.Context) error {
 			}
 		case svc.StartPending, svc.StopPending:
 			if err := waitRuntime(ctx); err != nil {
-				return err
+				return fmt.Errorf("wait for VM host readiness: %w", errors.Join(err, lastInfoErr))
 			}
 			continue
 		case svc.Running:
@@ -85,12 +86,27 @@ func (p *Provider) Activate(ctx context.Context) error {
 	// SCM reports Running before startup recovery (up to two minutes) and
 	// pipe readiness. Wait for the actual API within the caller's bound.
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait for VM host readiness: %w", errors.Join(err, lastInfoErr))
+		}
 		// A serving but incompatible host must fail immediately, not retry.
-		if serving, err := p.opts.CheckVMHost(ctx, p.host); serving {
+		serving, err := p.opts.CheckVMHost(ctx, p.host)
+		if serving {
 			return err
 		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("wait for VM host readiness: %w", errors.Join(ctx.Err(), lastInfoErr, err))
+		}
+		lastInfoErr = err
+		installed, state, err := p.opts.Service.State(ctx)
+		if err != nil {
+			return fmt.Errorf("query VM host service while waiting for readiness: %w", errors.Join(err, lastInfoErr))
+		}
+		if !installed || state == svc.Stopped {
+			return fmt.Errorf("VM host service stopped while waiting for readiness: %w", lastInfoErr)
+		}
 		if err := waitRuntime(ctx); err != nil {
-			return fmt.Errorf("wait for VM host readiness: %w", err)
+			return fmt.Errorf("wait for VM host readiness: %w", errors.Join(err, lastInfoErr))
 		}
 	}
 }
@@ -110,27 +126,44 @@ func (p *Provider) Deactivate(ctx context.Context) error {
 	if p.opts.Service == nil {
 		return nil
 	}
-	installed, state, err := p.opts.Service.State(ctx)
-	if err != nil {
-		return fmt.Errorf("VM host left running: query service: %w", err)
+	var lastCause error
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("VM host left running: %w", errors.Join(err, lastCause))
+		}
+		installed, state, err := p.opts.Service.State(ctx)
+		if err != nil {
+			return fmt.Errorf("VM host left running: query service: %w", errors.Join(err, lastCause))
+		}
+		if !installed || state == svc.Stopped {
+			return nil
+		}
+		switch state {
+		case svc.StartPending, svc.StopPending:
+			lastCause = fmt.Errorf("VM host service transition pending (state %d)", state)
+		case svc.Running:
+			info, err := hostInfo(ctx, p.host)
+			if err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("VM host left running: %w", errors.Join(ctx.Err(), lastCause, err))
+				}
+				lastCause = fmt.Errorf("cannot prove the VM host has no guests: %w", err)
+				break
+			}
+			if info.Running != 0 {
+				return fmt.Errorf("VM host left running: %d guest reservations remain across all callers", info.Running)
+			}
+			// The check/stop window is accepted: configured accounts are bivouac's
+			// own and this daemon is exiting. Running includes failed-cleanup reservations.
+			if err := p.opts.Service.Stop(ctx); err != nil {
+				return fmt.Errorf("VM host left running: stop service: %w", err)
+			}
+			return nil
+		default:
+			return errors.New("VM host left running: service is paused or in an unsupported state")
+		}
+		if err := waitRuntime(ctx); err != nil {
+			return fmt.Errorf("VM host left running: %w", errors.Join(err, lastCause))
+		}
 	}
-	if !installed || state == svc.Stopped {
-		return nil
-	}
-	if state != svc.Running {
-		return errors.New("VM host left running: service is transitioning or paused")
-	}
-	info, err := hostInfo(ctx, p.host)
-	if err != nil {
-		return fmt.Errorf("VM host left running: cannot prove it has no guests: %w", err)
-	}
-	if info.Running != 0 {
-		return fmt.Errorf("VM host left running: %d guest reservations remain across all callers", info.Running)
-	}
-	// The check/stop window is accepted: configured accounts are bivouac's
-	// own and this daemon is exiting. Running includes failed-cleanup reservations.
-	if err := p.opts.Service.Stop(ctx); err != nil {
-		return fmt.Errorf("VM host left running: stop service: %w", err)
-	}
-	return nil
 }

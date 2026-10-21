@@ -49,8 +49,14 @@ func (s *fakeService) State(context.Context) (bool, svc.State, error) {
 	}
 	return s.installed, s.states[i], s.err
 }
-func (s *fakeService) Start(context.Context) error { s.starts++; return s.startErr }
-func (s *fakeService) Stop(context.Context) error  { s.stops++; return s.stopErr }
+func (s *fakeService) Start(context.Context) error {
+	s.starts++
+	if s.startErr == nil && len(s.states) == 1 && s.states[0] == svc.Stopped {
+		s.states[0] = svc.Running
+	}
+	return s.startErr
+}
+func (s *fakeService) Stop(context.Context) error { s.stops++; return s.stopErr }
 
 func runtimeFixture(t *testing.T) (*Provider, *runtimeHost) {
 	t.Helper()
@@ -153,7 +159,8 @@ func TestActivateCancellationAndServiceErrors(t *testing.T) {
 	for _, stage := range []string{"query", "start", "pipe", "pending"} {
 		t.Run(stage, func(t *testing.T) {
 			p, h := runtimeFixture(t)
-			h.err = errors.New("down")
+			cause := errors.New("down")
+			h.err = cause
 			s := &fakeService{installed: true, states: []svc.State{svc.Stopped}}
 			failure := errors.New("service failure")
 			switch stage {
@@ -173,6 +180,9 @@ func TestActivateCancellationAndServiceErrors(t *testing.T) {
 			}
 			if !errors.Is(err, failure) {
 				t.Fatal("lost activation error", err)
+			}
+			if (stage == "pipe" || stage == "pending") && !errors.Is(err, cause) {
+				t.Fatal("activation timeout lost Info cause", err)
 			}
 		})
 	}
@@ -206,7 +216,9 @@ func TestDeactivateGuards(t *testing.T) {
 			if test.infoErr {
 				h.err = errors.New("pipe unavailable")
 			}
-			err := p.Deactivate(t.Context())
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+			defer cancel()
+			err := p.Deactivate(ctx)
 			if (err != nil) != test.wantErr || (err != nil && !strings.Contains(err.Error(), "left running")) {
 				t.Fatal("wrong release result", err)
 			}
@@ -217,6 +229,97 @@ func TestDeactivateGuards(t *testing.T) {
 				t.Fatal("foreground/no service should not need Info")
 			}
 		})
+	}
+}
+
+func TestDeactivateWaitsForStartupRecovery(t *testing.T) {
+	for _, running := range []int{0, 1} {
+		t.Run(fmt.Sprint(running), func(t *testing.T) {
+			p, h := runtimeFixture(t)
+			h.failures = 2
+			h.info.Running = running
+			s := &fakeService{installed: true, states: []svc.State{svc.StartPending, svc.Running}}
+			p.opts.Service = s
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			err := p.Deactivate(ctx)
+			if running == 0 && (err != nil || s.stops != 1) {
+				t.Fatal("idle host left running after startup", err, s.stops)
+			}
+			if running != 0 && (err == nil || s.stops != 0) {
+				t.Fatal("guest guard bypassed after startup", err, s.stops)
+			}
+			if h.calls != 3 || s.starts != 0 {
+				t.Fatal("release did not wait for Info", h.calls, s.starts)
+			}
+		})
+	}
+}
+
+func TestDeactivateWaitsForStoppedService(t *testing.T) {
+	for _, pending := range []svc.State{svc.StartPending, svc.StopPending, svc.Running} {
+		t.Run(fmt.Sprint(pending), func(t *testing.T) {
+			p, h := runtimeFixture(t)
+			h.err = errors.New("pipe unavailable")
+			s := &fakeService{installed: true, states: []svc.State{pending, svc.Stopped}}
+			p.opts.Service = s
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if err := p.Deactivate(ctx); err != nil || s.stops != 0 || s.starts != 0 {
+				t.Fatal("stopped service was not released", err, s)
+			}
+		})
+	}
+}
+
+func TestRuntimeReadinessTimeoutKeepsLastCause(t *testing.T) {
+	for _, action := range []string{"activate", "deactivate"} {
+		t.Run(action, func(t *testing.T) {
+			p, h := runtimeFixture(t)
+			cause := errors.New("pipe access refused")
+			h.err = cause
+			s := &fakeService{installed: true, states: []svc.State{svc.Running}}
+			p.opts.Service = s
+			ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+			defer cancel()
+			call := p.Activate
+			if action == "deactivate" {
+				call = p.Deactivate
+			}
+			err := call(ctx)
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, cause) {
+				t.Fatal("timeout lost its cause", err)
+			}
+			if s.stops != 0 {
+				t.Fatal("unknown guest count stopped")
+			}
+		})
+	}
+}
+
+func TestDeactivatePendingTimeoutKeepsLastState(t *testing.T) {
+	p, h := runtimeFixture(t)
+	s := &fakeService{installed: true, states: []svc.State{svc.StopPending}}
+	p.opts.Service = s
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	err := p.Deactivate(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "transition pending") || s.stops != 0 || h.calls != 0 {
+		t.Fatal("pending timeout lost its cause or bypassed guard", err)
+	}
+}
+
+func TestActivateFailsWhenServiceStopsDuringReadiness(t *testing.T) {
+	p, h := runtimeFixture(t)
+	cause := errors.New("pipe not serving")
+	h.err = cause
+	s := &fakeService{installed: true, states: []svc.State{svc.Running, svc.Stopped}}
+	p.opts.Service = s
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := p.Activate(ctx)
+	if !errors.Is(err, cause) || errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "service stopped") || s.starts != 0 {
+		t.Fatal("service failure did not fail fast with cause", err)
 	}
 }
 

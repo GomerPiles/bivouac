@@ -332,6 +332,9 @@ compute and network services must already be running.
    never stopped by bivouac. Manual `bivouac vmhost start`,
    `bivouac vmhost stop` and `bivouac vmhost status` still work; a manual
    stop destroys the service's guests first.
+   Any Off exit, including a login start while Off, stops an idle service even
+   if it was started manually. For manual lab use, use foreground `vmhost run`
+   or leave the daemon off.
 5. To remove it, stop it, then run `bivouac vmhost uninstall` elevated. A
    running service is refused.
 
