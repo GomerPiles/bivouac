@@ -866,6 +866,16 @@ later fails: after a failed start HCS reports the same system as an unowned
 `Container` with no runtime ID. Closing that handle ends the guest, and
 absence is still confirmed by name before its storage and network are removed.
 
+The guest's RTC holds host local time and the image reads it in its own time
+zone; the creation document has no time-sync channel. Until the image
+factory builds images that read a UTC RTC, the provider's `WaitReady` sets the
+guest clock from the host's UTC time, sent on stdin to a fixed command, and
+refuses a guest still more than 5 s off. GitHub rejects a runner token from a
+skewed clock. Likewise, the Windows runner launcher gives the runner a
+process-scope `RemoteSigned` execution policy when the guest has no policy,
+or one that refuses local scripts, because the runner dot-sources a script
+file for its hooks and every `powershell` step.
+
 Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
 above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated
 /28 from 10.251.0.0/16, with a MAC derived from its name. An owned stateless

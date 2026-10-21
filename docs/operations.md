@@ -368,8 +368,21 @@ runner_dir = 'C:\actions-runner'
 ```
 
 `bivouac doctor` checks that the VM host is serving this image within its
-limits. The provider asks for an isolated network on every guest. It has not
-yet run live as part of the manager, so do not route production jobs to it.
+limits, and warns when the installed service is merely stopped. The provider
+asks for an isolated network on every guest. It has run validation jobs but
+no production routing yet.
+
+To validate it end to end, turn production Windows CI Off first: each
+guest's network adapter trips the App Sandbox broker's interface guard. Use a
+separate `BIVOUAC_HOME` with REST JIT demand, one isolated `bivouac-` label,
+`idle_pool = 1` and `max_instances = 1`, as in "REST JIT fallback" below. Run
+`bivouac on --wait` and wait for `runner listening`. Route a throwaway
+workflow to that label only, for example from an orphan branch that contains
+only that workflow and runs on push, so no other workflow runs. Push twice
+and check that the second job runs on a fresh guest. Then run
+`bivouac off --wait`: it deregisters and deletes the idle guest and stops the
+service. Delete the branch and its workflow runs, and confirm no guest switch
+adapter remains before turning production CI On.
 
 ## Direct HCS lab batch
 

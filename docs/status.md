@@ -233,13 +233,36 @@ Administrators. A foreground `vmhost run` with the explicit owner has not run
 live. Called directly, the provider's
 `Activate` started the stopped service and saw it serve in 0.27 s, and
 `Deactivate` found no guests and stopped it in 0.25 s. Both were no-ops when
-repeated. No guest has run under the service yet.
+repeated.
+
+GitHub jobs ran end to end on HCS guests, with production CI Off. An
+isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
+8 GiB GPU guest, and drove the installed service from a live daemon:
+
+- `bivouac on` started the stopped service and filled the pool. A guest was
+  listening 47-51 s after create (clone 5-7 s, boot 28-30 s, JIT
+  registration and listener 12-15 s).
+- Two jobs passed on two different guests. Hooks ran, checkout worked, the
+  host GPU appeared through GPU-PV, `api.github.com` answered, and the second
+  job found no trace of the first. Each finished guest was deregistered and
+  deleted in about 2 s, and a replacement was listening within a minute.
+- `bivouac off --wait` deregistered and deleted the idle guest, stopped the
+  service and exited in 5-14 s. The guest's switch adapter was gone, and every
+  runner was deregistered.
+- The first attempts found two guest problems, both fixed:
+  - The guest clock ran an hour ahead, so GitHub refused the runner's token.
+    The image reads its RTC (host local time) in its own time zone, and no
+    time-sync channel corrects it. WaitReady now sets the clock from the host.
+  - The image's default execution policy refused the runner's hook and step
+    scripts. The runner now gets a process-scope RemoteSigned policy on such
+    a guest.
 
 Open:
 
-- `bivouac on`/`off` driving the service through a live daemon, and
-  `Deactivate` refusing to stop a VM host that holds guests (unit-tested
+- `Deactivate` refusing to stop a VM host that holds guests (unit-tested
   only).
+- Updating the installed service's binary, and a foreground `vmhost run`
+  with the explicit pipe owner.
 - Isolation controls that batch 2 did not cover:
   - A control with the deny layer removed. Without it, a refused host
     listener does not rule out the host firewall; the gateway's DNS proxy is
@@ -247,10 +270,11 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- The provider running live as part of the manager.
-- The image factory.
+- Production routing, longer and heavier jobs, cache support, and recovery
+  after a daemon or host restart with HCS guests.
+- The image factory, including a UTC RTC and a script-capable policy in the
+  image itself.
 - The warm spare.
-- Runner listening and jobs.
 
 ## Windows: Crosvm (Linux GPU guests)
 
