@@ -51,9 +51,12 @@ func Hello(ctx context.Context, conn net.Conn) error {
 
 // Initialize declines GPU driver copies (prepared images already contain the
 // host's drivers), enables guest SSH and deploys publicKey. It succeeds only
-// once the agent reports the display driver ready and acknowledges the key.
-func Initialize(ctx context.Context, conn net.Conn, publicKey []byte) (Agent, error) {
+// once the agent confirms the image's display contract and acknowledges the key.
+func Initialize(ctx context.Context, conn net.Conn, publicKey []byte, display DisplayMode) (Agent, error) {
 	var a Agent
+	if display != DisplayVDD && display != DisplaySynthetic {
+		return a, errors.New("invalid display mode")
+	}
 	if len(publicKey) == 0 || len(publicKey) > 1024 || strings.ContainsAny(string(publicKey), "\r\n") {
 		return a, errors.New("invalid SSH public key")
 	}
@@ -83,10 +86,13 @@ func Initialize(ctx context.Context, conn net.Conn, publicKey []byte) (Agent, er
 			if err = write(ctx, conn, "gpu_none\n"); err != nil {
 				return a, errors.New("guest agent GPU response failed")
 			}
-		case line == "idd_status:ok":
-			a.DisplayReady = true
 		case strings.HasPrefix(line, "idd_status:"):
-			a.DisplayReady = false
+			a.DisplayReady, err = display.DisplayStatus(line)
+			if err != nil {
+				return a, err
+			}
+		case display == DisplaySynthetic && line == "hyperv_video:disabled":
+			return a, errors.New("guest agent disabled synthetic video")
 		case line == "ssh_ready" || line == "1:ssh_ready":
 			if !keySent {
 				// The agent's key-deployment message, not a shell command.

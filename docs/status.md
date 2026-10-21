@@ -336,6 +336,8 @@ Open:
   build's cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
+- The synthetic-display image candidate and interactive topology checks exist
+  but have not been validated live.
 
 ## Windows: Crosvm (Linux GPU guests)
 

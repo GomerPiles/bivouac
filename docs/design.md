@@ -981,7 +981,42 @@ ACL and deny-write handles, not hashed per job.
   the manifest last.
 - **Manifest:** source, asset and output hashes, the guest identity the
   provider needs, the host GPU driver versions the image was built with, and
-  the lab batch's probe, validation and autologon pins.
+  the lab batch's probe, validation and autologon pins. It also records the
+  image's display mode and fixed numeric/boolean topology observations.
+- **Display candidate:** optional factory `display` is `vdd` by default,
+  preserving the existing agent/VDD setup and `idd_status:ok` contract.
+  `synthetic` keeps the agent, input/display helpers and GPU-PV driver copy,
+  but stops the agent, removes every AppSandboxVDD root device (including
+  phantom nodes) and driver-store package matched by original INF name,
+  deletes its adjacent `drivers` directory (including devcon), and enables
+  the Hyper-V synthetic video device. Setup verifies absence and the video's
+  enabled/started state before restarting the agent. Synthetic configs refuse
+  all VDD/devcon assets. Without devcon the reference agent cannot repair VDD
+  or disable synthetic video; the pinned binary's behavior remains a live
+  validation gate. Synthetic initialization requires `idd_status:not_found`
+  and acknowledged key deployment, and rejects any other IDD status or
+  `hyperv_video:disabled`. The provider explicitly retains VDD mode; synthetic
+  images are factory/lab candidates only, with no runtime configuration support.
+- **Single-display invariant:** exactly one attached-to-desktop display must
+  be primary. The hash-pinned validation script carries an inline topology
+  probe launched by an interactive scheduled task in the console user's
+  session, alongside the existing render task. It records active/primary
+  counts, primary dimensions, virtual-screen equality, adapter hardware-ID
+  classification (1 synthetic, 2 VDD, 3 other/unresolved), all VDD nodes,
+  and Hyper-V video enabled/started facts. Classification uses the adapter's
+  `DISPLAY_DEVICE.DeviceID`, falling back to the driver key's `MatchingDeviceId`
+  only when that ID is empty. A disposable window tests foreground,
+  primary work-area containment and receipt of a SendInput key. A bounded
+  `windowsdefender:` launch records Windows Security's top-level window and
+  primary-display containment, then closes it. No names, IDs, titles or other
+  guest text enter the report, which remains bounded to 8 KiB.
+  Synthetic factory publication requires the single primary to use Hyper-V
+  video, no VDD nodes, enabled/started synthetic video, and all existing render
+  gates. VDD factory gates stay unchanged. Every desktop lab run requires a
+  single primary and all probe-window checks, in addition to existing render
+  gates. Synthetic lab runs also require the synthetic factory topology gates;
+  Windows Security observations are diagnostic only. A multiple-display
+  VDD control failing this lab gate is useful experimental evidence.
 - The image's guest content matches the spike-built image's, so the
   provider and the lab batch accept either. It still holds App Sandbox's
   guest agent, OpenSSH and the PowerShell boot task, and its time zone and
