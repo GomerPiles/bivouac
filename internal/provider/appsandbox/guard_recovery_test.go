@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 	"github.com/GomerPiles/bivouac/internal/provider"
 )
 
@@ -22,14 +23,14 @@ func (n *changingHostNetwork) Plan(ctx context.Context, c CloneRecord, all []Eng
 	if err != nil {
 		return plan, err
 	}
-	plan.Blocked, plan.HostSnapshot, err = BlockedPrefixes(n.host)
+	plan.Blocked, plan.HostSnapshot, err = netpolicy.BlockedPrefixes(n.host)
 	return plan, err
 }
 func (n *changingHostNetwork) Verify(ctx context.Context, r EngineRecord) error {
 	if err := n.testNetwork.Verify(ctx, r); err != nil {
 		return err
 	}
-	blocked, snapshot, err := BlockedPrefixes(n.host)
+	blocked, snapshot, err := netpolicy.BlockedPrefixes(n.host)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func TestGuardRecoversAfterInterfaceChangeWithoutBrokerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, err := e.records.Get(current.RunnerName)
-	_, snapshot, policyErr := BlockedPrefixes(n.host)
+	_, snapshot, policyErr := netpolicy.BlockedPrefixes(n.host)
 	if err != nil || policyErr != nil || record.Network.HostSnapshot != snapshot {
 		t.Fatal("replacement reused the previous host policy")
 	}

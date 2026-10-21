@@ -1,8 +1,8 @@
-package appsandbox
+package winrunner
 
 // This runs before an external NIC is attached. SSH/agent availability alone
 // does not prove that unattended setup and the intended console logon finished.
-const windowsPreflight = `$ErrorActionPreference='Stop'
+const PreflightScript = `$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $incoming=Get-Content -Raw -LiteralPath (Join-Path $HOME 'bivouac-config.json') | ConvertFrom-Json
 if($env:COMPUTERNAME -ine $incoming.native_name -or $env:USERNAME -ine $incoming.user){throw 'Guest identity differs'}
@@ -33,7 +33,7 @@ throw 'Guest console preflight timed out'
 
 // This script is fixed code. All instance settings arrive in a JSON file,
 // never interpolated into PowerShell, an SSH command, or a task argument.
-const windowsControl = `param([ValidateSet('prepare','start','status','stop','diag')][string]$Mode)
+const ControlScript = `param([ValidateSet('prepare','start','status','stop','diag')][string]$Mode)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $base='C:\ProgramData\Bivouac\Guest'

@@ -1,4 +1,4 @@
-package appsandbox
+package command
 
 import (
 	"context"
@@ -73,7 +73,7 @@ func TestNativeSSHFailuresAreBoundedAndClassified(t *testing.T) {
 	} {
 		t.Run(tc.kind.Error()+tc.stderr, func(t *testing.T) {
 			args := []string{"-test.run=^TestSSHCommandHelper$", "--", tc.stderr}
-			out, err := (NativeCommands{}).Input(context.Background(), ssh, args, []byte("synthetic-private-input"))
+			out, err := (Native{}).Input(context.Background(), ssh, args, []byte("synthetic-private-input"))
 			var kind provider.TransportFailure
 			if !errors.As(err, &kind) || kind != tc.kind || len(out) != 0 {
 				t.Fatal(kind, err)
@@ -84,32 +84,32 @@ func TestNativeSSHFailuresAreBoundedAndClassified(t *testing.T) {
 		})
 	}
 	for _, binary := range []string{ssh, self} {
-		_, err := (NativeCommands{}).Output(context.Background(), binary, []string{"-test.run=^TestSSHCommandHelper$", "--", "exit-one"})
+		_, err := (Native{}).Output(context.Background(), binary, []string{"-test.run=^TestSSHCommandHelper$", "--", "exit-one"})
 		var kind provider.TransportFailure
 		if err == nil || errors.As(err, &kind) {
 			t.Fatal("non-transport exit became retryable", err)
 		}
 	}
-	_, err = (NativeCommands{}).Output(context.Background(), self, []string{"-test.run=^TestSSHCommandHelper$", "--", "Connection reset"})
+	_, err = (Native{}).Output(context.Background(), self, []string{"-test.run=^TestSSHCommandHelper$", "--", "Connection reset"})
 	var kind provider.TransportFailure
 	if err == nil || errors.As(err, &kind) {
 		t.Fatal("non-SSH native error became retryable", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err = (NativeCommands{}).Output(ctx, ssh, []string{"-test.run=^TestSSHCommandHelper$", "--", "hang"})
+	_, err = (Native{}).Output(ctx, ssh, []string{"-test.run=^TestSSHCommandHelper$", "--", "hang"})
 	if !errors.As(err, &kind) || kind != provider.SSHTimeout {
 		t.Fatal("hung SSH was not bounded", err)
 	}
 	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
 	defer authCancel()
-	_, err = (NativeCommands{}).Output(authCtx, ssh, []string{"-test.run=^TestSSHCommandHelper$", "--", "auth-hang"})
+	_, err = (Native{}).Output(authCtx, ssh, []string{"-test.run=^TestSSHCommandHelper$", "--", "auth-hang"})
 	if !errors.As(err, &kind) || kind != provider.SSHAuthentication {
 		t.Fatal("deadline hid terminal authentication diagnostic", err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
 	cancel()
-	_, err = (NativeCommands{}).Output(ctx, ssh, nil)
+	_, err = (Native{}).Output(ctx, ssh, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("cancellation became a failure", err)
 	}

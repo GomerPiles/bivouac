@@ -1,6 +1,6 @@
 //go:build !windows
 
-package appsandbox
+package winrunner
 
 import (
 	"context"
@@ -8,6 +8,6 @@ import (
 	"io"
 )
 
-func RunWindowsGuest(context.Context, string, io.Writer) error {
+func RunGuest(context.Context, string, io.Writer) error {
 	return errors.New("windows guest adapter requires Windows")
 }

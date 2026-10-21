@@ -283,6 +283,332 @@ During owned policy cleanup, resetting the last boolean overrides to
 persistent policy before issuing another remove, and confirm its absence;
 do not infer complete cleanup from a successful default-action removal.
 
+## Direct HCS VM host
+
+The VM host is the elevated half of the direct HCS provider. You can run it
+either way:
+
+- as an optional service, installed once by an administrator; or
+- in the foreground from an elevated shell, with one UAC prompt per start.
+
+Nothing reboots, enables Windows features or installs drivers. Hyper-V's
+compute and network services must already be running.
+
+1. Place `bivouac.exe` in an administrator-protected directory, such as
+   `%ProgramFiles%\bivouac`. The service runs that file as SYSTEM, so the
+   ordinary user must not be able to replace it.
+2. Write the configuration in a protected directory too, for example
+   `%ProgramData%\bivouac\vmhost.json`:
+
+   ```json
+   {
+     "root": "C:\\ProgramData\\bivouac\\vmhost",
+     "controller": "host-1",
+     "accounts": ["<the manager user's SID, from whoami /user>"],
+     "images": {"windows": "D:\\RunnerImages\\prepared.vhdx"},
+     "max_instances": 2,
+     "max_cpu": 8,
+     "max_memory_mb": 16384
+   }
+   ```
+
+   Images must also be administrator-protected; the Hyper-V VM group may
+   read them.
+3. Either install the service or run in the foreground. Both commands are
+   elevated:
+
+   ```powershell
+   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost install --config C:\ProgramData\bivouac\vmhost.json
+   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost run --config C:\ProgramData\bivouac\vmhost.json
+   ```
+
+   Either command creates the protected journal root if it is absent.
+   Installing registers a manual-start service that restarts after a crash,
+   and grants the configured accounts query, start and stop rights on that
+   service only.
+4. From the ordinary account, `bivouac on` starts the installed service;
+   `bivouac off` stops it after the daemon's guests finish and the VM host
+   reports no guest reservations from any caller. A foreground VM host is
+   never stopped by bivouac. Manual `bivouac vmhost start`,
+   `bivouac vmhost stop` and `bivouac vmhost status` still work; a manual
+   stop destroys the service's guests first, and while CI is On the daemon
+   starts the service again within a tick, so stop it outside On.
+   Any Off exit, including a login start while Off, stops an idle service even
+   if it was started manually. For manual lab use, use foreground `vmhost run`
+   or leave the daemon off.
+5. To remove it, stop it, then run `bivouac vmhost uninstall` elevated. A
+   running service is refused.
+
+The service logs to `vmhost.log` in its root. Any guest left by an earlier VM
+host is settled when it next starts.
+Drain and stop leave the service active. Off logs why if it cannot prove the
+VM host has no guests, including reservations retained by failed cleanups,
+or cannot stop the service. The daemon still exits; once satisfied it is safe,
+the operator settles the host with `bivouac vmhost stop`.
+
+The manager's provider then names one of the VM host's images. `guest_name`
+and `guest_user` are that prepared image's Windows computer name and console
+user:
+
+```toml
+[providers.windows]
+type = "hcs"
+labels = ["self-hosted", "Windows", "X64", "bivouac-windows-hcs"]
+idle_pool = 1
+
+[providers.windows.hcs]
+experimental = true
+image = "windows"
+guest_name = "<image computer name>"
+guest_user = "ciuser"
+cpu = 4
+memory_gb = 8
+gpu = true
+runner_dir = 'C:\actions-runner'
+```
+
+`bivouac doctor` checks that the VM host is serving this image within its
+limits, and warns when the installed service is merely stopped. The provider
+asks for an isolated network on every guest.
+
+To switch an existing App Sandbox provider to `hcs`, turn CI Off and wait for
+the drain. Back up `config.toml` and `portable.json`, stage the new binary
+under a new file name and point `portable.json` at it. Then change
+`[providers.windows]` `type` to `hcs` and replace its `appsandbox` table
+with the `hcs` table above, keeping `scaleset`, its labels and the size.
+Run `doctor`, then CI On. Roll back by restoring both files with CI Off.
+The App Sandbox broker may have closed admission after HCS guests' adapters
+appeared; restart it if it has.
+
+The host cache works as for App Sandbox, including the optional release proxy
+and upload storage. With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
+and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
+defaults). A separate authenticated SSH client over HvSocket carries the cache;
+no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
+partial settings refuses launch. Cache transport loss falls back upstream
+without reattachment. Archive and release caching passed live on HCS guests;
+upload storage has not, so leave it off on Windows hosts. Use the isolated cache validation fixture
+below for archive/release cold and warm hits, outage fallback and uploads.
+
+To validate it end to end, turn production Windows CI Off first: each
+guest's network adapter trips the App Sandbox broker's interface guard. Use a
+separate `BIVOUAC_HOME` with REST JIT demand, one isolated `bivouac-` label,
+`idle_pool = 1` and `max_instances = 1`, as in "REST JIT fallback" below. Run
+`bivouac on --wait` and wait for `runner listening`. Route a throwaway
+workflow to that label only, for example from an orphan branch that contains
+only that workflow and runs on push, so no other workflow runs. Push twice
+and check that the second job runs on a fresh guest. Then run
+`bivouac off --wait`: it deregisters and deletes the idle guest and stops the
+service. Delete the branch and its workflow runs, and confirm no guest switch
+adapter remains before turning production CI On.
+
+## Direct HCS image factory
+
+`bivouac image build` prepares an image for the `hcs` provider from a
+generalized App Sandbox template. `bivouac image inspect` runs the same copy
+and offline checks without booting, so a template can be checked first. Both
+run elevated in the foreground (one UAC prompt each), drive HCS directly and
+attach no network adapter, so production CI may keep running. Neither touches
+the VM host service, its journal or CI mode.
+
+The template is only read. The factory copies it into its own workspace,
+hashing as it copies, and never changes the template's file, directory, ACL
+or owner record. It mounts, grants and boots only files it created.
+
+1. Write a JSON configuration in an administrator-protected directory. The
+   inputs must be protected too:
+
+   ```json
+   {
+     "source": "<template dir>\\disk.vhdx",
+     "source_sha256": "<the owner record's SHA256>",
+     "expected_template": "<template name>",
+     "guest_user": "ciuser",
+     "image_root": "<protected parent>\\Images",
+     "render_probe": {"source": "<path>", "sha256": "<hash>"},
+     "setup_assets": [{"name": "appsandbox-agent.exe", "source": "<path>", "sha256": "<hash>"}],
+     "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
+   }
+   ```
+
+   - `setup_assets` must include `appsandbox-agent.exe`,
+     `appsandbox-input.exe`, `appsandbox-displays.exe`, `AppSandboxVDD.dll`,
+     `.inf` and `.cat`, and `devcon.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are
+     optional; a template without a runner needs `RUNNER.ZIP`.
+   - `drivers` names the host's GPU driver directories. The build copies
+     them into the image, so an image matches the host driver it was built
+     with.
+   - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
+     `timeout_seconds` (default 900) bounds the guest's run, not the copy.
+   - Keep `image_root` outside App Sandbox's template and instance trees. Its
+     volume needs about 2.2 times the template's size plus 10 GiB free.
+2. Inspect, then build, from an elevated shell:
+
+   ```text
+   bivouac image inspect --config "<protected parent>\image-factory.json"
+   bivouac image build --config "<protected parent>\image-factory.json"
+   ```
+
+   Both print the build's facts or result as JSON. A Group Policy execution
+   policy overrides the factory's own and can stop its scripts.
+3. The offline inspection gates the build. The template must be generalized
+   to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
+   A configured runner (`.runner`, `.credentials`), anything under its `_work`,
+   or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
+   runner's `_diag` by template preparation are allowed and are deleted during
+   setup. The record lists only public facts: component hashes, service
+   paths, runner state and residue names, never file contents or
+   answer-file values.
+4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
+   components, checks hardware rendering with the probe, removes setup files,
+   rotates the console password into the autologon secret, shuts down
+   cleanly and flattens the result. A build takes about 3 minutes plus the
+   copy. Admission waits for the guest's memory plus 10 GiB available and
+   8 GiB commit headroom, and the build cancels itself if available memory
+   falls below 6 GiB or commit headroom below 2 GiB.
+5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
+   VHDX, with `manifest.json` written last. The manifest records the source,
+   asset and image hashes, `guest_name`, `guest_user`, the driver versions and
+   the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
+   image at the disk and set the provider's `guest_name` and `guest_user` from
+   the build's output. A published directory is never reused.
+6. Build records stay in `<image_root>\.builds`. A failed build terminates its
+   own guest, confirms it absent and removes its workspace. If it could not
+   confirm that, it keeps the workspace; settle it later, elevated:
+
+   ```text
+   bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
+   ```
+
+   Cleanup refuses a build that is still running, and never removes a
+   published image.
+
+## Direct HCS lab batch
+
+`TestLabBatch` in `internal/vmhost` boots disposable guests from an existing
+prepared image through the direct HCS code. It is opt-in: it needs the
+`integration` build tag, an explicitly elevated launch, and lab flags. It runs
+these cold boots in order:
+
+1. A baseline guest (2 CPU, 4 GiB).
+2. The same with lazily committed memory.
+3. A guest whose parent is a flattened copy of the image.
+4. Two production-sized guests (4 CPU, 8 GiB).
+
+Each run checks the guest agent, SSH and desktop rendering. The baseline run
+also checks that an unelevated process reaches only the HvSocket service its
+account was granted.
+
+`-lab.only=failed-start` explicitly selects an additional run, skipped when
+`-lab.only` is empty. It boots the prepared image with 2 vCPUs and 2048 MiB of
+lazy memory plus a second disk whose file does not exist, which HCS accepts at
+create and refuses at start (more vCPUs than the host has are refused at
+create instead); it needs no networking or GPU. Its `failed_start` record contains
+the host CPU count, ordered property/start/terminate observations (ownership
+comparisons and runtime-ID presence only), create error and HCS operation/code,
+retention status, and journal-empty/native-absent cleanup checks. An unexpected
+successful start is destroyed and fails the run.
+
+The batch attaches no network adapter, so it changes no host networking, and it
+never touches another compute system, the App Sandbox broker or production
+state. Production CI may keep running. Before each boot, the batch waits for
+the guest's memory plus 10 GiB of available memory and plus 8 GiB of commit
+headroom. During a run, it cancels only that run if available memory drops
+below 6 GiB or commit headroom below 2 GiB.
+
+Build the test binary unelevated, then launch it once through UAC. Use new or
+empty lab directories under an administrator-protected parent, and a new
+results path the ordinary user can read. Take the image pins from the image's
+build record.
+
+```powershell
+go test -c -tags integration -o bin\lab\vmhost-lab.test.exe .\internal\vmhost
+Start-Process -Verb RunAs -FilePath bin\lab\vmhost-lab.test.exe -ArgumentList @(
+  '-test.run=^TestLabBatch$', '-test.timeout=90m',
+  '"-lab.root=<protected parent>\VMHost"', '"-lab.flatten-dir=<protected parent>\VMHost-Images"',
+  '"-lab.results=<user path>\lab-results.jsonl"', '"-lab.image=<prepared image>.vhdx"',
+  '-lab.image-sha256=<hash>', '-lab.guest-name=<computer name>', '-lab.guest-user=<user>',
+  '-lab.probe-sha256=<hash>', '-lab.validation-sha256=<hash>', '-lab.autologon-sha256=<hash>')
+```
+
+Results are JSON lines: one start line, then the image verification time,
+then one line per run, then an end line. Each run line holds timings in
+milliseconds, render and boot checkpoints, host memory samples, and whether
+cleanup confirmed absence. Nothing in them is guest-controlled text. If a run
+retains storage, the batch stops. Rerunning a VM host's `Recover` on the same
+directory settles anything it retained; never delete the directory by hand
+while a guest may exist.
+
+## Direct HCS network lab batch
+
+`TestLabNetworkBatch` in `internal/provider/hcsvm` is batch 2. It runs the
+real VM host in the test process, with its pipe, caller check and network
+guard, and drives it through the `hcs` provider as the manager would. Each run
+is a production-sized cold boot (4 CPU, 8 GiB, GPU) with an isolated network:
+
+1. Create records the VM host's timings and whether the port policy was in
+   place before start.
+2. WaitReady applies the lease through the winrunner preflight and prepare
+   steps.
+3. The guest probes its network:
+   - It must reach public DNS, HTTPS, TCP and UDP DNS.
+   - It must not reach its gateway's DNS proxy, public IPv6, or host
+     listeners on the gateway, the LAN source address and the switch
+     adapter's IPv6 link-local address.
+   - Each listener first proves the host can reach it, and counts any other
+     connection.
+4. The guest must still be running after two guard intervals.
+5. Delete must leave no guest, no reservation and no switch adapter.
+
+**Windows CI must be drained first.** Each guest's switch adds a host vEthernet
+adapter. The App Sandbox broker's interface guard then quarantines its guests
+and closes admission until the broker restarts.
+
+Without a layer-removed control, a host listener's refusal could also come
+from the host firewall. The gateway's DNS proxy is the stronger denial check,
+because connection sharing normally opens it on the shared switch. If Windows
+offers to allow the test binary through the firewall, choose Cancel.
+
+1. Turn Windows CI Off (`Control.ps1 -Action Off`, or `bivouac off --wait`)
+   and wait until no App Sandbox guest remains.
+2. Build unelevated. The helper is sent into each guest as its adapter:
+
+   ```powershell
+   go build -o bin\lab\bivouac.exe .\cmd\bivouac
+   go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
+   ```
+
+3. Launch it once through UAC. Use the batch 1 image and pins. The lab root
+   must not exist yet; the VM host creates it protected.
+   - If the image has no runner, add `-lab.runner-archive` and
+     `-lab.runner-sha256` for an official runner ZIP.
+   - `-lab.peer=<ip:port>` adds an owner-controlled private peer that the
+     host can reach.
+
+   ```powershell
+   Start-Process -Verb RunAs -FilePath bin\lab\hcs-network-lab.test.exe -ArgumentList @(
+     '-test.run=^TestLabNetworkBatch$', '-test.timeout=60m', '-lab.windows-ci-drained',
+     '"-lab.root=<protected parent>\VMHost-Network"',
+     '"-lab.results=<user path>\network-results.jsonl"',
+     '"-lab.image=<prepared image>.vhdx"', '-lab.image-sha256=<hash>',
+     '-lab.guest-name=<computer name>', '-lab.guest-user=<user>',
+     "`"-lab.helper=$PWD\bin\lab\bivouac.exe`"")
+   ```
+
+4. Results are JSON lines: start, image verification, one line per run, end.
+   The VM host's log is written beside them. Probe outcomes use a fixed
+   vocabulary; no addresses or guest text are recorded.
+5. Turn CI On from its desktop shortcut; the launcher refuses an agent
+   terminal. A broker that recovers admission by itself and had no guest
+   during the batch needs no restart. Otherwise restart it the way this host
+   normally starts it (see `docs/windows.md`). Watch the first Windows guest
+   become ready.
+
+If a run retains a guest, the batch stops. Relaunch with
+`-lab.recover-root=<that root>` and a new `-lab.root`: it settles the old root
+first, and refuses to boot anything if a guest or network remains. Never
+delete the root by hand while a guest may exist.
+
 ## GitHub App (separate App can follow cutover)
 
 Both demand modes work with the existing shared App. A dedicated App is
@@ -555,7 +881,9 @@ Do not configure workflows to depend on the proxy for network availability.
 
 Opaque bytes live in `~/Library/Caches/bivouac` on macOS. The portable core
 uses `%LOCALAPPDATA%\bivouac\cache` on Windows and the XDG cache directory
-on Linux, but their guest adapters are not yet implemented or validated.
+on Linux. App Sandbox Windows and Crosvm Linux guest adapters are implemented
+and validated for downloads; direct HCS Windows guests have unit coverage with
+live cache validation pending. Upload validation remains as described above.
 `BIVOUAC_HOME` isolates a cache under that test home.
 
 To revert, finish work with `bivouac off --wait`, set `cache.enabled = false`,

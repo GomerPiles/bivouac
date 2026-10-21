@@ -117,7 +117,7 @@ func (h *harness) run(ctx context.Context) <-chan error {
 }
 
 func TestOneJobPerGuest(t *testing.T) {
-	for _, providerType := range []string{"vz", "appsandbox", "crosvm"} {
+	for _, providerType := range []string{"vz", "appsandbox", "crosvm", "hcs"} {
 		t.Run(providerType, func(t *testing.T) { testOneJobPerGuest(t, providerType) })
 	}
 }
@@ -127,6 +127,9 @@ func testOneJobPerGuest(t *testing.T, providerType string) {
 		p := c.Providers["macos"]
 		p.Type = providerType
 		switch providerType {
+		case "hcs":
+			p.VZ = nil
+			p.HCS = &config.HCS{Image: "fixture", CPU: 4, MemoryGB: 8}
 		case "appsandbox":
 			p.VZ = nil
 			p.AppSandbox = &config.AppSandbox{Baseline: "fixture", RunnerDir: `C:\actions-runner`}

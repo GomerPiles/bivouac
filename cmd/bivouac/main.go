@@ -21,10 +21,10 @@ import (
 	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/paths"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/vm"
+	"github.com/GomerPiles/bivouac/internal/winrunner"
 )
 
 const usage = `usage: bivouac <command> [flags]
@@ -51,6 +51,11 @@ Setup:
   vz cleanup       delete orphaned guests that carry bivouac's own metadata
   appsandbox inspect  read-only daemon/version/VM inventory (no startup)
   appsandbox broker   operator-started elevated lifecycle broker
+  vmhost run          elevated foreground VM host (Windows HCS guests)
+  vmhost install      register the optional VM host service (elevated; also: uninstall)
+  vmhost start|stop   start or stop the installed service without elevation
+  vmhost status       service state and VM host limits
+  image build|inspect|cleanup prepare or inspect a direct HCS image (elevated)
   crosvm validate     credential-free Linux GPU/lifecycle/recovery test
   crosvm build-image  prepare and cleanly capture an independent Linux image
   crosvm cleanup      retry one exact recorded native validation instance
@@ -105,12 +110,18 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 			return crosvm.RunLinuxGuest(ctx, args[1], os.Stdin, os.Stdout)
 		}
 		if len(args) == 2 && args[0] == "windows" {
-			return appsandbox.RunWindowsGuest(ctx, args[1], os.Stdout)
+			return winrunner.RunGuest(ctx, args[1], os.Stdout)
 		}
 		return errUsage
 	}
 	if cmd == "appsandbox" {
 		return appsandboxCmd(ctx, args, os.Stdout)
+	}
+	if cmd == "vmhost" {
+		return vmhostCmd(ctx, args, os.Stdout)
+	}
+	if cmd == "image" {
+		return imageCmd(ctx, args, os.Stdout)
 	}
 	if cmd == "guest-agent" {
 		if len(args) != 0 {

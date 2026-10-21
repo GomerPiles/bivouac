@@ -58,6 +58,7 @@ func (e env) setMode(ctx context.Context, mode control.Mode, args []string) erro
 		fmt.Printf("bivouac: STOP - cancelling %d active guest(s) and reclaiming resources now; then idle (daemon stays)\n", active)
 	case control.ModeOff:
 		fmt.Printf("bivouac: OFF - %d active guest(s) finish, then the daemon exits and stays off across reboots\n", active)
+		e.printHCSOff()
 	}
 	if pending > 0 {
 		fmt.Printf("%d runner registration(s) await cleanup; drain/off wait for these too\n", pending)
@@ -79,7 +80,7 @@ func (e env) setMode(ctx context.Context, mode control.Mode, args []string) erro
 	if wait {
 		switch mode {
 		case control.ModeOn:
-			return e.waitForPhase(ctx, time.Minute, "polling", "maintaining idle pool")
+			return e.waitForPhase(ctx, 5*time.Minute, "polling", "maintaining idle pool")
 		case control.ModeOff:
 			return e.waitForPhase(ctx, 3*time.Hour, "exiting")
 		default:

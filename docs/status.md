@@ -129,6 +129,202 @@ Open:
   Windows-only tests pass on a Windows host without elevation; the native
   credential round trip is opt-in and was not run.
 
+## Windows: direct HCS (in progress)
+
+The pieces built so far:
+
+- The typed HCS binding.
+- The cancellable HvSocket dialer.
+- The VM host core.
+- The prepared-guest client.
+
+They passed one lab batch while production CI kept running. That was five cold
+boots, with no network adapter, from a prepared image that still contains App
+Sandbox's guest components. Every guest:
+
+- Was created, started and given GPU-PV.
+- Initialized the guest agent and authenticated SSH over HvSocket.
+- Rendered hardware D3D11 and passed the presentation and pixel checks.
+- Rotated its credential and presented its own SSH host key.
+- Was terminated, confirmed absent and removed.
+
+The same batch showed:
+
+- An unelevated process reached the HvSocket service its account was granted
+  and was refused access to the other one.
+- Lazily committed memory boots and renders with GPU-PV and commits only about
+  0.1 GiB at start. Its steady-state saving was not measured, because
+  production CI was active during that run.
+- A flattened single-file image (18.9 GB, written in 7 s) boots the same way.
+
+| Spans (host clock) | 2 CPU, 4 GiB | 4 CPU, 8 GiB |
+| --- | --- | --- |
+| Disk, create, start, GPU | 0.4-1.0 s | 0.6 s |
+| Agent reachable | 25.4-26.3 s | 15.2-15.3 s |
+| Validated desktop | 37.4-39.0 s | 27.2-27.3 s |
+| Teardown to confirmed absence | 0.2-0.4 s | 0.3 s |
+
+With 4 CPUs, the image's PowerShell boot task runs its first statement at
+5.6-5.8 s guest uptime instead of 21.3-21.7 s. The earlier gap of about 18.6 s
+was therefore CPU contention during boot, not a fixed wait. In that earlier
+window, the task's SSH host-key generation takes 5.6-5.8 s instead of
+0.6-1.7 s.
+
+Desktop validation takes about 11 s. Its own console, GPU and render waits
+account for about 5 s of that; the rest is PowerShell work in the image.
+
+Built since, covered by tests only: the VM host's authorized pipe API, the
+optional service and its install and control commands, and the `hcs` provider.
+The provider adopts guests by label, pins host keys, reconnects after transport
+loss and delivers files by scp. A real named-pipe
+test covers caller identification, refusal of anonymous callers and refusal
+of an unprivileged server; the service has since run live (below).
+
+Guest networking passed lab batch 2 (`TestLabNetworkBatch`) with Windows CI
+Off. It ran two networked production-sized cold boots (4 CPU, 8 GiB, GPU)
+through an in-process foreground VM host and the `hcs` provider. Every run:
+
+- Was created and started with its switch, endpoint and deny layer in 4.5-5.1 s.
+- Passed WaitReady, which applied the lease and proved the console and default
+  desktop, 28-29 s after create.
+- Reached public DNS, HTTPS, TCP and UDP DNS.
+- Timed out on the gateway's DNS proxy and on host listeners at the gateway,
+  the LAN source address and the switch adapter's IPv6 link-local address.
+  Public IPv6 was unreachable. Each listener was reachable from the host and
+  saw no other connection.
+- Was still running after two guard passes, so its layer survived boot,
+  readiness and the probes.
+- Was deleted in 1.3 s, with the switch adapter gone.
+
+| Spans (host clock) | Run 1 | Run 2 |
+| --- | --- | --- |
+| Switch and endpoint | 0.57 s | 0.71 s |
+| HCS create | 0.55 s | 0.29 s |
+| Start | 0.58 s | 0.40 s |
+| Deny layer after start | 0.97 s | 0.92 s |
+
+In both runs the switch port appeared only at start, so the layer was
+installed about 1 s after the guest began running, not before its first
+instruction. Design accepts that window because nothing untrusted reaches the
+guest before the layer is verified.
+
+An earlier attempt passed the same network checks but could not delete the
+network: hostnet waited for the stopped guest's port to vanish, which it does
+not do until its endpoint is deleted. After the fix, Recover settled that
+leftover in 0.85 s. The App Sandbox broker had no guest during the batch and
+was not restarted.
+
+A failed start is cleaned up (lab batch `failed-start`, no network or GPU).
+A second disk whose file does not exist made HCS refuse start with HRESULT
+0x80070002. Afterwards the creating handle's properties reported the owner
+mismatched, system type `Container` and no runtime ID, so they no longer proved
+the guest. Create closed that handle, confirmed absence and removed the
+journal and storage. Excess vCPUs are not a start
+failure: HCS refuses them at create.
+
+The VM host service runs live. It was installed elevated from a protected
+directory with one UAC prompt and no reboot. The ordinary account then
+started and stopped it with the installer's rights (about 0.3 s each), and
+the pipe answered about 20 ms after start with an empty journal. The client
+trusts the pipe by its owner because an unelevated client cannot open a
+SYSTEM service's process token. The installed service predates the explicit
+`O:BA` owner and serves with its default owner, which is also
+Administrators. A foreground `vmhost run` with the explicit owner has not run
+live. Called directly, the provider's
+`Activate` started the stopped service and saw it serve in 0.27 s, and
+`Deactivate` found no guests and stopped it in 0.25 s. Both were no-ops when
+repeated.
+
+GitHub jobs ran end to end on HCS guests, with production CI Off. An
+isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
+8 GiB GPU guest, and drove the installed service from a live daemon:
+
+- `bivouac on` started the stopped service and filled the pool. A guest was
+  listening 47-51 s after create (clone 5-7 s, boot 28-30 s, JIT
+  registration and listener 12-15 s).
+- Two jobs passed on two different guests. Hooks ran, checkout worked, the
+  host GPU appeared through GPU-PV, `api.github.com` answered, and the second
+  job found no trace of the first. Each finished guest was deregistered and
+  deleted in about 2 s, and a replacement was listening within a minute.
+- `bivouac off --wait` deregistered and deleted the idle guest, stopped the
+  service and exited in 5-14 s. The guest's switch adapter was gone, and every
+  runner was deregistered.
+- The first attempts found two guest problems, both fixed:
+  - The guest clock ran an hour ahead, so GitHub refused the runner's token.
+    The image reads its RTC (host local time) in its own time zone, and no
+    time-sync channel corrects it. WaitReady now sets the clock from the host.
+  - The image's default execution policy refused the runner's hook and step
+    scripts. The runner now gets a process-scope RemoteSigned policy on such
+    a guest.
+
+HCS guests use the host cache through a dedicated authenticated HvSocket SSH
+client. The adapter sets up before JIT, removes partial settings before any
+fallback, refuses the launch when that removal is uncertain, and revokes on
+confirmed deletion, confirmed absence or provider shutdown. It passed the
+cache validation fixture live with production's Windows cache settings
+(release proxy, no upload storage), each run on a fresh guest:
+
+- `save`: two concurrent archive saves passed upstream, and the release
+  proxy served its second download from the first.
+- First `restore`: both archives (216 MiB) filled from upstream, and the
+  release downloads hit the cache the previous guest filled.
+- Second `restore`: both archives and both releases hit locally, with no
+  misses or failures.
+
+Loss fallback, `outage`, `interrupt` and upload storage have not run on HCS
+guests.
+
+The image factory built an image from production's App Sandbox template.
+`image inspect` first copied the 29.5 GB template in 20 s and found it
+generalized to OOBE. The only runner residue was one log from template
+preparation in `_diag`, which setup now removes. The build took 3 minutes:
+
+- 20 s copying the template;
+- 1 min 47 s from boot to a validated desktop with hardware D3D11;
+- 19 s clean shutdown;
+- 25 s flattening and hashing.
+
+The template was only read. The installed VM host service then ran the new
+binary and served the new image at production limits (1 guest, 10 CPU,
+9216 MiB). The isolated JIT home repeated the end-to-end and cache checks with
+production CI Off, on three jobs, each on a fresh guest:
+
+- Guests booted in 21.5-24.3 s (28-30 s on the spike's image) and listened
+  37-40 s after create.
+- Every job saw the AMD GPU through GPU-PV and reached `api.github.com`.
+- `save`, `restore`, `restore` passed as before. The first restore filled both
+  archives (216 MiB) upstream; the second hit both locally, and every release
+  download hit.
+- `bivouac off --wait` exited in 11 s, with the service stopped, no guest
+  adapter left and every runner deregistered.
+
+Production Windows CI now runs on the `hcs` provider: the same scale set,
+labels and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. CI On
+started the VM host service. The first real Windows job ran beside a Linux
+job and succeeded: listening 46 s after create (clone 7 s, boot 21 s, JIT
+registration 7 s), teardown 1.8 s, runner deregistered. App Sandbox stays
+installed for rollback.
+
+Open:
+
+- `Deactivate` refusing to stop a VM host that holds guests (unit-tested
+  only).
+- A foreground `vmhost run` with the explicit pipe owner. (The installed
+  service's binary was updated in place while stopped, with no reinstall.)
+- Isolation controls that batch 2 did not cover:
+  - A control with the deny layer removed. Without it, a refused host
+    listener does not rule out the host firewall; the gateway's DNS proxy is
+    the stronger evidence.
+  - An owner-controlled private peer.
+  - Guest source-address and MAC changes.
+  - Host interface changes while a guest runs.
+- Longer and heavier jobs over time, and recovery after a daemon or host
+  restart with HCS guests.
+- Image factory paths not yet live: a template without a runner, a failed
+  build's cleanup and `image cleanup`, and the lab batch on a factory-built
+  image. Admission does not compare the host GPU driver with the image's.
+- The warm spare.
+
 ## Windows: Crosvm (Linux GPU guests)
 
 Validated live:
@@ -160,7 +356,7 @@ breakaway and log-cap retirement are untested on Windows.
 ## Caching
 
 Actions v2 archive restores and public GitHub release downloads are
-validated live on all three guest types: cold and warm hits, and direct
+validated live on macOS, App Sandbox Windows and Crosvm Linux guests: cold and warm hits, and direct
 fallback after cache loss. Windows and Linux guests reach the cache over
 SSH on guest loopback. Not covered: container images, npm/Cargo/rustup,
 private releases, and GHES; tools with their own trust stores need setup.
@@ -168,6 +364,11 @@ private releases, and GHES; tools with their own trust stores need setup.
 Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
+
+Open parity item, including App Sandbox and HCS: cache admission rejects private
+and special addresses but does not use the host's dynamic interface prefixes.
+A publicly addressed host or LAN prefix is therefore not refused through the
+proxy. Native guest NIC denial does not cover those host-side proxy connections.
 
 Upload storage (`store_uploads`) passed every fixture mode live on isolated
 macOS guests, with production cache limits (4 GiB, 512 MiB objects). The host

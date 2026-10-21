@@ -159,3 +159,14 @@ type Provider interface {
 	// the guest into dir.
 	CollectDiagnostics(ctx context.Context, name string, dir string) error
 }
+
+// Activator is implemented by providers whose host runtime is needed while CI
+// is on. Calls are bounded by the manager's context.
+type Activator interface {
+	// Activate makes the runtime serve this provider, starting it if needed.
+	// It is idempotent and checks that the runtime can serve this provider.
+	Activate(ctx context.Context) error
+	// Deactivate stops a runtime this provider can stop, only when it has no
+	// instances from any caller. A runtime it cannot stop is left alone.
+	Deactivate(ctx context.Context) error
+}

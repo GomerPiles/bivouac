@@ -4,6 +4,7 @@ go 1.27.2
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/actions/scaleset v0.4.0
 	github.com/ebitengine/purego v0.11.1
 	github.com/golang-jwt/jwt/v4 v4.5.2

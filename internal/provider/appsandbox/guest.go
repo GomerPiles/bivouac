@@ -1,11 +1,8 @@
 package appsandbox
 
 import (
-	"archive/zip"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,9 +16,11 @@ import (
 	"strings"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
-	"github.com/GomerPiles/bivouac/internal/perf"
+	"github.com/GomerPiles/bivouac/internal/command"
+	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/redact"
+	"github.com/GomerPiles/bivouac/internal/winhost"
+	"github.com/GomerPiles/bivouac/internal/winrunner"
 )
 
 // GuestOptions contains local transport/package locations, never GitHub
@@ -39,7 +38,7 @@ type GuestOptions struct {
 }
 type SSHGuest struct {
 	opts     GuestOptions
-	commands CommandRunner
+	commands command.Runner
 	cache    *cache.Service
 }
 
@@ -73,21 +72,7 @@ func (g *SSHGuest) PrepareCache(ctx context.Context, l Lease) error {
 	return err
 }
 
-type guestConfig struct {
-	NativeName    string `json:"native_name"`
-	RunnerName    string `json:"runner_name"`
-	ControllerID  string `json:"controller_id"`
-	User          string `json:"user"`
-	RunnerDir     string `json:"runner_dir"`
-	Address       string `json:"address"`
-	Gateway       string `json:"gateway"`
-	Prefix        int    `json:"prefix"`
-	MAC           string `json:"mac"`
-	Archive       bool   `json:"archive"`
-	ArchiveSHA256 string `json:"archive_sha256"`
-}
-
-func NewSSHGuest(opts GuestOptions, commands CommandRunner) (*SSHGuest, error) {
+func NewSSHGuest(opts GuestOptions, commands command.Runner) (*SSHGuest, error) {
 	if runtime.GOOS != "windows" {
 		return nil, errors.New("windows guest transport requires a Windows host")
 	}
@@ -96,53 +81,26 @@ func NewSSHGuest(opts GuestOptions, commands CommandRunner) (*SSHGuest, error) {
 			return nil, errors.New("guest transport requires absolute local paths")
 		}
 	}
-	if !validRunnerPath(opts.RunnerDir) {
+	if !winrunner.ValidRunnerDir(opts.RunnerDir) {
 		return nil, errors.New("guest runner must use a dedicated absolute Windows directory")
 	}
 	if opts.RunnerArchive != "" {
 		if !filepath.IsAbs(opts.RunnerArchive) || len(opts.RunnerSHA256) != 64 {
 			return nil, errors.New("runner archive requires an absolute path and SHA-256")
 		}
-		if err := verifyArchive(opts.RunnerArchive, opts.RunnerSHA256); err != nil {
+		if err := winrunner.VerifyArchive(opts.RunnerArchive, opts.RunnerSHA256); err != nil {
 			return nil, err
 		}
 	} else if opts.RunnerSHA256 != "" {
 		return nil, errors.New("runner hash without an archive")
 	}
 	if commands == nil {
-		commands = NativeCommands{}
+		commands = command.Native{}
 	}
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
 	return &SSHGuest{opts: opts, commands: commands}, nil
-}
-func validRunnerPath(path string) bool {
-	// Restrict to a fixed local guest drive. Config is delivered as JSON, not
-	// interpolated into a remote command or scheduled-task command line.
-	return len(path) > 3 && strings.EqualFold(path[:3], `C:\`) &&
-		!strings.ContainsAny(path, "\x00\r\n") && !strings.Contains(path, "..") &&
-		!strings.EqualFold(strings.TrimRight(path, `\`), `C:\Windows`) &&
-		!strings.HasPrefix(strings.ToLower(path), `c:\windows\`)
-}
-func verifyArchive(path, expected string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return errors.New("runner archive unavailable")
-	}
-	defer func() { _ = f.Close() }()
-	stat, err := f.Stat()
-	if err != nil || !stat.Mode().IsRegular() || stat.Size() > 512<<20 {
-		return errors.New("invalid bounded runner archive")
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		return errors.New("read runner archive")
-	}
-	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected) {
-		return errors.New("runner archive hash differs")
-	}
-	return nil
 }
 func (g *SSHGuest) base(l Lease, scp bool) ([]string, error) {
 	if !l.SSH.ForwardReady() || !identifier(l.SSH.User, 32) || l.Record.NativeName == "" {
@@ -209,7 +167,7 @@ func (g *SSHGuest) copy(ctx context.Context, l Lease, local, remote string) erro
 	return err
 }
 func (g *SSHGuest) stage() (string, func(), error) {
-	dir, err := PrivateGuestDirectory(g.opts.StateDir)
+	dir, err := winhost.PrivateDirectory(g.opts.StateDir)
 	if err != nil {
 		return "", nil, err
 	}
@@ -235,14 +193,14 @@ func (g *SSHGuest) Preflight(ctx context.Context, l Lease) error {
 		return err
 	}
 	defer cleanup()
-	data, err := json.Marshal(guestConfig{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User})
+	data, err := json.Marshal(winrunner.Config{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User})
 	if err != nil {
 		return err
 	}
 	for _, file := range []struct {
 		name string
 		data []byte
-	}{{"bivouac-preflight.ps1", []byte(windowsPreflight)}, {"bivouac-config.json", data}} {
+	}{{"bivouac-preflight.ps1", []byte(winrunner.PreflightScript)}, {"bivouac-config.json", data}} {
 		path := filepath.Join(dir, file.name)
 		if err = os.WriteFile(path, file.data, 0o600); err != nil {
 			return err
@@ -280,7 +238,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		return err
 	}
 	defer cleanup()
-	config := guestConfig{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User, RunnerDir: g.opts.RunnerDir, Address: l.Address, Gateway: l.Gateway, Prefix: l.Prefix, MAC: l.MAC, Archive: g.opts.RunnerArchive != "", ArchiveSHA256: g.opts.RunnerSHA256}
+	config := winrunner.Config{NativeName: l.Record.NativeName, RunnerName: l.Record.RunnerName, ControllerID: l.Record.Meta.ControllerID, User: l.SSH.User, RunnerDir: g.opts.RunnerDir, Address: l.Address, Gateway: l.Gateway, Prefix: l.Prefix, MAC: l.MAC, Archive: g.opts.RunnerArchive != "", ArchiveSHA256: g.opts.RunnerSHA256}
 	data, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -289,7 +247,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		name string
 		data []byte
 	}{
-		{"bivouac-control.ps1", []byte(windowsControl)},
+		{"bivouac-control.ps1", []byte(winrunner.ControlScript)},
 		{"bivouac-config.json", data},
 	} {
 		path := filepath.Join(dir, file.name)
@@ -304,7 +262,7 @@ func (g *SSHGuest) Ready(ctx context.Context, l Lease) error {
 		return err
 	}
 	if g.opts.RunnerArchive != "" {
-		if err := verifyArchive(g.opts.RunnerArchive, g.opts.RunnerSHA256); err != nil {
+		if err := winrunner.VerifyArchive(g.opts.RunnerArchive, g.opts.RunnerSHA256); err != nil {
 			return err
 		}
 		if err := g.copy(ctx, l, g.opts.RunnerArchive, "bivouac-runner.zip"); err != nil {
@@ -407,75 +365,5 @@ func (g *SSHGuest) CollectDiagnostics(ctx context.Context, l Lease, destination 
 	if err := os.WriteFile(path, decoded, 0o600); err != nil {
 		return err
 	}
-	return extractDiagnostics(path, destination)
+	return diag.ExtractGuestArchive(path, destination)
 }
-func extractDiagnostics(path, destination string) error {
-	reader, err := zip.OpenReader(path)
-	if err != nil {
-		return errors.New("invalid guest diagnostic archive")
-	}
-	defer func() { _ = reader.Close() }()
-	if len(reader.File) > 1024 {
-		return errors.New("too many guest diagnostic files")
-	}
-	root, err := os.OpenRoot(destination)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = root.Close() }()
-	var total uint64
-	for _, file := range reader.File {
-		name := file.Name
-		if file.Mode().IsDir() {
-			continue
-		}
-		if !file.Mode().IsRegular() || strings.ContainsAny(name, "\\:\x00") || strings.HasPrefix(name, "/") || strings.Contains(name, "..") || (name != "runner.log" && name != perf.FileName && !strings.HasPrefix(name, "_diag/")) {
-			return errors.New("unsafe guest diagnostic path")
-		}
-		total += file.UncompressedSize64
-		if file.UncompressedSize64 > 16<<20 || total > 128<<20 {
-			return errors.New("guest diagnostics exceed bound")
-		}
-		if err := root.MkdirAll(filepath.Dir(filepath.FromSlash(name)), 0o700); err != nil {
-			return err
-		}
-		input, err := file.Open()
-		if err != nil {
-			return err
-		}
-		if name == perf.FileName {
-			report, readErr := perf.DecodeReport(input)
-			_ = input.Close()
-			if readErr != nil {
-				// Optional telemetry must not prevent collecting official logs.
-				continue
-			}
-			output, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-			if err != nil {
-				return err
-			}
-			sink := redact.NewWriter(output)
-			err = errors.Join(json.NewEncoder(sink).Encode(report), sink.Close(), output.Close())
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		output, err := root.OpenFile(filepath.FromSlash(name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			_ = input.Close()
-			return err
-		}
-		sink := redact.NewWriter(output)
-		_, copyErr := io.Copy(sink, io.LimitReader(input, 16<<20+1))
-		err = errors.Join(copyErr, sink.Close(), output.Close(), input.Close())
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ExtractDiagnostics shares the bounded, path-checked, redacted host sink
-// across Windows and Linux guest transports. The archive is always untrusted.
-func ExtractDiagnostics(path, destination string) error { return extractDiagnostics(path, destination) }

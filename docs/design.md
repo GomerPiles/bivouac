@@ -10,7 +10,7 @@ security model, and durable decisions. Keep it aligned with the code.
 ```
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
-internal/provider    provider contract; vz/ (macOS), appsandbox/ and crosvm/ (Windows host experiments), fake/
+internal/provider    provider contract; vz/ (macOS), appsandbox/, crosvm/ and hcsvm/ (Windows host experiments), fake/
 internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
@@ -19,7 +19,15 @@ internal/state       durable instance records and controller ID (atomic JSON)
 internal/control     mode file, pid file, status snapshot (CLI <-> daemon)
 internal/config      one TOML file, validated, no secrets
 internal/secret      credential store (Keychain; native Windows Credential Manager)
-internal/diag        diagnostics collection with redaction
+internal/diag        diagnostics collection with redaction, bounded guest archive extraction
+internal/command     argument-array subprocesses with bounded output and classified OpenSSH failures
+internal/netpolicy   IPv4 egress denials shared by Windows-hosted providers
+internal/winhost     Windows host checks: protected storage, private staging, system OpenSSH
+internal/hcs         typed Host Compute Service binding for direct Windows guests
+internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
+internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
+internal/winguest    prepared Windows guest client: App Sandbox guest agent setup, SSH over HvSocket
+internal/winrunner   Windows guest runner adapter (`guest windows`) and its fixed control scripts
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
 internal/redact      credential redaction applied at every sink
@@ -410,6 +418,38 @@ file, never argv), `RunnerStatus`, `Status`, `Stop` (graceful then forced),
 `Delete` (refuses without our metadata), `List` (owned and foreign),
 `CollectDiagnostics`.
 
+The optional `provider.Activator` interface owns host runtime activation.
+`Activate(ctx)` idempotently starts or checks a runtime for this provider;
+`Deactivate(ctx)` stops a runtime it can control only once no caller has
+instances, and leaves operator-owned foreground runtimes alone. Each call
+has a 3-minute bound. Before startup reconciliation the manager synchronously
+activates only providers with retained guest records; failure aborts startup.
+Deregistering records need only GitHub cleanup and do not require activation.
+In On without guest records, activation is asynchronous, so a failed runtime
+does not prevent other providers from running. An inactive Activator without
+guest records may fail inventory without aborting reconciliation; other
+inventory errors still fail startup. Cancellation during startup activation
+returns the context error, without reporting an activation startup failure.
+
+After startup, On starts one manager-owned activation worker per inactive
+provider, with at least 30 seconds after failure before retry. The manager
+owns activation state under its lock, separately from idle-pool retries.
+Inactive providers have no admission capacity, and `launch` enforces the gate
+for pools, assignments and sweeps; pollers keep receiving job messages and
+other providers continue. Status reports `starting host runtimes` until all
+are active. The last activation error appears in status until activation
+succeeds. Drain and stop keep runtimes running, but every transition into On
+revalidates activation (a cheap Info check when already serving). Failed List
+calls invalidate active providers and wake the loop for reactivation. A worker
+started before a later On transition cannot satisfy that new activation check.
+
+Off stops pollers, cancels and joins lifecycles and activation workers, and
+deactivates every Activator, including ones this daemon never activated. It publishes
+`releasing host runtimes` before release and `exiting` only afterwards, so
+`off --wait` includes release. Release failures are logged and still allow
+exit; activation state becomes inactive. Context cancellation cancels and
+joins workers but never deactivates: guests remain for adoption.
+
 ### macOS (`vz` provider)
 
 Each VM is a directory in bivouac's VM store
@@ -697,6 +737,249 @@ automatic host loopback rules took precedence over its explicit block rules
 even with loopback reported disabled. The broker now applies this recipe as
 described above. Private-peer and lifecycle tests remain necessary; no
 production isolation guarantee is inferred from the prototype.
+
+### Windows guests through HCS (in progress)
+
+This replaces the App Sandbox provider. Bivouac drives the Host Compute
+Service (`internal/hcs`) itself, so no App Sandbox application or daemon runs.
+The first increment changes only the host: guests still boot an image that
+contains App Sandbox's guest agent and display driver. A later increment
+replaces them with a bivouac guest agent over HvSocket, along with OpenSSH and
+the PowerShell boot steps they need.
+
+HCS and Windows networking refuse ordinary tokens, so the work splits in two:
+
+- The manager stays unprivileged. It holds GitHub credentials and budgets, and
+  it handles everything a guest can influence: transport, runner status, cache
+  traffic and diagnostics.
+- A small VM host runs elevated. It creates and removes compute systems,
+  per-job differencing disks, each VM's network endpoint and firewall policy,
+  and the network guard described below. Its ownership journal lives in an
+  administrator-only `%ProgramData%` directory. It accepts a fixed set of operations on a local
+  named pipe whose DACL admits only the accounts named in its
+  administrator-protected configuration. It never receives GitHub
+  credentials, job data or guest output.
+- Each HvSocket service's descriptor admits SYSTEM, Administrators and the
+  manager's account. The manager therefore connects to guests itself, and
+  guest traffic never passes through the elevated process. A live test
+  confirmed that an unelevated account is refused services it was not
+  granted.
+
+The pipe (`\\.\pipe\bivouac-vmhost`) carries one bounded JSON request per
+connection: info, create, status, destroy or list.
+
+- Authorization:
+  - The client dials at identification level. After reading the request,
+    the VM host impersonates the client on a dedicated thread to learn its
+    account, and refuses accounts outside its configuration.
+  - Anonymous callers are refused.
+  - The DACL grants accounts read and write data only. It never grants
+    create-instance, so no account can serve the name.
+  - The client refuses a pipe whose owner is neither SYSTEM nor
+    Administrators, so a process that squats on the name is not trusted.
+    The VM host sets the owner to Administrators explicitly. Only a token
+    holding Administrators or SYSTEM as an owner-eligible group (elevated or
+    SYSTEM, not a UAC-filtered token), or holding SeRestorePrivilege, can
+    assign either. An unelevated client cannot open a SYSTEM service's
+    process token, so the server process itself is not inspected.
+- Each guest belongs to the account that created it. Status, destroy and list
+  see only that account's guests.
+- A create names a configured image, not a path. The VM host sets each
+  HvSocket service's descriptor to the caller's account.
+- The VM host reserves instance, CPU and memory capacity against its
+  configured limits before any HCS call. Info reports the shared totals, so
+  every manager budgets against the same host.
+- A create whose outcome is unknown, or whose cleanup after a failure did not
+  finish, keeps its reservation until a later VM host's Recover settles it.
+  That Recover is bounded to 2 minutes, so a guest that never settles cannot
+  hold the VM host's startup.
+
+The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
+
+- **Create** asks the VM host to create, start and GPU-assign the guest. It
+  labels the guest with the controller and instance IDs, which Status and
+  List check. The VM host returns only this account's guests. **Stop** and
+  **Delete** both destroy the disposable guest.
+- **Guest sessions:** each session generates an in-memory SSH identity and
+  deploys it through the image's guest agent, whose connection stays open.
+  It then authenticates SSH over HvSocket.
+  - The guest's host key fingerprint is public, and is pinned beside
+    manager state. A manager that reconnects, for example after a restart,
+    refuses a different key.
+  - A transport failure drops the session, and the next probe reconnects.
+    These failures are retryable for the manager's bounded grace;
+    authentication and host-key failures are terminal.
+- **Readiness** delivers files by scp to fixed names: first the shared
+  winrunner preflight, then its control script, the configuration and this
+  executable as the guest adapter. Runner status and diagnostics call the
+  adapter directly, without PowerShell, because status runs every few
+  seconds.
+- **JIT** bytes travel only on SSH stdin.
+- **Network:** every create asks for an isolated endpoint. The lease (address,
+  gateway, prefix and MAC) goes to the guest in its runner configuration.
+  WaitReady still refuses a guest without a lease, because its runner could
+  not reach GitHub.
+- **Cache:** after readiness and before JIT delivery, a dedicated SSH client
+  authenticates over HvSocket with the command session's in-memory identity and
+  host-key pin. It serves the shared cache handler through a guest-loopback
+  listener without using the guest NIC or relaxing HCN/VFP isolation. Cache
+  revocation and command cancellation close independent clients. Setup uses
+  the shared Windows adapter with the bootstrap on stdin, cleared after use.
+  Failed setup revokes the grant and removes partial guest settings before
+  upstream fallback; uncertain cleanup refuses JIT. Confirmed deletion or
+  absence revokes the grant, and provider Close closes its cache transports.
+  Transport loss uses upstream fallback without reattachment.
+
+The VM host runs either as an optional Windows service or as an elevated
+foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
+service implicitly. An administrator installs it explicitly, which needs no
+reboot. Installation grants the configured accounts start and stop rights on
+that one service, so mode changes never need elevation. The service starts from
+the service manager with a clean environment. That closes the same-account UAC
+concern above.
+
+The HCS provider implements `Activator`. It checks the serving host's image
+and CPU/memory limits using the same observational check as doctor. If the
+pipe is unavailable it starts the installed service, waits through SCM
+StartPending/StopPending, then waits for pipe readiness after startup recovery.
+Readiness timeouts retain the last Info error; a service that stops during
+readiness fails activation promptly.
+Without the service, the operator must run an elevated foreground VM host.
+The manager reserves the configured HCS CPU/memory in each instance record;
+Create refuses an explicit spec that disagrees with its configured image or size.
+
+Off stops the service only after Info positively reports zero guest
+reservations across all callers. Deactivation waits through pending service
+states and Running-before-pipe startup recovery within its bound. It returns
+once the service is stopped, or checks Info before issuing Stop. Unknown
+inventory at timeout or retained failed-cleanup reservations leave it running
+with a logged reason, retaining the last wait failure in timeout errors.
+The check/stop window is accepted because the configured accounts are
+bivouac's own and this daemon is exiting. A foreground VM host is never
+stopped. Drain, stop and manager signal shutdown keep the runtime active;
+manual service start/stop commands remain available.
+
+Guests are created with `ShouldTerminateOnLastHandleClosed`, and the VM host
+holds their handles:
+
+- A manager crash leaves guests running for adoption.
+- If the VM host exits, its guests and their network guard end together. On
+  its next start, it confirms each journalled guest is absent and then removes
+  that guest's disk and network.
+- Upgrading the VM host therefore requires draining first.
+
+The VM host touches a system it opened by name only once its properties
+prove it ours (ID, owner, VM type and journalled runtime ID). Its own creating
+handle, proven right after create, is trusted for cleanup even when that proof
+later fails: after a failed start HCS reports the same system as an unowned
+`Container` with no runtime ID. Closing that handle ends the guest, and
+absence is still confirmed by name before its storage and network are removed.
+
+The guest's RTC holds host local time and the image reads it in its own time
+zone; the creation document has no time-sync channel. The image factory keeps
+the template's time zone and RTC handling, so the provider's `WaitReady` sets the
+guest clock from the host's UTC time, sent on stdin to a fixed command, and
+refuses a guest still more than 5 s off. GitHub rejects a runner token from a
+skewed clock. The clock is set through local time, so in the guest's
+fall-back hour it can land an hour off; the check then refuses the guest
+rather than accept it. Likewise, the Windows runner launcher, shared with App
+Sandbox guests, gives the runner a process-scope `RemoteSigned` execution
+policy when neither the CurrentUser nor the LocalMachine scope sets one that
+allows local scripts and none is inherited, because the runner dot-sources a
+script file for its hooks and every `powershell` step. A Group Policy setting
+outranks it and is left as it is.
+
+Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
+above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated
+/28 from 10.251.0.0/16, with a MAC derived from its name. An owned stateless
+VFP layer on its port denies the host's interface prefixes and all IPv6, and
+allows public IPv4.
+
+- **Plan:** fresh native IDs, the subnet and a snapshot of the host's
+  effective denial are journalled with the intent, before any native
+  mutation. A new plan avoids every journalled subnet. Other guests' switches
+  are private prefixes that are already denied, so they do not change the
+  snapshot.
+- **Create:** the switch and endpoint exist before the compute system, and the
+  endpoint is the creation document's only NIC.
+- **Protect:** if the switch port already exists after create, the VM host
+  installs and verifies the layer before start. Otherwise it does so right
+  after start, before the guest is reported. The guest's timings record which
+  path ran. Either way, the started guest's runtime ID must match the
+  endpoint's VM binding. So far the port has appeared only at start, so a
+  guest runs for about a second before its layer is in place.
+- **Invariant:** nothing untrusted reaches a guest before its layer is
+  verified. Ordering guarantees this, not timing:
+  - The VM host reports a create only after the layer is installed and
+    verified, and the provider sends nothing to the guest before that.
+  - Until then only the pinned image runs, from a fresh differencing disk and
+    fresh firmware state.
+  - Its firmware could try network boot only if that disk failed to boot. Such
+    a guest never becomes ready, so it receives nothing and is discarded.
+    Pinning the firmware's boot entry to the disk (`BootThis` with
+    `StopOnBootFailure`) made HCS refuse to start the guest, so it is not used.
+
+  The window after start is accepted on these terms. A change that lets
+  anything untrusted run earlier must close the window first. Examples are
+  reusing a guest or disk across jobs, or a guest agent that takes input
+  before readiness.
+- **Teardown:** the endpoint and switch are deleted only after the compute
+  system is confirmed absent and its port is disconnected, retrying while it
+  stays connected. The disconnected port itself remains until its endpoint is
+  deleted. A native network that does not match its plan is retained.
+- **Guard:** every 10 s the VM host reproves each networked guest: switch,
+  endpoint, runtime binding, connected port, VFP rules, and an unchanged host
+  denial.
+  - A failing guest is quarantined. Its port is blocked, or the guest is
+    destroyed if blocking fails. It reports stopped until its owner destroys
+    it.
+  - Admission stays closed while a pass fails or any guest is quarantined. It
+    reopens only after a pass that checked every networked guest successfully.
+    A canceled pass changes nothing.
+  - The guard polls. It does not react atomically to an interface change.
+
+Off and Stop release all guest CPU, memory and GPU. When the VM host is
+installed as a service, Off also stops it, leaving the host free for other GPU
+work. An optional warm spare keeps one booted, unregistered guest ready while
+On. It is a durable runtime setting like the mode, so it can be switched without
+editing configuration.
+
+Bivouac never enables Windows features, installs host drivers, changes boot
+configuration or requests a reboot. Hyper-V's compute and network services
+must already be present.
+
+Prepared images are built once by the image factory (`internal/imagefactory`,
+`bivouac image`) from a generalized App Sandbox template and published as a
+single standalone VHDX. At runtime they are pinned by file identity, protected
+ACL and deny-write handles, not hashed per job.
+
+- **Template safety:** production App Sandbox CI boots the same templates, so
+  the factory only reads one. It copies the template into its own protected
+  workspace, hashing as it copies, and builds on a differencing child of the
+  copy. Mounts, VM access grants and the boot touch only files the build
+  created.
+- **Inspection gate:** before anything boots, an offline inspection of the
+  child must show a template generalized to OOBE with no answer-file pointer,
+  no configured runner and no bivouac job state. Its facts are public and
+  recorded; answer-file values and file contents are never read into them.
+- **Build:** one elevated foreground process boots the child with GPU-PV and
+  no NIC. Windows setup runs from a generated answer file and setup media
+  with pinned App Sandbox components. The guest agent copies the host's GPU
+  driver into the image, so runtime guests decline driver copies. The build
+  checks hardware rendering, sanitizes (no registration, setup files or
+  authorized keys; a fresh random console password held only as the LSA
+  autologon secret; fresh SSH host keys on each guest's boot) and requires a
+  graceful exit. It then flattens child and copy into the output and writes
+  the manifest last.
+- **Manifest:** source, asset and output hashes, the guest identity the
+  provider needs, the host GPU driver versions the image was built with, and
+  the lab batch's probe, validation and autologon pins.
+- The image's guest content matches the spike-built image's, so the
+  provider and the lab batch accept either. It still holds App Sandbox's
+  guest agent, OpenSSH and the PowerShell boot task, and its time zone and
+  execution policy are the template's.
+- Admission does not yet compare the host GPU driver with the one the image
+  was built with; rebuild the image after a host driver update.
 
 ## Optional containers on macOS
 
@@ -1047,14 +1330,17 @@ Windows-hosted providers use a guest-loopback listener on the existing owned SSH
 transport. The host terminates TLS and serves only the cache HTTP handler through
 SSH channels; it does not relay arbitrary guest connections to host TCP sockets.
 The SSH host key must already be pinned by normal guest preparation, and the
-provider repeats ownership/network verification before cache setup or JIT.
+provider repeats its current admission proof before cache setup or JIT. HCS
+checks ownership and running state (quarantine reports stopped); its VM host
+verifies the deny layer during create and reproves it every 10 s, without a
+new synchronous policy check.
 No NIC allow rule, host trust change, host directory share, external service or
 automatic privileged startup is needed. Host cache configuration is restricted
 to literal IPv4 loopback. Each grant records its guest endpoint so archive leases
 remain reachable through the same transport. TLS identity and capabilities stay
 in memory on the host; bootstrap reaches only the disposable guest over stdin.
 
-The shared Node preload is used by all three adapters. Windows installs temporary
+The shared Node preload is used by every guest adapter. Windows installs temporary
 machine root trust inside the clone and exports its logical root collection
 for OpenSSL clients. Guest administrator access avoids the interactive protected
 CurrentUser root-store consent that fails over SSH. Proxy leaf certificates name

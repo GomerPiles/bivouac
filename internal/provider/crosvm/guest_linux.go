@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
+	"github.com/GomerPiles/bivouac/internal/command"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/redact"
 )
 
@@ -256,7 +256,7 @@ func persistentPublicDNS(ctx context.Context) (dnsPreparation, error) {
 			return dnsPreparation{}, errors.New("generic image needs NetworkManager or a static unmanaged resolver file")
 		}
 	}
-	return configurePublicDNS(ctx, nm, func() ([]byte, error) { return readBounded("/etc/resolv.conf", 65536) }, appsandbox.NativeCommands{})
+	return configurePublicDNS(ctx, nm, func() ([]byte, error) { return readBounded("/etc/resolv.conf", 65536) }, command.Native{})
 }
 func installRuntimeHelper(self string) error {
 	if self == preparedHelper {

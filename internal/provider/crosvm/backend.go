@@ -18,16 +18,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/command"
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/provider"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 )
 
 type NativeBackend struct {
 	mu       sync.Mutex
 	opts     Options
 	lock     *control.Lock
-	commands appsandbox.NativeCommands
+	commands command.Native
 	// alive proves whether a recorded native process still exists.
 	alive func(ProcessIdentity) (bool, error)
 }

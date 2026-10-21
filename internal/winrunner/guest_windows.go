@@ -1,6 +1,6 @@
 //go:build windows
 
-package appsandbox
+package winrunner
 
 import (
 	"archive/zip"
@@ -30,12 +30,57 @@ const guestBase = `C:\ProgramData\Bivouac\Guest`
 
 // Actions job hooks accept .ps1 on Windows, not .cmd. Failure to capture the
 // accepted job must fail setup rather than leave the manager treating it as idle.
-const windowsJobHookName = "job-started.ps1"
-const windowsJobHook = `$ErrorActionPreference='Stop'
+const jobHookName = "job-started.ps1"
+
+// executionPolicyVariable sets PowerShell's process-scope execution policy
+// for the runner and every process it starts.
+const executionPolicyVariable = "PSExecutionPolicyPreference"
+
+// configuredExecutionPolicy is Windows PowerShell's policy below the process
+// scope: CurrentUser if set, else LocalMachine, else "". Group Policy, which
+// outranks the process scope, is not read: nothing here can change it.
+func configuredExecutionPolicy() string {
+	for _, hive := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
+		if v := executionPolicyIn(hive); v != "" && !strings.EqualFold(v, "Undefined") {
+			return v
+		}
+	}
+	return ""
+}
+
+func executionPolicyIn(hive registry.Key) string {
+	k, err := registry.OpenKey(hive, `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = k.Close() }()
+	v, _, err := k.GetStringValue("ExecutionPolicy")
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// runnerExecutionPolicy returns the process policy the runner needs, or "".
+// The runner dot-sources a script file for its hooks and every powershell
+// step, which a client image's default (Restricted) or AllSigned refuses. A
+// guest that already allows scripts, or an inherited setting, is left alone.
+func runnerExecutionPolicy(inherited bool, configured string) string {
+	if inherited {
+		return ""
+	}
+	switch strings.ToLower(configured) {
+	case "", "undefined", "restricted", "allsigned":
+		return "RemoteSigned"
+	}
+	return ""
+}
+
+const jobHook = `$ErrorActionPreference='Stop'
 & 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest windows hook
 if($LASTEXITCODE -ne 0){throw 'Guest job identity capture failed'}
 `
-const windowsJobCompletedHook = `& 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest windows hook-completed
+const jobCompletedHook = `& 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest windows hook-completed
 exit 0
 `
 
@@ -73,8 +118,8 @@ func writeGuestJSON(name string, value any) error {
 	}
 	return root.Rename(tmp, name)
 }
-func loadGuestConfig() (guestConfig, error) {
-	var cfg guestConfig
+func loadGuestConfig() (Config, error) {
+	var cfg Config
 	self, err := os.Executable()
 	if err != nil || !strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac.exe")) {
 		return cfg, errors.New("guest adapter must run from the fixed disposable-guest installation")
@@ -83,20 +128,20 @@ func loadGuestConfig() (guestConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if json.Unmarshal(data, &cfg) != nil || !identifier(cfg.NativeName, 15) || !identifier(cfg.ControllerID, 64) || !identifier(cfg.User, 32) || !validRunnerPath(cfg.RunnerDir) ||
+	if json.Unmarshal(data, &cfg) != nil || !identifier(cfg.NativeName, 15) || !identifier(cfg.ControllerID, 64) || !identifier(cfg.User, 32) || !ValidRunnerDir(cfg.RunnerDir) ||
 		!strings.EqualFold(os.Getenv("COMPUTERNAME"), cfg.NativeName) || !strings.EqualFold(os.Getenv("USERNAME"), cfg.User) {
 		return cfg, errors.New("disposable guest identity differs")
 	}
-	if _, err := instanceKey(cfg.RunnerName); err != nil {
+	if _, err := instanceID(cfg.RunnerName); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-// RunWindowsGuest is the fixed helper copied into a disposable VM. It never
+// RunGuest is the fixed helper copied into a disposable VM. It never
 // loads the host config or touches its credential store. Interactive methods
 // are launched by guest Task Scheduler in the logged-in user's session.
-func RunWindowsGuest(ctx context.Context, mode string, out io.Writer) error {
+func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 	cfg, err := loadGuestConfig()
 	if err != nil {
 		return err
@@ -215,7 +260,7 @@ func processIdentity(pid uint32) (listenerIdentity, bool, error) {
 	}
 	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, true, nil
 }
-func recordedListener(cfg guestConfig) (listenerIdentity, bool, error) {
+func recordedListener(cfg Config) (listenerIdentity, bool, error) {
 	var identity listenerIdentity
 	data, err := readGuestFile(filepath.Join(guestBase, "listener.json"), 4096)
 	if errors.Is(err, os.ErrNotExist) {
@@ -290,7 +335,7 @@ func (w *guestLog) Write(data []byte) (int, error) {
 	_, err := w.sink.Write(data)
 	return n, err
 }
-func guestListener(ctx context.Context, cfg guestConfig) error {
+func guestListener(ctx context.Context, cfg Config) error {
 	if _, _, err := interactiveDesktop(); err != nil {
 		return err
 	}
@@ -316,11 +361,11 @@ func guestListener(ctx context.Context, cfg guestConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(guestBase, windowsJobHookName), []byte(windowsJobHook), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(guestBase, jobHookName), []byte(jobHook), 0o600); err != nil {
 		return err
 	}
 	completedHook := filepath.Join(guestBase, "job-completed.ps1")
-	if err := os.WriteFile(completedHook, []byte(windowsJobCompletedHook), 0o600); err != nil {
+	if err := os.WriteFile(completedHook, []byte(jobCompletedHook), 0o600); err != nil {
 		completedHook = ""
 	}
 	output, err := os.OpenFile(filepath.Join(guestBase, "runner.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -334,13 +379,18 @@ func guestListener(ctx context.Context, cfg guestConfig) error {
 	binary := filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener.exe")
 	cmd := exec.Command(binary, "run")
 	cmd.Dir = cfg.RunnerDir
+	inheritedPolicy := false
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
+		inheritedPolicy = inheritedPolicy || strings.EqualFold(key, executionPolicyVariable)
 		if !strings.EqualFold(key, "PATH") && !strings.HasPrefix(strings.ToUpper(key), "ACTIONS_RUNNER_INPUT_") && !strings.HasPrefix(strings.ToUpper(key), "ACTIONS_RUNNER_HOOK_") {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
-	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(guestBase, windowsJobHookName))
+	if policy := runnerExecutionPolicy(inheritedPolicy, configuredExecutionPolicy()); policy != "" {
+		cmd.Env = append(cmd.Env, executionPolicyVariable+"="+policy)
+	}
+	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(guestBase, jobHookName))
 	if completedHook != "" {
 		cmd.Env = append(cmd.Env, "ACTIONS_RUNNER_HOOK_JOB_COMPLETED="+completedHook)
 	}
@@ -384,7 +434,7 @@ func guestListener(ctx context.Context, cfg guestConfig) error {
 		Code int `json:"code"`
 	}{code})
 }
-func guestRunnerStatus(cfg guestConfig) (provider.RunnerStatus, error) {
+func guestRunnerStatus(cfg Config) (provider.RunnerStatus, error) {
 	data, err := readGuestFile(filepath.Join(guestBase, "runner.exit"), 4096)
 	if err == nil {
 		var exit struct {
@@ -426,7 +476,7 @@ func guestRunnerStatus(cfg guestConfig) (provider.RunnerStatus, error) {
 	}
 	return status, nil
 }
-func guestCancel(cfg guestConfig) error {
+func guestCancel(cfg Config) error {
 	if _, _, err := interactiveDesktop(); err != nil {
 		return err
 	}
@@ -456,7 +506,7 @@ func guestCancel(cfg guestConfig) error {
 	}
 	return os.WriteFile(filepath.Join(guestBase, "cancelled"), []byte("requested"), 0o600)
 }
-func guestDiagnostics(cfg guestConfig, out io.Writer) error {
+func guestDiagnostics(cfg Config, out io.Writer) error {
 	// The archive is untrusted at the host boundary and is validated/redacted
 	// again there. Only the listener log and official _diag are selected here.
 	destination := filepath.Join(os.Getenv("USERPROFILE"), "bivouac-diagnostics.zip")

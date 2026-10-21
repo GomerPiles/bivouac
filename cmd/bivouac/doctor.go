@@ -23,6 +23,10 @@ type check struct {
 	level, name, detail string
 }
 
+// errVMHostStopped is an installed VM host service that is stopped, which
+// is normal while CI is off.
+var errVMHostStopped = errors.New("VM host service installed and stopped; bivouac on starts it")
+
 func (e env) doctor(ctx context.Context, args []string) error {
 	var withGitHub bool
 	if err := parseFlags("doctor", args, func(fs *flag.FlagSet) {
@@ -98,6 +102,20 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			add("PASS", "appsandbox "+name, "authenticated protected broker and local transport/package settings; no VM started")
 			add("WARN", "Windows validation", "experimental: live broker/guest lifecycle, isolation, and GitHub job checks remain required")
 			if p.AppSandbox.CPU > host.CPUs-cfg.Budget.ReserveCPU || (host.MemoryBytes > 0 && p.AppSandbox.MemoryGB > int(host.MemoryBytes>>30)-cfg.Budget.ReserveMemoryGB) {
+				add("FAIL", "budget "+name, "guest resources exceed host capacity after reservations")
+			}
+			continue
+		}
+		if p.Type == "hcs" {
+			if err := checkVMHost(ctx, *p.HCS); errors.Is(err, errVMHostStopped) {
+				add("WARN", "hcs "+name, err.Error())
+			} else if err != nil {
+				add("FAIL", "hcs "+name, err.Error())
+			} else {
+				add("PASS", "hcs "+name, "VM host serving image "+p.HCS.Image+" within its limits; no VM started")
+			}
+			add("WARN", "Windows validation", "experimental: VM host networking, runner lifecycle and GitHub job checks remain required")
+			if p.HCS.CPU > host.CPUs-cfg.Budget.ReserveCPU || (host.MemoryBytes > 0 && p.HCS.MemoryGB > int(host.MemoryBytes>>30)-cfg.Budget.ReserveMemoryGB) {
 				add("FAIL", "budget "+name, "guest resources exceed host capacity after reservations")
 			}
 			continue

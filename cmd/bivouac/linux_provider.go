@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/state"
 )
@@ -16,7 +17,12 @@ func buildLinuxProvider(_ context.Context, name string, cfg config.Crosvm, store
 	if err != nil {
 		return nil, err
 	}
-	guest, err := crosvm.NewSSHGuest(crosvm.SSHOptions{StateDir: filepath.Join(filepath.Dir(store.Path()), "crosvm", name), Helper: cfg.Helper, Key: cfg.SSHKey, User: cfg.User})
+	key, err := linuxGuestKey(cfg.SSHKey)
+	if err != nil {
+		backend.Close()
+		return nil, err
+	}
+	guest, err := crosvm.NewSSHGuest(crosvm.SSHOptions{StateDir: filepath.Join(filepath.Dir(store.Path()), "crosvm", name), Helper: cfg.Helper, Key: key, User: cfg.User})
 	if err != nil {
 		backend.Close()
 		return nil, err
@@ -27,4 +33,13 @@ func buildLinuxProvider(_ context.Context, name string, cfg config.Crosvm, store
 		return nil, err
 	}
 	return p, nil
+}
+
+// linuxGuestKey keeps the existing default: without ssh_key, Linux guests use
+// the App Sandbox guest key already provisioned on the Windows host.
+func linuxGuestKey(configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	return appsandbox.DefaultSSHKey()
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/secret"
+	"github.com/GomerPiles/bivouac/internal/winhost"
 )
 
 // Inspection intentionally bypasses config/state/credential-store setup.
@@ -86,7 +87,7 @@ func appsandboxBroker(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = appsandbox.CheckProtectedFile(configPath); err != nil {
+	if err = winhost.CheckProtected(configPath); err != nil {
 		return fmt.Errorf("broker configuration is not administrator-protected: %w", err)
 	}
 	f, err := os.Open(configPath)

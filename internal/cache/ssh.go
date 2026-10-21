@@ -66,6 +66,18 @@ func (c lossConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// SSHLoss records a cache transport's in-flight requests on its SSH socket's
+// first failure. Wrap the socket with Conn before the SSH handshake, then pass
+// the same SSHLoss to AttachSSHClient. Each SSHLoss serves one transport.
+type SSHLoss struct {
+	transport *sshTransport
+	claimed   atomic.Bool
+}
+
+func NewSSHLoss() *SSHLoss { return &SSHLoss{transport: &sshTransport{}} }
+
+func (l *SSHLoss) Conn(c net.Conn) net.Conn { return lossConn{Conn: c, lost: l.transport.lost} }
+
 func (t *sshTransport) serve(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.active.Add(1)
@@ -221,13 +233,40 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	stopCancel := context.AfterFunc(ctx, func() { _ = socket.Close() })
 	defer stopCancel()
 	_ = socket.SetDeadline(time.Now().Add(15 * time.Second))
-	transport := &sshTransport{}
-	conn, channels, requests, err := ssh.NewClientConn(lossConn{Conn: socket, lost: transport.lost}, b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms})
+	loss := NewSSHLoss()
+	conn, channels, requests, err := ssh.NewClientConn(loss.Conn(socket), b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms})
 	if err != nil {
 		_ = socket.Close()
 		return nil, errors.New("cache SSH identity or authentication failed")
 	}
 	client := ssh.NewClient(conn, channels, requests)
+	bootstrap, err := s.AttachSSHClient(ctx, name, client, loss)
+	_ = socket.SetDeadline(time.Time{})
+	return bootstrap, err
+}
+
+// AttachSSHClient takes ownership of a dedicated, already-authenticated client
+// to a currently verified owned guest whose host key the caller has pinned.
+// It closes the client on failure, revocation or service shutdown. Cancellation
+// bounds attachment only; a successful transport outlives ctx. The caller must
+// not share this client with command sessions or close it after handing it off.
+// loss must be the unused SSHLoss whose Conn wrapped the client's socket.
+func (s *Service) AttachSSHClient(ctx context.Context, name string, client *ssh.Client, loss *SSHLoss) ([]byte, error) {
+	if client == nil {
+		return nil, errors.New("cache SSH client unavailable")
+	}
+	if loss == nil || !loss.claimed.CompareAndSwap(false, true) {
+		_ = client.Close()
+		return nil, errors.New("cache SSH loss monitor missing or reused")
+	}
+	transport := loss.transport
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancel()
+	u, err := url.Parse(s.url)
+	if ctx.Err() != nil || err != nil || u.Hostname() != "127.0.0.1" {
+		_ = client.Close()
+		return nil, errors.New("cache SSH attachment requires active context and loopback TLS identity")
+	}
 	listener, err := client.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = client.Close()
@@ -238,7 +277,6 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 		_ = client.Close()
 		return nil, errors.New("guest cache listener not loopback")
 	}
-	_ = socket.SetDeadline(time.Time{})
 	bootstrap, err := s.issueAt(name, "https://"+listener.Addr().String())
 	if err != nil {
 		_ = client.Close()
@@ -249,6 +287,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	transport.server = server
 	var issued Bootstrap
 	if json.Unmarshal(bootstrap, &issued) != nil {
+		clear(bootstrap)
 		_ = transport.Close()
 		return nil, errors.New("cache bootstrap unavailable")
 	}
@@ -256,6 +295,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	grant, valid := s.grants[issued.Token]
 	if s.closed || !valid || grant.name != name {
 		s.mu.Unlock()
+		clear(bootstrap)
 		_ = transport.Close()
 		return nil, errors.New("cache closed during SSH attachment")
 	}

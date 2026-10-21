@@ -46,6 +46,10 @@ func droppableSSHFixture(t *testing.T) (SSHBinding, func()) {
 }
 
 func sshFixture(t *testing.T, beforeForward func()) (SSHBinding, func()) {
+	return sshFixtureWithListenerHook(t, beforeForward, nil)
+}
+
+func sshFixtureWithListenerHook(t *testing.T, beforeForward, beforeListen func()) (SSHBinding, func()) {
 	t.Helper()
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -133,6 +137,9 @@ func sshFixture(t *testing.T, beforeForward func()) (SSHBinding, func()) {
 					if req.Type != "tcpip-forward" || ssh.Unmarshal(req.Payload, &bind) != nil || bind.Address != "127.0.0.1" || bind.Port != 0 {
 						_ = req.Reply(false, nil)
 						continue
+					}
+					if beforeListen != nil {
+						beforeListen()
 					}
 					remote, err := net.Listen("tcp", "127.0.0.1:0")
 					if err != nil {
@@ -273,6 +280,146 @@ func TestSSHCacheRequiresPriorPinnedHostIdentity(t *testing.T) {
 	b.Address = "10.0.0.1:22"
 	if _, err := s.AttachSSH(context.Background(), "guest", b); err == nil {
 		t.Fatal("non-loopback SSH binding accepted")
+	}
+}
+
+func authenticatedCacheClient(t *testing.T, b SSHBinding) (*ssh.Client, *SSHLoss) {
+	t.Helper()
+	key, err := os.ReadFile(b.KeyFile)
+	if err != nil {
+		t.Fatal("client key unavailable")
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	clear(key)
+	if err != nil {
+		t.Fatal("client key invalid")
+	}
+	check, err := knownhosts.New(b.KnownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	algorithms, err := pinnedAlgorithms(b.KnownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := net.DialTimeout("tcp", b.Address, 5*time.Second)
+	if err != nil {
+		t.Fatal("fixture SSH transport unavailable")
+	}
+	loss := NewSSHLoss()
+	conn, channels, requests, err := ssh.NewClientConn(loss.Conn(socket), b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms, Timeout: 5 * time.Second})
+	if err != nil {
+		_ = socket.Close()
+		t.Fatal("fixture SSH authentication failed")
+	}
+	client := ssh.NewClient(conn, channels, requests)
+	t.Cleanup(func() { _ = client.Close() })
+	return client, loss
+}
+
+func TestSSHCacheCallerProvidedClientOwnership(t *testing.T) {
+	for _, mode := range []string{"revoke", "shutdown", "canceled", "closed-service"} {
+		t.Run(mode, func(t *testing.T) {
+			backend := httptest.NewTLSServer(http.NotFoundHandler())
+			defer backend.Close()
+			s, _, _ := testService(t, backend)
+			s.EnableReleaseProxy()
+			binding := cacheSSHFixture(t)
+			client, loss := authenticatedCacheClient(t, binding)
+			independent, _ := authenticatedCacheClient(t, binding)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if mode == "canceled" {
+				cancel()
+			}
+			if mode == "closed-service" {
+				s.Close()
+			}
+			data, err := s.AttachSSHClient(ctx, "guest", client, loss)
+			defer clear(data)
+			if mode == "canceled" || mode == "closed-service" {
+				if err == nil {
+					t.Fatal("attachment accepted after cancellation or shutdown")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				cancel() // Successful attachment must outlive its setup context.
+				var b Bootstrap
+				if json.Unmarshal(data, &b) != nil {
+					t.Fatal("invalid bootstrap")
+				}
+				roots := x509.NewCertPool()
+				roots.AppendCertsFromPEM([]byte(b.CA))
+				httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}, Timeout: 5 * time.Second}
+				defer httpClient.CloseIdleConnections()
+				response, err := httpClient.Get(b.URL + "/ca.crl")
+				if err != nil {
+					t.Fatal("caller-provided transport unavailable")
+				}
+				_ = response.Body.Close()
+				if response.StatusCode != http.StatusOK {
+					t.Fatal("caller-provided transport did not serve public PKI")
+				}
+				if mode == "revoke" {
+					s.Revoke("guest")
+				} else {
+					s.Close()
+				}
+			}
+			ended := make(chan struct{})
+			go func() { _ = client.Wait(); close(ended) }()
+			select {
+			case <-ended:
+			case <-time.After(5 * time.Second):
+				t.Fatal("owned client survived attachment failure or revocation")
+			}
+			if _, _, err := independent.SendRequest("keepalive@bivouac", true, nil); err != nil {
+				t.Fatal("cache closure closed independent command client")
+			}
+		})
+	}
+}
+
+func TestSSHCacheCallerClientCancellationDuringAttachment(t *testing.T) {
+	requested, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	binding, _ := sshFixtureWithListenerHook(t, nil, func() {
+		close(requested)
+		<-release
+	})
+	backend := httptest.NewTLSServer(http.NotFoundHandler())
+	defer backend.Close()
+	s, _, _ := testService(t, backend)
+	client, loss := authenticatedCacheClient(t, binding)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ended := make(chan error, 1)
+	go func() {
+		data, err := s.AttachSSHClient(ctx, "guest", client, loss)
+		clear(data)
+		ended <- err
+	}()
+	select {
+	case <-requested:
+	case <-time.After(5 * time.Second):
+		t.Fatal("guest listener was not requested")
+	}
+	cancel()
+	select {
+	case err := <-ended:
+		if err == nil {
+			t.Fatal("canceled attachment succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation did not close blocked client")
+	}
+	s.mu.Lock()
+	attached := len(s.transports)
+	s.mu.Unlock()
+	if attached != 0 {
+		t.Fatal("canceled attachment retained transport")
 	}
 }
 
@@ -505,4 +652,28 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestAttachSSHClientRequiresItsOwnLossMonitor(t *testing.T) {
+	binding := cacheSSHFixture(t)
+	backend := httptest.NewTLSServer(http.NotFoundHandler())
+	defer backend.Close()
+	s, _, _ := testService(t, backend)
+	client, _ := authenticatedCacheClient(t, binding)
+	if _, err := s.AttachSSHClient(t.Context(), "guest", client, nil); err == nil {
+		t.Fatal("attachment accepted without a loss monitor")
+	}
+	if _, _, err := client.SendRequest("keepalive@bivouac", true, nil); err == nil {
+		t.Fatal("refused attachment left its client open")
+	}
+	first, loss := authenticatedCacheClient(t, binding)
+	data, err := s.AttachSSHClient(t.Context(), "guest", first, loss)
+	clear(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _ := authenticatedCacheClient(t, binding)
+	if _, err := s.AttachSSHClient(t.Context(), "other", second, loss); err == nil {
+		t.Fatal("attachment accepted a reused loss monitor")
+	}
 }

@@ -140,8 +140,10 @@ func (e env) run(ctx context.Context, args []string) error {
 		return fail(err)
 	}
 	err = m.Run(ctx)
-	if errors.Is(err, manager.ErrRefused) {
-		// A restart cannot help: report it in status and exit cleanly.
+	var activationErr *manager.ActivationError
+	if errors.Is(err, manager.ErrRefused) || errors.As(err, &activationErr) {
+		// Configuration conflicts and unavailable required runtimes use the
+		// startup-failure status path, without an automatic restart loop.
 		return fail(err)
 	}
 	log.Info("bivouac stopped", "error", err)
@@ -173,6 +175,13 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 				return nil, err
 			}
 			out[name] = lp
+		case "hcs":
+			hp, err := buildHCSProvider(name, *p.HCS, store)
+			if err != nil {
+				closeProviders(out)
+				return nil, err
+			}
+			out[name] = hp
 		case "appsandbox":
 			wp, err := buildWindowsProvider(ctx, name, *p.AppSandbox, store)
 			if err != nil {
