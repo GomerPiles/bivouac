@@ -294,18 +294,21 @@ either way:
 Nothing reboots, enables Windows features or installs drivers. Hyper-V's
 compute and network services must already be running.
 
-1. Place `bivouac.exe` in an administrator-protected directory, such as
-   `%ProgramFiles%\bivouac`. The service runs that file as SYSTEM, so the
-   ordinary user must not be able to replace it.
-2. Write the configuration in a protected directory too, for example
-   `%ProgramData%\bivouac\vmhost.json`:
+Keep everything elevated in one administrator-protected folder:
+`%ProgramFiles%\bivouac\vmhost` holds the binary, its configuration, the
+journal root and the images, and `%ProgramFiles%\bivouac\image-factory` holds
+the factory's configuration and pinned inputs.
+
+1. Place `bivouac.exe` in `%ProgramFiles%\bivouac\vmhost`. The service runs
+   that file as SYSTEM, so the ordinary user must not be able to replace it.
+2. Write the configuration beside it as `vmhost.json`:
 
    ```json
    {
-     "root": "C:\\ProgramData\\bivouac\\vmhost",
+     "root": "C:\\Program Files\\bivouac\\vmhost\\root",
      "controller": "host-1",
      "accounts": ["<the manager user's SID, from whoami /user>"],
-     "images": {"windows": "D:\\RunnerImages\\prepared.vhdx"},
+     "images": {"windows": "C:\\Program Files\\bivouac\\vmhost\\images\\<build ID>\\disk.vhdx"},
      "max_instances": 2,
      "max_cpu": 8,
      "max_memory_mb": 16384
@@ -313,14 +316,18 @@ compute and network services must already be running.
    ```
 
    Images must also be administrator-protected; the Hyper-V VM group may
-   read them.
+   read them. The image factory publishes them this way.
 3. Either install the service or run in the foreground. Both commands are
    elevated:
 
    ```powershell
-   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost install --config C:\ProgramData\bivouac\vmhost.json
-   & "$env:ProgramFiles\bivouac\bivouac.exe" vmhost run --config C:\ProgramData\bivouac\vmhost.json
+   & "$env:ProgramFiles\bivouac\vmhost\bivouac.exe" vmhost install --config "$env:ProgramFiles\bivouac\vmhost\vmhost.json"
+   & "$env:ProgramFiles\bivouac\vmhost\bivouac.exe" vmhost run --config "$env:ProgramFiles\bivouac\vmhost\vmhost.json"
    ```
+
+   A stopped service's binary can be replaced in place. To move the service,
+   stop it, run `vmhost uninstall`, and install again from the new place; the
+   service records its binary's path.
 
    Either command creates the protected journal root if it is absent.
    Installing registers a manual-start service that restarts after a crash,
