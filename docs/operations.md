@@ -369,8 +369,16 @@ runner_dir = 'C:\actions-runner'
 
 `bivouac doctor` checks that the VM host is serving this image within its
 limits, and warns when the installed service is merely stopped. The provider
-asks for an isolated network on every guest. It has run validation jobs but
-no production routing yet.
+asks for an isolated network on every guest.
+
+To switch an existing App Sandbox provider to `hcs`, turn CI Off and wait for
+the drain. Back up `config.toml` and `portable.json`, stage the new binary
+under a new file name and point `portable.json` at it. Then change
+`[providers.windows]` `type` to `hcs` and replace its `appsandbox` table
+with the `hcs` table above, keeping `scaleset`, its labels and the size.
+Run `doctor`, then CI On. Roll back by restoring both files with CI Off.
+The App Sandbox broker may have closed admission after HCS guests' adapters
+appeared; restart it if it has.
 
 The host cache works as for App Sandbox, including the optional release proxy
 and upload storage. With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`

@@ -298,6 +298,13 @@ production CI Off, on three jobs, each on a fresh guest:
 - `bivouac off --wait` exited in 11 s, with the service stopped, no guest
   adapter left and every runner deregistered.
 
+Production Windows CI now runs on the `hcs` provider: the same scale set,
+labels and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. CI On
+started the VM host service. The first real Windows job ran beside a Linux
+job and succeeded: listening 46 s after create (clone 7 s, boot 21 s, JIT
+registration 7 s), teardown 1.8 s, runner deregistered. App Sandbox stays
+installed for rollback.
+
 Open:
 
 - `Deactivate` refusing to stop a VM host that holds guests (unit-tested
@@ -311,8 +318,8 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- Production routing, longer and heavier jobs, and recovery after a daemon or
-  host restart with HCS guests.
+- Longer and heavier jobs over time, and recovery after a daemon or host
+  restart with HCS guests.
 - Image factory paths not yet live: a template without a runner, a failed
   build's cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
