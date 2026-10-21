@@ -322,8 +322,18 @@ func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
+	// TEMP can be an 8.3 alias (CI runners use one); the final path is long.
+	short, err := windows.UTF16PtrFromString(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetLongPathName(short, &long[0], windows.MAX_LONG_PATH)
+	if err != nil || n == 0 || n >= windows.MAX_LONG_PATH {
+		t.Fatal("long temp path unavailable")
+	}
 	actual, err := finalPath(windows.Handle(f.Fd()))
-	if err != nil || !strings.EqualFold(actual, f.Name()) {
+	if err != nil || !strings.EqualFold(actual, windows.UTF16ToString(long[:n])) {
 		t.Fatal("final handle path mismatch")
 	}
 	if _, err = missingOwner("expected-template"); err == nil {
