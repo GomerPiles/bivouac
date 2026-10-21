@@ -396,101 +396,84 @@ adapter remains before turning production CI On.
 
 ## Direct HCS image factory
 
-`bivouac image build` prepares an image for the direct HCS provider from a
-generalized App Sandbox template. `image inspect` runs the same copy and offline
-inspection without booting. Both run in one elevated foreground process,
-use HCS directly, and attach no network adapter. Production CI may keep
-running. Before a build boots, admission requires guest memory plus 10 GiB
-available and plus 8 GiB commit headroom; pressure below 6 GiB available or 2 GiB commit headroom
-cancels only the build.
+`bivouac image build` prepares an image for the `hcs` provider from a
+generalized App Sandbox template. `bivouac image inspect` runs the same copy
+and offline checks without booting, so a template can be checked first. Both
+run elevated in the foreground (one UAC prompt each), drive HCS directly and
+attach no network adapter, so production CI may keep running. Neither touches
+the VM host service, its journal or CI mode.
 
-1. Prepare a separate administrator-protected image root and JSON configuration
-   under a protected parent. Use a separate `BIVOUAC_HOME` for validation.
-   Keep `image_root` outside App Sandbox's template and instance trees. Short
-   path aliases containing `~` are refused; final source/root paths are compared
-   before use. Allow at least source size × 2.2 plus 10 GiB free before copying.
-   Before publication, the volume must still have source-copy size plus child
-   size plus 5 GiB free. Failed checks report available/required byte counts.
-   Configuration fields are `source` (an absolute standalone VHDX path),
-   `source_sha256`, optional `expected_template`, `guest_user`, `image_root`,
-   `cpu` (default 4, range 1–4), `memory_mb` (default 8192, range 1024–8192), and
-   `timeout_seconds` (default 900, range 300–3600). That timeout covers only guest
-   creation through confirmed absence; copying, hashing and flattening use the
-   caller's cancellation and size bounds. When `expected_template` is set, an
-   owner record is required. Its name, hash and `export-complete` phase must agree.
-2. Pin `render_probe` as `{"source":"<absolute path>","sha256":"<hash>"}`.
-   `setup_assets` is an array of that same object plus `name`. Include
-   `appsandbox-agent.exe`, `appsandbox-input.exe`, `appsandbox-displays.exe`,
-   `AppSandboxVDD.dll`, `AppSandboxVDD.inf`, `AppSandboxVDD.cat`, and `devcon.exe`.
-   Optional `OpenSSH.msi` and `RUNNER.ZIP` supply missing SSH and runner installs.
-   An absent runner requires a pinned `RUNNER.ZIP` before boot.
-   Pinned agent/helper files overwrite the child's existing copies, and the
-   agent is installed as in the spike. VDD and OpenSSH installation is skipped
-   when already present. The runner is reused only when unconfigured; otherwise
-   the build refuses it before boot. Inputs must be protected.
-   Set `drivers` to an array of existing GPU driver directories directly under
-   `%SystemRoot%\System32\DriverStore\FileRepository`; their owned copies are
-   shared read-only to the build guest.
-3. Launch once from an administrator shell (one UAC prompt for the shell):
+The template is only read. The factory copies it into its own workspace,
+hashing as it copies, and never changes the template's file, directory, ACL
+or owner record. It mounts, grants and boots only files it created.
+
+1. Write a JSON configuration in an administrator-protected directory. The
+   inputs must be protected too:
+
+   ```json
+   {
+     "source": "<template dir>\\disk.vhdx",
+     "source_sha256": "<the owner record's SHA256>",
+     "expected_template": "<template name>",
+     "guest_user": "ciuser",
+     "image_root": "<protected parent>\\Images",
+     "render_probe": {"source": "<path>", "sha256": "<hash>"},
+     "setup_assets": [{"name": "appsandbox-agent.exe", "source": "<path>", "sha256": "<hash>"}],
+     "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
+   }
+   ```
+
+   - `setup_assets` must include `appsandbox-agent.exe`,
+     `appsandbox-input.exe`, `appsandbox-displays.exe`, `AppSandboxVDD.dll`,
+     `.inf` and `.cat`, and `devcon.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are
+     optional; a template without a runner needs `RUNNER.ZIP`.
+   - `drivers` names the host's GPU driver directories. The build copies
+     them into the image, so an image matches the host driver it was built
+     with.
+   - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
+     `timeout_seconds` (default 900) bounds the guest's run, not the copy.
+   - Keep `image_root` outside App Sandbox's template and instance trees. Its
+     volume needs about 2.2 times the template's size plus 10 GiB free.
+2. Inspect, then build, from an elevated shell:
 
    ```text
    bivouac image inspect --config "<protected parent>\image-factory.json"
    bivouac image build --config "<protected parent>\image-factory.json"
    ```
 
-   MachinePolicy/UserPolicy execution policy GPO overrides the scripts' `-ExecutionPolicy Bypass`.
-   The source disk is held read-only while it is copied and hashed. Its file,
-   directory, ACL and owner record are never modified. Do not refresh or replace
-   that template during the copy: the read handle denies write/delete sharing.
-   Only the owned child is mounted, read-write, while hive APIs only query it.
-   Offline inspection must prove `generalized_to_oobe`, setup/OOBE in
-   progress, no explicit answer pointer, and an empty or absent
-   `Windows\Panther\Unattend` directory. Inspected facts remain in the build
-   record if this gate fails; an exported template is not proof of this state.
-   Facts include component hashes, service presence/ImagePath, VDD evidence,
-   runner state/version, `ProgramData\Bivouac` subdirectories and whether the
-   configured user exists in SAM. Optional unreadable or oversized metadata is
-   unknown or omitted. Cached Panther answer-file facts are booleans only
-   (passes, matching local account and autologon); values are never reported.
-   Unrecognized service arguments are omitted and marked redacted. Runner
-   states are `absent`, `unconfigured`, `configured` (registration markers),
-   `residue` (nonempty `_work`/`_diag`), `incomplete`, and `invalid` (links or
-   invalid directory types). Only absent/unconfigured runners pass. Residue
-   facts list at most 64 safe top-level names per directory, with directory
-   flags; unusual names are counted and contents are never read.
-   `ProgramData\Bivouac\Guest` fails the gate; `ImagePolicy` alone is allowed. Inspect prints its build ID
-   and facts before workspace cleanup, and exits nonzero on failed inspection
-   or an ineligible image. It never creates or starts a compute system.
-4. A successful build publishes `<image_root>\<build ID>\disk.vhdx`, a standalone
-   flattened image, and writes `manifest.json` last. It never reuses an output
-   directory. The manifest binds source/asset/image hashes, guest identity,
-   render/validation/autologon pins for the lab batch, driver INF versions,
-   runner version when known, VCS revision and coarse phase durations. Stdout
-   prints `image_path` for `vmhost.json` and `guest_name`/`guest_user` for
-   `[providers.windows.hcs]`; that provider's `image` still names the VM host's
-   configured image key. Keep the image administrator-protected. The Hyper-V
-   VM group has read access to the disk. Validate a fresh clone before promotion.
-   If publication succeeds but cleanup/recording fails, stdout still prints the
-   image values, a warning says the image is published, and exit status is nonzero.
-5. Workspaces live at `<image_root>\.builds\<build ID>` and public build records
-   beside them as `<build ID>.json`. Success removes the workspace. Failure
-   terminates only the creating handle's guest and requires confirmed native
-   absence before detach/removal. If cleanup is uncertain, keep the workspace
-   and retry, elevated, after the creating process has exited:
+   Both print the build's facts or result as JSON. A Group Policy execution
+   policy overrides the factory's own and can stop its scripts.
+3. The offline inspection gates the build. The template must be generalized
+   to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
+   A configured runner (`.runner`, `.credentials`), anything under its `_work`,
+   or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
+   runner's `_diag` by template preparation are allowed and are deleted during
+   setup. The record lists only public facts: component hashes, service
+   paths, runner state and residue names, never file contents or
+   answer-file values.
+4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
+   components, checks hardware rendering with the probe, removes setup files,
+   rotates the console password into the autologon secret, shuts down
+   cleanly and flattens the result. A build takes about 3 minutes plus the
+   copy. Admission waits for the guest's memory plus 10 GiB available and
+   8 GiB commit headroom, and the build cancels itself if available memory
+   falls below 6 GiB or commit headroom below 2 GiB.
+5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
+   VHDX, with `manifest.json` written last. The manifest records the source,
+   asset and image hashes, `guest_name`, `guest_user`, the driver versions and
+   the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
+   image at the disk and set the provider's `guest_name` and `guest_user` from
+   the build's output. A published directory is never reused.
+6. Build records stay in `<image_root>\.builds`. A failed build terminates its
+   own guest, confirms it absent and removes its workspace. If it could not
+   confirm that, it keeps the workspace; settle it later, elevated:
 
    ```text
    bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
    ```
 
-   Cleanup checks the protected record and ownership marker, acquires the
-   workspace's exclusive lock, and waits for absence; it refuses an active build.
-   Host failures retain numeric script step codes in the record. After a failed
-   guest run, once absence is confirmed, the owned child is inspected for the
-   setup failure's numeric step before removal. Cleanup detaches the owned child
-   and removes only that build's workspace and incomplete output. A matching
-   publication manifest left by an interrupted build preserves
-   that published output. Never erase ownership evidence to bypass a
-   retained build. Neither command changes the VM host service or CI mode.
+   Cleanup refuses a build that is still running, and never removes a
+   published image.
 
 ## Direct HCS lab batch
 

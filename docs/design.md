@@ -876,8 +876,8 @@ later fails: after a failed start HCS reports the same system as an unowned
 absence is still confirmed by name before its storage and network are removed.
 
 The guest's RTC holds host local time and the image reads it in its own time
-zone; the creation document has no time-sync channel. Until the image
-factory builds images that read a UTC RTC, the provider's `WaitReady` sets the
+zone; the creation document has no time-sync channel. The image factory keeps
+the template's time zone and RTC handling, so the provider's `WaitReady` sets the
 guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
 skewed clock. The clock is set through local time, so in the guest's
@@ -948,11 +948,38 @@ Bivouac never enables Windows features, installs host drivers, changes boot
 configuration or requests a reboot. Hyper-V's compute and network services
 must already be present.
 
-Prepared images are built once from an operator-supplied generalized image and
-published as a single VHDX. At runtime they are pinned by file identity,
-protected ACL and deny-write handles, not hashed per job. Each image records the
-host GPU driver it was built with, and admission refuses a host driver it does
-not match.
+Prepared images are built once by the image factory (`internal/imagefactory`,
+`bivouac image`) from a generalized App Sandbox template and published as a
+single standalone VHDX. At runtime they are pinned by file identity, protected
+ACL and deny-write handles, not hashed per job.
+
+- **Template safety:** production App Sandbox CI boots the same templates, so
+  the factory only reads one. It copies the template into its own protected
+  workspace, hashing as it copies, and builds on a differencing child of the
+  copy. Mounts, VM access grants and the boot touch only files the build
+  created.
+- **Inspection gate:** before anything boots, an offline inspection of the
+  child must show a template generalized to OOBE with no answer-file pointer,
+  no configured runner and no bivouac job state. Its facts are public and
+  recorded; answer-file values and file contents are never read into them.
+- **Build:** one elevated foreground process boots the child with GPU-PV and
+  no NIC. Windows setup runs from a generated answer file and setup media
+  with pinned App Sandbox components. The guest agent copies the host's GPU
+  driver into the image, so runtime guests decline driver copies. The build
+  checks hardware rendering, sanitizes (no registration, setup files or
+  authorized keys; a fresh random console password held only as the LSA
+  autologon secret; fresh SSH host keys on each guest's boot) and requires a
+  graceful exit. It then flattens child and copy into the output and writes
+  the manifest last.
+- **Manifest:** source, asset and output hashes, the guest identity the
+  provider needs, the host GPU driver versions the image was built with, and
+  the lab batch's probe, validation and autologon pins.
+- The image's guest content matches the spike-built image's, so the
+  provider and the lab batch accept either. It still holds App Sandbox's
+  guest agent, OpenSSH and the PowerShell boot task, and its time zone and
+  execution policy are the template's.
+- Admission does not yet compare the host GPU driver with the one the image
+  was built with; rebuild the image after a host driver update.
 
 ## Optional containers on macOS
 
