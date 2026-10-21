@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
@@ -133,12 +134,34 @@ func fixture(t *testing.T, network bool) (*Provider, *fakeHost, *fakeTransport) 
 		"bivouac-preflight.ps1": `{"ready":true,"session":1}`,
 		"-Mode prepare":         `{"ready":true,"session":1,"desktop":"Default"}`,
 		"guest windows status":  `{"State":"listening"}`,
+		".ToString('o')\"":      "2026-10-21T08:38:01.0000000Z\r\n",
 	}}
 	p, err := New(Options{Name: "windows", ControllerID: controller, Image: "windows", GuestName: "bivouac-image", GuestUser: "ciuser", CPU: 4, MemoryMB: 8192, GPU: true, RunnerDir: `C:\actions-runner`, Helper: helper, StateDir: t.TempDir()}, h, f)
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.now = func() time.Time { return hostNow }
 	return p, h, f
+}
+
+var hostNow = time.Date(2026, 10, 21, 8, 38, 0, 0, time.UTC)
+
+func TestWaitReadySetsTheGuestClockFromTheHost(t *testing.T) {
+	p, _, f := fixture(t, true)
+	if err := p.Create(t.Context(), spec()); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.WaitReady(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil {
+		t.Fatal(err)
+	}
+	last := f.calls[len(f.calls)-1]
+	if last.command != clockSync || string(last.stdin) != "2026-10-21T08:38:00.0000000Z\n" {
+		t.Fatal("clock not set from the host over stdin", last.command, string(last.stdin))
+	}
+	f.replies[".ToString('o')\""] = "2026-10-21T09:38:00.0000000Z"
+	if err := p.WaitReady(t.Context(), "bivouac-windows-0a1b2c3d"); err == nil || !strings.Contains(err.Error(), "1h0m0s off") {
+		t.Fatal("a guest clock left an hour off was accepted", err)
+	}
 }
 
 func spec() provider.Spec {

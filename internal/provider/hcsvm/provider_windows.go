@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -87,12 +88,17 @@ const (
 	preflight   = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File bivouac-preflight.ps1"
 	// The operation bound covers a VM host create or destroy and its cleanup.
 	operationTimeout = 5 * time.Minute
+	// clockSync reads a UTC time (ISO 8601, 7 fractional digits) from stdin,
+	// sets the guest clock to it and prints the guest's UTC time afterwards.
+	clockSync    = `powershell.exe -NoProfile -NonInteractive -Command "$t=[DateTime]::ParseExact([Console]::In.ReadLine().Trim(),'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind); Set-Date -Date $t.ToLocalTime() | Out-Null; [DateTime]::UtcNow.ToString('o')"`
+	maxClockSkew = 5 * time.Second
 )
 
 type Provider struct {
 	opts      Options
 	host      Host
 	transport Transport
+	now       func() time.Time // the host clock guests are set from
 
 	mu       sync.Mutex
 	sessions map[string]Session
@@ -114,7 +120,7 @@ func New(opts Options, host Host, transport Transport) (*Provider, error) {
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Provider{opts: opts, host: host, transport: transport, sessions: map[string]Session{}}, nil
+	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, sessions: map[string]Session{}}, nil
 }
 
 func (p *Provider) Name() string { return p.opts.Name }
@@ -312,6 +318,26 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	}
 	if json.Unmarshal(out, &desktop) != nil || !desktop.Ready || desktop.Session == 0 || desktop.Desktop != "Default" {
 		return errors.New("guest interactive desktop readiness was not proven")
+	}
+	return p.syncClock(ctx, s)
+}
+
+// syncClock sets the guest's clock from the host's. The guest reads its RTC,
+// which holds host local time, in the image's own time zone, and nothing
+// syncs it afterwards, so it can boot hours off; GitHub refuses the runner's
+// tokens from such a clock. The time travels on stdin, never in the command.
+func (p *Provider) syncClock(ctx context.Context, s Session) error {
+	host := p.now().UTC().Format("2006-01-02T15:04:05.0000000Z07:00") + "\n"
+	out, err := s.Run(ctx, clockSync, []byte(host), 256)
+	if err != nil {
+		return fmt.Errorf("set guest clock: %w", err)
+	}
+	guest, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
+	if err != nil {
+		return errors.New("guest clock was not reported")
+	}
+	if skew := guest.Sub(p.now()); skew > maxClockSkew || skew < -maxClockSkew {
+		return fmt.Errorf("guest clock is %s off the host's after correction", skew.Round(time.Second))
 	}
 	return nil
 }
