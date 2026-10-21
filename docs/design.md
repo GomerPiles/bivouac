@@ -777,9 +777,11 @@ connection: info, create, status, destroy or list.
     create-instance, so no account can serve the name.
   - The client refuses a pipe whose owner is neither SYSTEM nor
     Administrators, so a process that squats on the name is not trusted.
-    The owner is the creator's, and only an elevated or SYSTEM process can
-    own an object as either. An unelevated client cannot open a SYSTEM
-    service's process token, so the server process itself is not inspected.
+    The VM host sets the owner to Administrators explicitly. Only a token
+    holding Administrators or SYSTEM as an owner-eligible group (elevated or
+    SYSTEM, not a UAC-filtered token), or holding SeRestorePrivilege, can
+    assign either. An unelevated client cannot open a SYSTEM service's
+    process token, so the server process itself is not inspected.
 - Each guest belongs to the account that created it. Status, destroy and list
   see only that account's guests.
 - A create names a configured image, not a path. The VM host sets each

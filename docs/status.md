@@ -225,10 +225,12 @@ failure: HCS refuses them at create.
 The VM host service runs live. It was installed elevated from a protected
 directory with one UAC prompt and no reboot. The ordinary account then
 started and stopped it with the installer's rights (about 0.3 s each), and
-the pipe answered about 20 ms after start with an empty journal. The first
-attempt exposed a client bug: an unelevated client cannot open a SYSTEM
-service's process token, so it refused every service-hosted pipe. The client
-now checks the pipe's owner instead. Called directly, the provider's
+the pipe answered about 20 ms after start with an empty journal. The client
+trusts the pipe by its owner because an unelevated client cannot open a
+SYSTEM service's process token. The installed service predates the explicit
+`O:BA` owner and serves with its default owner, which is also
+Administrators. A foreground `vmhost run` with the explicit owner has not run
+live. Called directly, the provider's
 `Activate` started the stopped service and saw it serve in 0.27 s, and
 `Deactivate` found no guests and stopped it in 0.25 s. Both were no-ops when
 repeated. No guest has run under the service yet.

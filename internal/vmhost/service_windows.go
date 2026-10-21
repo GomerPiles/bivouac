@@ -58,8 +58,10 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		log.Warn("guests retained from an earlier VM host", "error", err)
 	}
 	// ListenPipe creates the first instance exclusively, so an existing
-	// server of this name, privileged or not, makes startup fail.
-	l, err := winio.ListenPipe(PipeName, &winio.PipeConfig{SecurityDescriptor: pipeDescriptor(cfg.Accounts)})
+	// server of this name, privileged or not, makes startup fail. The explicit
+	// Administrators owner is what clients trust, whatever the local policy
+	// for an administrator's default owner.
+	l, err := winio.ListenPipe(PipeName, &winio.PipeConfig{SecurityDescriptor: "O:BA" + pipeDescriptor(cfg.Accounts)})
 	if err != nil {
 		return fmt.Errorf("cannot serve the VM host pipe: %w", err)
 	}
