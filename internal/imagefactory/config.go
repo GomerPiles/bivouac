@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -97,7 +96,10 @@ func safeUser(s string) bool {
 	return true
 }
 func (c Config) Validate() error {
-	if !localPath(c.Source) || !strings.EqualFold(filepath.Ext(c.Source), ".vhdx") || !pin(c.SourceSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.Source) || within(filepath.Dir(c.Source), c.ImageRoot) {
+	// Configured paths are Windows paths whatever the build's OS, so split
+	// on backslashes rather than with filepath.
+	sourceDir := c.Source[:max(strings.LastIndex(c.Source, `\`), 0)]
+	if !localPath(c.Source) || !strings.HasSuffix(strings.ToLower(c.Source), ".vhdx") || !pin(c.SourceSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.Source) || within(sourceDir, c.ImageRoot) {
 		return errors.New("source and image root must be disjoint local absolute paths with a source SHA-256")
 	}
 	if !safeUser(c.GuestUser) || len(c.ExpectedTemplate) > 128 || strings.ContainsAny(c.ExpectedTemplate, "\\/:\x00\r\n") {
