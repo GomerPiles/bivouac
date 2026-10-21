@@ -194,7 +194,7 @@ func TestPipeIdentifiesCallersAndClientsRefuseUnprivilegedServers(t *testing.T) 
 	ctx, cancel := context.WithCancel(t.Context())
 	served := make(chan error, 1)
 	go func() { served <- s.Serve(ctx, l) }()
-	defer func() { cancel(); <-served }()
+	defer func() { cancel(); _ = <-served }()
 
 	trusting := &Client{pipe: name, verifyServer: func(windows.Handle) error { return nil }}
 	callCtx, done := context.WithTimeout(t.Context(), 10*time.Second)
