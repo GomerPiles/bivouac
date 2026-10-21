@@ -31,6 +31,39 @@ type sshTransport struct {
 	// Requests in progress. A guest deleted before revocation ends its
 	// transport while idle; only an ending with work in flight is reported.
 	active atomic.Int64
+	// active when the SSH socket first failed. x/crypto closes forwarded
+	// channels before Client.Wait returns, so a request can observe the loss
+	// and finish first; the socket error precedes that closure.
+	lostOnce   sync.Once
+	lostActive int64
+}
+
+func (t *sshTransport) lost() int64 {
+	t.lostOnce.Do(func() { t.lostActive = t.active.Load() })
+	return t.lostActive
+}
+
+// lossConn records the transport's in-flight requests on the SSH socket's
+// first read or write error, before the SSH library reacts to it.
+type lossConn struct {
+	net.Conn
+	lost func() int64
+}
+
+func (c lossConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil {
+		c.lost()
+	}
+	return n, err
+}
+
+func (c lossConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if err != nil {
+		c.lost()
+	}
+	return n, err
 }
 
 func (t *sshTransport) serve(next http.Handler) http.Handler {
@@ -188,7 +221,8 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	stopCancel := context.AfterFunc(ctx, func() { _ = socket.Close() })
 	defer stopCancel()
 	_ = socket.SetDeadline(time.Now().Add(15 * time.Second))
-	conn, channels, requests, err := ssh.NewClientConn(socket, b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms})
+	transport := &sshTransport{}
+	conn, channels, requests, err := ssh.NewClientConn(lossConn{Conn: socket, lost: transport.lost}, b.Address, &ssh.ClientConfig{User: b.User, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: check, HostKeyAlgorithms: algorithms})
 	if err != nil {
 		_ = socket.Close()
 		return nil, errors.New("cache SSH identity or authentication failed")
@@ -210,7 +244,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 		_ = client.Close()
 		return nil, err
 	}
-	transport := &sshTransport{client: client}
+	transport.client = client
 	server := &http.Server{Handler: transport.serve(s), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: serveTimeout, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	transport.server = server
 	var issued Bootstrap
@@ -229,7 +263,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	s.mu.Unlock()
 	go func() {
 		err := client.Wait()
-		if active := transport.active.Load(); active > 0 && !transport.closing.Load() {
+		if active := transport.lost(); active > 0 && !transport.closing.Load() {
 			reason, _ := failureDetails(err)
 			if reason == "unavailable" {
 				reason = "ssh_closed"

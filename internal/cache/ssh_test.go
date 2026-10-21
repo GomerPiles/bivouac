@@ -439,20 +439,36 @@ func TestSSHTransportLossIsReportedOnlyDuringRequests(t *testing.T) {
 	}))
 	defer backend.Close()
 	defer close(release)
-	s, _, _ := testService(t, backend)
+	s, direct, directClient := testService(t, backend)
 	var logs syncBuffer
 	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	source := backend.URL + "/archive?sig=synthetic-secret"
+	get := func(c *http.Client, lease string) {
+		if response, err := c.Get(lease); err == nil {
+			_ = response.Body.Close()
+		}
+	}
 	for _, busy := range []bool{false, true} {
 		binding, drop := droppableSSHFixture(t)
 		b, client := sshCacheClient(t, s, "guest-name", binding)
 		if busy {
-			lease := makeLease(t, b, client, backend.URL+"/archive?sig=synthetic-secret")
-			go func() {
-				if response, err := client.Get(lease); err == nil {
-					_ = response.Body.Close()
-				}
-			}()
+			// A direct guest's fill holds upstream. The SSH guest waits on that
+			// fill and leaves as soon as its transport ends, which races the
+			// transport's own loss report.
+			go get(directClient, makeLease(t, direct, directClient, source))
 			<-started
+			// The lease reply is flushed after its handler returns, so the only
+			// request counted below is the object read.
+			lease := makeLease(t, b, client, source)
+			go get(client, lease)
+			s.mu.Lock()
+			transport := s.transports["guest-name"].(*sshTransport)
+			s.mu.Unlock()
+			for deadline := time.Now().Add(5 * time.Second); transport.active.Load() == 0; time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("SSH request did not start")
+				}
+			}
 		}
 		drop()
 		if !busy {
