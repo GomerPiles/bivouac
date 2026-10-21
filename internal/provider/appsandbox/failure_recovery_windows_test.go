@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/winhost"
 	"golang.org/x/sys/windows"
 )
 
@@ -85,7 +86,11 @@ func TestWindowsNativeFailureRecovery(t *testing.T) {
 	}
 	preflight := func(t *testing.T, r CloneRecord) {
 		t.Helper()
-		ssh, scp, key, e := WindowsTransportPaths()
+		ssh, scp, e := winhost.OpenSSH()
+		if e != nil {
+			t.Fatal(e)
+		}
+		key, e := DefaultSSHKey()
 		if e != nil {
 			t.Fatal(e)
 		}
