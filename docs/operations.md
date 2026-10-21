@@ -394,6 +394,70 @@ and check that the second job runs on a fresh guest. Then run
 service. Delete the branch and its workflow runs, and confirm no guest switch
 adapter remains before turning production CI On.
 
+## Direct HCS image factory
+
+`bivouac image build` prepares an image for the direct HCS provider from a
+generalized App Sandbox template. It runs in one elevated foreground process,
+uses HCS directly, and attaches no network adapter. Production CI may keep
+running. Admission requires the guest's memory plus 10 GiB available and plus
+8 GiB commit headroom; pressure below 6 GiB available or 2 GiB commit headroom
+cancels only the build.
+
+1. Prepare a separate administrator-protected image root and JSON configuration
+   under a protected parent. Use a separate `BIVOUAC_HOME` for validation.
+   Configuration fields are `source` (an absolute standalone VHDX path),
+   `source_sha256`, optional `expected_template`, `guest_user`, `image_root`,
+   `cpu` (default 4, range 1–4), `memory_mb` (default 8192, range 1024–8192), and
+   `timeout_seconds` (default 900, range 300–3600). The optional template name
+   is checked against the source's owner record when present; that record's
+   hash and `export-complete` phase must agree.
+2. Pin `render_probe` as `{"source":"<absolute path>","sha256":"<hash>"}`.
+   `setup_assets` is an array of that same object plus `name`. Include
+   `appsandbox-agent.exe`, `appsandbox-input.exe`, `appsandbox-displays.exe`,
+   `AppSandboxVDD.dll`, `AppSandboxVDD.inf`, `AppSandboxVDD.cat`, and `devcon.exe`.
+   Optional `OpenSSH.msi` and `RUNNER.ZIP` supply missing SSH and runner installs.
+   Existing components are verified and reused; different pinned component
+   bytes or a configured runner fail the build. Inputs must be protected.
+   Set `drivers` to an array of existing GPU driver directories directly under
+   `%SystemRoot%\System32\DriverStore\FileRepository`; their owned copies are
+   shared read-only to the build guest.
+3. Launch once from an administrator shell (one UAC prompt for the shell):
+
+   ```text
+   bivouac image build --config "<protected parent>\image-factory.json"
+   ```
+
+   The source disk is held read-only while it is copied and hashed. Its file,
+   directory, ACL and owner record are never modified. Only the owned child is
+   mounted. Offline inspection must prove `generalized_to_oobe`, setup/OOBE in
+   progress, no explicit answer pointer, and an empty or absent
+   `Windows\Panther\Unattend` directory. Inspected facts remain in the build
+   record if this gate fails; an exported template is not proof of this state.
+4. A successful build publishes `<image_root>\<build ID>\disk.vhdx`, a standalone
+   flattened image, and writes `manifest.json` last. It never reuses an output
+   directory. The manifest binds source/asset/image hashes, guest identity,
+   render/validation/autologon pins for the lab batch, driver INF versions,
+   runner version when known, VCS revision and coarse phase durations. Stdout
+   prints `image_path` for `vmhost.json` and `guest_name`/`guest_user` for
+   `[providers.windows.hcs]`; that provider's `image` still names the VM host's
+   configured image key. Keep the image administrator-protected. The Hyper-V
+   VM group has read access to the disk. Validate a fresh clone before promotion.
+5. Workspaces live at `<image_root>\.builds\<build ID>` and public build records
+   beside them as `<build ID>.json`. Success removes the workspace. Failure
+   terminates only the creating handle's guest and requires confirmed native
+   absence before detach/removal. If cleanup is uncertain, keep the workspace
+   and retry, elevated, after the creating process has exited:
+
+   ```text
+   bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
+   ```
+
+   Cleanup checks the protected record and ownership marker, waits for absence,
+   detaches the owned child and removes only that build's workspace and incomplete
+   output. A matching publication manifest left by an interrupted build preserves
+   that published output. Never erase ownership evidence to bypass a
+   retained build. Neither command changes the VM host service or CI mode.
+
 ## Direct HCS lab batch
 
 `TestLabBatch` in `internal/vmhost` boots disposable guests from an existing
