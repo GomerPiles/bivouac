@@ -31,6 +31,41 @@ const guestBase = `C:\ProgramData\Bivouac\Guest`
 // Actions job hooks accept .ps1 on Windows, not .cmd. Failure to capture the
 // accepted job must fail setup rather than leave the manager treating it as idle.
 const jobHookName = "job-started.ps1"
+
+// executionPolicyVariable sets PowerShell's process-scope execution policy
+// for the runner and every process it starts.
+const executionPolicyVariable = "PSExecutionPolicyPreference"
+
+// machineExecutionPolicy is Windows PowerShell's LocalMachine policy, or ""
+// when none is set.
+func machineExecutionPolicy() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell`, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = k.Close() }()
+	v, _, err := k.GetStringValue("ExecutionPolicy")
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+// runnerExecutionPolicy returns the process policy the runner needs, or "".
+// The runner dot-sources a script file for its hooks and every powershell
+// step, which a client image's default (Restricted) or AllSigned refuses. A
+// guest that already allows scripts, or an inherited setting, is left alone.
+func runnerExecutionPolicy(inherited bool, machine string) string {
+	if inherited {
+		return ""
+	}
+	switch strings.ToLower(machine) {
+	case "", "undefined", "restricted", "allsigned":
+		return "RemoteSigned"
+	}
+	return ""
+}
+
 const jobHook = `$ErrorActionPreference='Stop'
 & 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest windows hook
 if($LASTEXITCODE -ne 0){throw 'Guest job identity capture failed'}
@@ -334,11 +369,16 @@ func guestListener(ctx context.Context, cfg Config) error {
 	binary := filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener.exe")
 	cmd := exec.Command(binary, "run")
 	cmd.Dir = cfg.RunnerDir
+	inheritedPolicy := false
 	for _, value := range os.Environ() {
 		key, _, _ := strings.Cut(value, "=")
+		inheritedPolicy = inheritedPolicy || strings.EqualFold(key, executionPolicyVariable)
 		if !strings.EqualFold(key, "PATH") && !strings.HasPrefix(strings.ToUpper(key), "ACTIONS_RUNNER_INPUT_") && !strings.HasPrefix(strings.ToUpper(key), "ACTIONS_RUNNER_HOOK_") {
 			cmd.Env = append(cmd.Env, value)
 		}
+	}
+	if policy := runnerExecutionPolicy(inheritedPolicy, machineExecutionPolicy()); policy != "" {
+		cmd.Env = append(cmd.Env, executionPolicyVariable+"="+policy)
 	}
 	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(guestBase, jobHookName))
 	if completedHook != "" {
