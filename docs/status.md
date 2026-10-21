@@ -274,12 +274,36 @@ cache validation fixture live with production's Windows cache settings
 Loss fallback, `outage`, `interrupt` and upload storage have not run on HCS
 guests.
 
+The image factory built an image from production's App Sandbox template.
+`image inspect` first copied the 29.5 GB template in 20 s and found it
+generalized to OOBE. The only runner residue was one log from template
+preparation in `_diag`, which setup now removes. The build took 3 minutes:
+
+- 20 s copying the template;
+- 1 min 47 s from boot to a validated desktop with hardware D3D11;
+- 19 s clean shutdown;
+- 25 s flattening and hashing.
+
+The template was only read. The installed VM host service then ran the new
+binary and served the new image at production limits (1 guest, 10 CPU,
+9216 MiB). The isolated JIT home repeated the end-to-end and cache checks with
+production CI Off, on three jobs, each on a fresh guest:
+
+- Guests booted in 21.5-24.3 s (28-30 s on the spike's image) and listened
+  37-40 s after create.
+- Every job saw the AMD GPU through GPU-PV and reached `api.github.com`.
+- `save`, `restore`, `restore` passed as before. The first restore filled both
+  archives (216 MiB) upstream; the second hit both locally, and every release
+  download hit.
+- `bivouac off --wait` exited in 11 s, with the service stopped, no guest
+  adapter left and every runner deregistered.
+
 Open:
 
 - `Deactivate` refusing to stop a VM host that holds guests (unit-tested
   only).
-- Updating the installed service's binary, and a foreground `vmhost run`
-  with the explicit pipe owner.
+- A foreground `vmhost run` with the explicit pipe owner. (The installed
+  service's binary was updated in place while stopped, with no reinstall.)
 - Isolation controls that batch 2 did not cover:
   - A control with the deny layer removed. Without it, a refused host
     listener does not rule out the host firewall; the gateway's DNS proxy is
@@ -287,10 +311,11 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- Production routing, longer and heavier jobs, live cache validation, and recovery
-  after a daemon or host restart with HCS guests.
-- The image factory, including a UTC RTC and a script-capable policy in the
-  image itself.
+- Production routing, longer and heavier jobs, and recovery after a daemon or
+  host restart with HCS guests.
+- Image factory paths not yet live: a template without a runner, a failed
+  build's cleanup and `image cleanup`, and the lab batch on a factory-built
+  image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
 
 ## Windows: Crosvm (Linux GPU guests)

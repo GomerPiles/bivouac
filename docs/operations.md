@@ -378,8 +378,8 @@ and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
 defaults). A separate authenticated SSH client over HvSocket carries the cache;
 no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
 partial settings refuses launch. Cache transport loss falls back upstream
-without reattachment. HCS cache live validation is pending; leave upload storage
-off on Windows hosts until validated. Use the isolated cache validation fixture
+without reattachment. Archive and release caching passed live on HCS guests;
+upload storage has not, so leave it off on Windows hosts. Use the isolated cache validation fixture
 below for archive/release cold and warm hits, outage fallback and uploads.
 
 To validate it end to end, turn production Windows CI Off first: each
