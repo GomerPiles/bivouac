@@ -376,6 +376,15 @@ Each run checks the guest agent, SSH and desktop rendering. The baseline run
 also checks that an unelevated process reaches only the HvSocket service its
 account was granted.
 
+`-lab.only=failed-start` explicitly selects an additional run, skipped when
+`-lab.only` is empty. It requests 64 vCPUs and 2048 MiB of lazy memory from
+the prepared image to force HCS to refuse start on a host with fewer logical
+processors; it needs no networking or GPU. Its `failed_start` record contains
+the host CPU count, ordered property/start/terminate observations (ownership
+comparisons and runtime-ID presence only), create error and HCS operation/code,
+retention status, and journal-empty/native-absent cleanup checks. An unexpected
+successful start is destroyed and fails the run.
+
 The batch attaches no network adapter, so it changes no host networking, and it
 never touches another compute system, the App Sandbox broker or production
 state. Production CI may keep running. Before each boot, the batch waits for

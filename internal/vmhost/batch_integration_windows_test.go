@@ -15,6 +15,7 @@ package vmhost
 //   2. Lazily committed (virtual-address-backed) memory with GPU-PV.
 //   3. A guest whose parent is a flattened single-file copy of the image.
 //   4-5. Production sizing (4 CPU, 8 GiB), twice.
+//   6. Opt-in failed start (64 CPU, 2 GiB lazy memory, no GPU).
 
 import (
 	"bufio"
@@ -29,10 +30,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +45,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/hvsock"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/winguest"
@@ -53,7 +57,7 @@ var lab = struct {
 	root, flattenDir, results, image, imageSHA256, guestName, guestUser *string
 	probeSHA256, validationSHA256, autologonSHA256, dial, only          *string
 }{
-	only:             flag.String("lab.only", "", "comma-separated run labels to run; all when empty"),
+	only:             flag.String("lab.only", "", "comma-separated run labels to run; five default runs when empty; failed-start is opt-in"),
 	root:             flag.String("lab.root", "", "new or empty administrator-protected VM host directory"),
 	flattenDir:       flag.String("lab.flatten-dir", "", "new or empty directory for the flattened image"),
 	results:          flag.String("lab.results", "", "new results file (JSON lines)"),
@@ -102,6 +106,97 @@ type labRun struct {
 	Memory        map[string]uint64 `json:"host_memory_mb,omitempty"`
 	Unelevated    map[string]string `json:"unelevated,omitempty"`
 	Cleaned       bool              `json:"cleaned"`
+	FailedStart   *failedStart      `json:"failed_start,omitempty"`
+}
+
+type failedStart struct {
+	HostCPU         int               `json:"host_cpu"`
+	CreateSucceeded bool              `json:"create_succeeded"`
+	CreateError     string            `json:"create_error"`
+	Retained        bool              `json:"retained"`
+	HCSError        bool              `json:"hcs_error"`
+	HCSOp           string            `json:"hcs_op,omitempty"`
+	HCSCode         string            `json:"hcs_code,omitempty"`
+	JournalEmpty    bool              `json:"journal_empty"`
+	NativeAbsent    bool              `json:"native_absent"`
+	JournalError    string            `json:"journal_error,omitempty"`
+	OpenError       string            `json:"open_error,omitempty"`
+	DestroyError    string            `json:"destroy_error,omitempty"`
+	Calls           []failedStartCall `json:"calls"`
+}
+
+type failedStartCall struct {
+	Handle     string                 `json:"handle"`
+	Op         string                 `json:"op"`
+	Properties *failedStartProperties `json:"properties,omitempty"`
+	Error      string                 `json:"error"`
+}
+
+type failedStartProperties struct {
+	IDMatches    bool   `json:"id_matches"`
+	OwnerMatches bool   `json:"owner_matches"`
+	SystemType   string `json:"system_type"`
+	State        string `json:"state"`
+	RuntimeIDSet bool   `json:"runtime_id_set"`
+}
+
+type failedStartNative struct {
+	native
+	name, owner string
+	result      *failedStart
+}
+
+func (n *failedStartNative) Create(ctx context.Context, name string, doc hcs.ComputeSystem) (system, error) {
+	s, err := n.native.Create(ctx, name, doc)
+	if s != nil {
+		s = &failedStartSystem{system: s, recorder: n, handle: "create"}
+	}
+	return s, err
+}
+
+func (n *failedStartNative) Open(ctx context.Context, name string) (system, error) {
+	s, err := n.native.Open(ctx, name)
+	if s != nil {
+		s = &failedStartSystem{system: s, recorder: n, handle: "open"}
+	}
+	return s, err
+}
+
+type failedStartSystem struct {
+	system
+	recorder *failedStartNative
+	handle   string
+}
+
+func (s *failedStartSystem) Properties(ctx context.Context) (hcs.Properties, error) {
+	p, err := s.system.Properties(ctx)
+	s.recorder.result.Calls = append(s.recorder.result.Calls, failedStartCall{
+		Handle: s.handle, Op: "properties", Error: labError(err),
+		Properties: &failedStartProperties{
+			IDMatches: p.ID == s.recorder.name, OwnerMatches: p.Owner == s.recorder.owner,
+			SystemType: p.SystemType, State: p.State, RuntimeIDSet: p.RuntimeID != "",
+		},
+	})
+	return p, err
+}
+
+func (s *failedStartSystem) Start(ctx context.Context) error {
+	err := s.system.Start(ctx)
+	s.recorder.result.Calls = append(s.recorder.result.Calls, failedStartCall{Handle: s.handle, Op: "start", Error: labError(err)})
+	return err
+}
+
+func (s *failedStartSystem) Terminate(ctx context.Context) error {
+	err := s.system.Terminate(ctx)
+	s.recorder.result.Calls = append(s.recorder.result.Calls, failedStartCall{Handle: s.handle, Op: "terminate", Error: labError(err)})
+	return err
+}
+
+func labError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 type render struct {
@@ -207,8 +302,12 @@ func TestLabBatch(t *testing.T) {
 		{"flattened", 2, 4096, false, true, false},
 		{"production-size-1", 4, 8192, false, false, false},
 		{"production-size-2", 4, 8192, false, false, false},
+		{"failed-start", 64, 2048, true, false, false},
 	}
 	for _, run := range runs {
+		if *lab.only == "" && run.label == "failed-start" {
+			continue
+		}
 		if *lab.only != "" && !slices.Contains(strings.Split(*lab.only, ","), run.label) {
 			continue
 		}
@@ -232,7 +331,12 @@ func TestLabBatch(t *testing.T) {
 			t.Error(err)
 			break
 		}
-		r := bootAndValidate(t, host, image, sid, run.label, run.cpu, run.memoryMB, run.lazy, run.unelevated)
+		var r labRun
+		if run.label == "failed-start" {
+			r = failStartAndValidate(t, host, image)
+		} else {
+			r = bootAndValidate(t, host, image, sid, run.label, run.cpu, run.memoryMB, run.lazy, run.unelevated)
+		}
 		r.Flattened = run.flatten
 		out.write(t, r)
 		if !r.Passed {
@@ -248,6 +352,151 @@ func TestLabBatch(t *testing.T) {
 	}
 	if err := os.Remove(flattened); err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Error("cannot remove flattened image:", err)
+	}
+}
+
+func failStartAndValidate(t *testing.T, host *Host, image string) (r labRun) {
+	r = labRun{Run: "failed-start", CPU: 64, MemoryMB: 2048, LazyMemory: true, Timings: map[string]int64{}}
+	r.FailedStart = &failedStart{HostCPU: runtime.NumCPU(), Calls: []failedStartCall{}}
+	f := r.FailedStart
+	var id [5]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		t.Fatal(err)
+	}
+	r.Name = "bivouac-lab-" + hex.EncodeToString(id[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	watch := watchReserves(ctx, cancel)
+	defer watch()
+	original := host.native
+	host.native = &failedStartNative{native: original, name: r.Name, owner: host.owner, result: f}
+	defer func() { host.native = original }()
+	started := time.Now()
+	g, err := host.Create(ctx, Spec{
+		Name: r.Name, Image: image, CPU: r.CPU, MemoryMB: r.MemoryMB, LazyMemory: true, GPU: false,
+		Services: []Service{{ID: winguest.AgentService}, {ID: winguest.SSHService}},
+	})
+	r.Timings["create_total"] = time.Since(started).Milliseconds()
+	host.native = original
+	f.CreateSucceeded, f.CreateError, f.Retained = err == nil, labError(err), errors.Is(err, errRetained)
+	var nativeErr *hcs.Error
+	f.HCSError = errors.As(err, &nativeErr)
+	if f.HCSError {
+		f.HCSOp, f.HCSCode = nativeErr.Op, fmt.Sprintf("0x%08x", nativeErr.Code)
+	}
+	cleanCtx, done := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer done()
+	if err == nil {
+		r.Failure = "create unexpectedly succeeded; forcing condition did not hold"
+		started := time.Now()
+		f.DestroyError = labError(host.Destroy(cleanCtx, g))
+		r.Timings["destroy"] = time.Since(started).Milliseconds()
+	}
+	entries, journalErr := fs.ReadDir(host.root.FS(), ".")
+	f.JournalError = labError(journalErr)
+	f.JournalEmpty = journalErr == nil
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), r.Name) {
+			f.JournalEmpty = false
+		}
+	}
+	s, openErr := host.native.Open(cleanCtx, r.Name)
+	if s != nil {
+		s.Close()
+	}
+	f.NativeAbsent = errors.Is(openErr, hcs.ErrNotFound)
+	if !f.NativeAbsent {
+		f.OpenError = labError(openErr)
+	}
+	r.Cleaned = f.JournalEmpty && f.NativeAbsent
+	r.Passed = err != nil && !f.Retained && r.Cleaned
+	if !r.Passed && r.Failure == "" {
+		r.Failure = "failed create retained its guest or storage, or cleanup could not be confirmed"
+	}
+	return r
+}
+
+func TestLabFailedStartRecording(t *testing.T) {
+	for _, mode := range []string{"owner", "properties", "storage", "success"} {
+		t.Run(mode, func(t *testing.T) {
+			h, n := fixture(t)
+			n.terminateOnClose = true
+			if mode != "success" {
+				n.startErr = &hcs.Error{Op: "HcsStartComputeSystem", Code: 0x8007139f}
+			}
+			n.afterFailedStart = func(p *hcs.Properties) {
+				switch mode {
+				case "owner":
+					p.Owner = ""
+				case "properties":
+					n.propertiesErr = errors.New("properties unavailable")
+				case "storage":
+					if err := os.WriteFile(filepath.Join(h.dir, n.created[0], "unexpected"), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			r := failStartAndValidate(t, h, validSpec().Image)
+			f := r.FailedStart
+			if h.native != n || !f.NativeAbsent || len(n.systems) != 0 {
+				t.Fatal("native API was not restored or guest remains")
+			}
+			if r.Passed != (mode == "owner" || mode == "properties") || r.Cleaned != (mode != "storage") || f.Retained != (mode == "storage") {
+				t.Fatal("incorrect failure or cleanup outcome")
+			}
+			if f.CreateSucceeded != (mode == "success") || f.HCSError != (mode != "success") || f.HostCPU != runtime.NumCPU() {
+				t.Fatal("missing create outcome or host CPU count")
+			}
+			if mode != "success" && (f.HCSOp != "HcsStartComputeSystem" || f.HCSCode != "0x8007139f" || f.CreateError == "") {
+				t.Fatal("missing HCS failure detail")
+			}
+			if len(f.Calls) < 3 || f.Calls[0].Op != "properties" || f.Calls[1].Op != "start" || f.Calls[2].Op != "properties" || f.Calls[0].Handle != "create" {
+				t.Fatal("missing ordered create-handle observations")
+			}
+			if mode == "owner" && f.Calls[2].Properties.OwnerMatches {
+				t.Fatal("ownership loss was not recorded")
+			}
+			if mode == "properties" && f.Calls[2].Error != "properties unavailable" {
+				t.Fatal("property error was not recorded")
+			}
+			b, err := json.Marshal(r)
+			if err != nil || strings.Contains(string(b), fakeRuntimeID) || strings.Contains(string(b), h.owner) {
+				t.Fatal("result encoding failed or disclosed native identity")
+			}
+		})
+	}
+}
+
+func TestLabFailedStartRecordsOpenedHandle(t *testing.T) {
+	h, n := fixture(t)
+	g, err := h.Create(t.Context(), validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &failedStart{}
+	recorder := &failedStartNative{native: n, name: g.Name, owner: h.owner, result: f}
+	s, err := recorder.Open(t.Context(), g.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Properties(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	terminateErr := &hcs.Error{Op: "HcsTerminateComputeSystem", Code: 0x8007139f}
+	n.terminateErr = terminateErr
+	if err := s.Terminate(t.Context()); !errors.Is(err, n.terminateErr) {
+		t.Fatal("terminate error was not delegated")
+	}
+	n.terminateErr = nil
+	if err := s.Terminate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Calls) != 3 || f.Calls[0].Handle != "open" || !f.Calls[0].Properties.RuntimeIDSet || f.Calls[1].Op != "terminate" || f.Calls[1].Error != terminateErr.Error() || f.Calls[2].Error != "" {
+		t.Fatal("missing ordered open-handle observations")
+	}
+	if err := h.Destroy(t.Context(), g); err != nil {
+		t.Fatal(err)
 	}
 }
 
