@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,7 +140,7 @@ func (s *fakeSession) Send(_ context.Context, name string, data io.Reader, size 
 }
 func (s *fakeSession) Close() error { return nil }
 
-func (s *fakeSession) CacheClient(ctx context.Context) (*ssh.Client, error) {
+func (s *fakeSession) CacheClient(ctx context.Context, _ func(net.Conn) net.Conn) (*ssh.Client, error) {
 	if s.f.cacheClient == nil {
 		return nil, errors.New("cache client unavailable")
 	}

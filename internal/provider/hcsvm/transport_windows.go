@@ -62,7 +62,7 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 	if !a.DisplayReady || !a.KeyDeployed {
 		return fail(errors.New("guest agent did not confirm the display and SSH key"))
 	}
-	client, err := s.connect(ctx)
+	client, err := s.connect(ctx, nil)
 	if err != nil {
 		return fail(err)
 	}
@@ -70,10 +70,14 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 	return s, nil
 }
 
-func (s *hvSession) connect(ctx context.Context) (*ssh.Client, error) {
+func (s *hvSession) connect(ctx context.Context, wrap func(net.Conn) net.Conn) (*ssh.Client, error) {
+	var transport net.Conn
 	transport, err := hvsock.Dial(ctx, s.address)
 	if err != nil {
 		return nil, provider.SSHUnavailable
+	}
+	if wrap != nil {
+		transport = wrap(transport)
 	}
 	client, _, err := winguest.Connect(ctx, transport, s.user, s.id, s.pin.Check)
 	switch {
@@ -102,7 +106,7 @@ type hvSession struct {
 	closed     bool
 }
 
-func (s *hvSession) CacheClient(ctx context.Context) (*ssh.Client, error) {
+func (s *hvSession) CacheClient(ctx context.Context, wrap func(net.Conn) net.Conn) (*ssh.Client, error) {
 	s.identityMu.Lock()
 	defer s.identityMu.Unlock()
 	if s.closed {
@@ -110,7 +114,7 @@ func (s *hvSession) CacheClient(ctx context.Context) (*ssh.Client, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	return s.connect(ctx)
+	return s.connect(ctx, wrap)
 }
 
 // Run reports a nonzero exit as a command failure and anything else as a

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,8 +53,9 @@ type Session interface {
 	Run(ctx context.Context, command string, stdin []byte, limit int) ([]byte, error)
 	Send(ctx context.Context, name string, data io.Reader, size int64) error
 	// CacheClient opens a separate authenticated client with this session's
-	// in-memory identity and host-key pin. Ownership passes to the caller.
-	CacheClient(context.Context) (*ssh.Client, error)
+	// in-memory identity and host-key pin, over the transport that wrap
+	// returns before the SSH handshake. Ownership passes to the caller.
+	CacheClient(ctx context.Context, wrap func(net.Conn) net.Conn) (*ssh.Client, error)
 	Close() error
 }
 
@@ -408,10 +410,11 @@ func (p *Provider) prepareCache(ctx context.Context, name string) error {
 	if _, attached := p.cacheGuests[name]; attached {
 		return nil // Transport loss uses upstream fallback, never reattachment.
 	}
-	client, err := s.CacheClient(ctx)
+	loss := cache.NewSSHLoss()
+	client, err := s.CacheClient(ctx, loss.Conn)
 	if err == nil {
 		var bootstrap []byte
-		bootstrap, err = p.cache.AttachSSHClient(ctx, name, client)
+		bootstrap, err = p.cache.AttachSSHClient(ctx, name, client, loss)
 		if err == nil {
 			_, err = p.run(ctx, name, guestHelper+" guest windows cache-setup", bootstrap, 4096)
 		}
