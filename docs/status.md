@@ -178,7 +178,7 @@ optional service and its install and control commands, and the `hcs` provider.
 The provider adopts guests by label, pins host keys, reconnects after transport
 loss and delivers files by scp. A real named-pipe
 test covers caller identification, refusal of anonymous callers and refusal
-of an unprivileged server. The service has not yet been installed live.
+of an unprivileged server; the service has since run live (below).
 
 Guest networking passed lab batch 2 (`TestLabNetworkBatch`) with Windows CI
 Off. It ran two networked production-sized cold boots (4 CPU, 8 GiB, GPU)

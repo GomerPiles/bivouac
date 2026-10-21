@@ -34,12 +34,18 @@ func buildHCSProvider(name string, cfg config.HCS, store *state.Store) (provider
 }
 
 // checkVMHost reports whether the running VM host serves this provider's
-// image within its limits. It creates nothing.
+// image within its limits. It creates nothing. An installed service that is
+// stopped is errVMHostStopped: bivouac on starts it.
 func checkVMHost(ctx context.Context, cfg config.HCS) error {
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	check := hcsvm.Options{Image: cfg.Image, CPU: uint32(cfg.CPU), MemoryMB: uint64(cfg.MemoryGB) * 1024} // #nosec G115 -- config bounds CPU and memory.
-	_, err := check.CheckVMHost(callCtx, vmhost.NewClient())
+	serving, err := check.CheckVMHost(callCtx, vmhost.NewClient())
+	if !serving {
+		if installed, state, stateErr := vmhost.ServiceState(); stateErr == nil && installed && state == svc.Stopped {
+			return errVMHostStopped
+		}
+	}
 	return err
 }
 

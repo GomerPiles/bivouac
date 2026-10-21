@@ -23,6 +23,10 @@ type check struct {
 	level, name, detail string
 }
 
+// errVMHostStopped is an installed VM host service that is stopped, which
+// is normal while CI is off.
+var errVMHostStopped = errors.New("VM host service installed and stopped; bivouac on starts it")
+
 func (e env) doctor(ctx context.Context, args []string) error {
 	var withGitHub bool
 	if err := parseFlags("doctor", args, func(fs *flag.FlagSet) {
@@ -103,7 +107,9 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			continue
 		}
 		if p.Type == "hcs" {
-			if err := checkVMHost(ctx, *p.HCS); err != nil {
+			if err := checkVMHost(ctx, *p.HCS); errors.Is(err, errVMHostStopped) {
+				add("WARN", "hcs "+name, err.Error())
+			} else if err != nil {
 				add("FAIL", "hcs "+name, err.Error())
 			} else {
 				add("PASS", "hcs "+name, "VM host serving image "+p.HCS.Image+" within its limits; no VM started")
