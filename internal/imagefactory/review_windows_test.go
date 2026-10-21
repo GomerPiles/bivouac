@@ -378,7 +378,7 @@ func TestAgentZeroCopies(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key")); err != nil {
+	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key"), "vdd"); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {

@@ -11,6 +11,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/GomerPiles/bivouac/internal/winguest"
 )
 
 type PinnedFile struct {
@@ -24,17 +26,18 @@ type Asset struct {
 }
 
 type Config struct {
-	Source           string     `json:"source"`
-	SourceSHA256     string     `json:"source_sha256"`
-	ExpectedTemplate string     `json:"expected_template,omitempty"`
-	GuestUser        string     `json:"guest_user"`
-	CPU              uint32     `json:"cpu"`
-	MemoryMB         uint64     `json:"memory_mb"`
-	SetupAssets      []Asset    `json:"setup_assets"`
-	RenderProbe      PinnedFile `json:"render_probe"`
-	Drivers          []string   `json:"drivers"`
-	ImageRoot        string     `json:"image_root"`
-	TimeoutSeconds   int        `json:"timeout_seconds"`
+	Display          winguest.DisplayMode `json:"display,omitempty"`
+	Source           string               `json:"source"`
+	SourceSHA256     string               `json:"source_sha256"`
+	ExpectedTemplate string               `json:"expected_template,omitempty"`
+	GuestUser        string               `json:"guest_user"`
+	CPU              uint32               `json:"cpu"`
+	MemoryMB         uint64               `json:"memory_mb"`
+	SetupAssets      []Asset              `json:"setup_assets"`
+	RenderProbe      PinnedFile           `json:"render_probe"`
+	Drivers          []string             `json:"drivers"`
+	ImageRoot        string               `json:"image_root"`
+	TimeoutSeconds   int                  `json:"timeout_seconds"`
 }
 
 // DecodeConfig rejects unknown fields and trailing input without returning
@@ -59,6 +62,11 @@ func DecodeConfig(r io.Reader) (Config, error) {
 	if c.TimeoutSeconds == 0 {
 		c.TimeoutSeconds = 900
 	}
+	display, err := winguest.ParseDisplayMode(string(c.Display))
+	if err != nil {
+		return Config{}, err
+	}
+	c.Display = display
 	return c, c.Validate()
 }
 
@@ -96,6 +104,9 @@ func safeUser(s string) bool {
 	return true
 }
 func (c Config) Validate() error {
+	if _, err := winguest.ParseDisplayMode(string(c.Display)); err != nil {
+		return err
+	}
 	// Configured paths are Windows paths whatever the build's OS, so split
 	// on backslashes rather than with filepath.
 	sourceDir := c.Source[:max(strings.LastIndex(c.Source, `\`), 0)]
@@ -109,10 +120,15 @@ func (c Config) Validate() error {
 		return errors.New("image build requires 1-4 CPU, 1024-8192 MiB and a 300-3600 second timeout")
 	}
 	validFile := func(f PinnedFile) bool { return localPath(f.Source) && !within(c.ImageRoot, f.Source) && pin(f.SHA256) }
-	if !validFile(c.RenderProbe) || len(c.SetupAssets) < 7 || len(c.SetupAssets) > 9 {
+	if !validFile(c.RenderProbe) || len(c.SetupAssets) < 3 || len(c.SetupAssets) > 9 {
 		return errors.New("pinned render probe and bounded setup assets are required")
 	}
 	required := map[string]bool{"APPSANDBOX-AGENT.EXE": false, "APPSANDBOX-INPUT.EXE": false, "APPSANDBOX-DISPLAYS.EXE": false, "APPSANDBOXVDD.DLL": false, "APPSANDBOXVDD.INF": false, "APPSANDBOXVDD.CAT": false, "DEVCON.EXE": false}
+	if c.Display == winguest.DisplaySynthetic {
+		for _, name := range []string{"APPSANDBOXVDD.DLL", "APPSANDBOXVDD.INF", "APPSANDBOXVDD.CAT", "DEVCON.EXE"} {
+			delete(required, name)
+		}
+	}
 	seen := map[string]bool{}
 	for _, a := range c.SetupAssets {
 		n := strings.ToUpper(a.Name)
@@ -277,25 +293,27 @@ type Driver struct {
 
 // Manifest deliberately has no credential or private setup fields.
 type Manifest struct {
-	BuildID          string            `json:"build_id"`
-	GuestName        string            `json:"guest_name"`
-	GuestUser        string            `json:"guest_user"`
-	Source           string            `json:"source"`
-	SourceSHA256     string            `json:"source_sha256"`
-	Template         string            `json:"template,omitempty"`
-	Output           string            `json:"output"`
-	Size             int64             `json:"size"`
-	SHA256           string            `json:"sha256"`
-	ProbeSHA256      string            `json:"probe_sha256"`
-	ValidationSHA256 string            `json:"validation_sha256"`
-	AutologonSHA256  string            `json:"autologon_sha256"`
-	Assets           map[string]string `json:"assets"`
-	RunnerVersion    string            `json:"runner_version,omitempty"`
-	Drivers          []Driver          `json:"drivers"`
-	Revision         string            `json:"vcs_revision"`
-	Started          time.Time         `json:"started"`
-	Ended            time.Time         `json:"ended"`
-	PhaseMS          map[string]int64  `json:"phase_ms"`
+	Display          winguest.DisplayMode `json:"display"`
+	Topology         *winguest.Topology   `json:"topology,omitempty"`
+	BuildID          string               `json:"build_id"`
+	GuestName        string               `json:"guest_name"`
+	GuestUser        string               `json:"guest_user"`
+	Source           string               `json:"source"`
+	SourceSHA256     string               `json:"source_sha256"`
+	Template         string               `json:"template,omitempty"`
+	Output           string               `json:"output"`
+	Size             int64                `json:"size"`
+	SHA256           string               `json:"sha256"`
+	ProbeSHA256      string               `json:"probe_sha256"`
+	ValidationSHA256 string               `json:"validation_sha256"`
+	AutologonSHA256  string               `json:"autologon_sha256"`
+	Assets           map[string]string    `json:"assets"`
+	RunnerVersion    string               `json:"runner_version,omitempty"`
+	Drivers          []Driver             `json:"drivers"`
+	Revision         string               `json:"vcs_revision"`
+	Started          time.Time            `json:"started"`
+	Ended            time.Time            `json:"ended"`
+	PhaseMS          map[string]int64     `json:"phase_ms"`
 }
 
 // cleanupOwned makes absence the barrier before detaching or removing storage.

@@ -1,0 +1,70 @@
+package winguest
+
+import "errors"
+
+// DisplayMode selects the prepared image's guest-agent contract.
+type DisplayMode string
+
+const (
+	DisplayVDD       DisplayMode = "vdd"
+	DisplaySynthetic DisplayMode = "synthetic"
+)
+
+// ParseDisplayMode supplies the documented default and never echoes input.
+func ParseDisplayMode(s string) (DisplayMode, error) {
+	switch DisplayMode(s) {
+	case "", DisplayVDD:
+		return DisplayVDD, nil
+	case DisplaySynthetic:
+		return DisplaySynthetic, nil
+	default:
+		return "", errors.New("display must be vdd or synthetic")
+	}
+}
+
+// DisplayStatus interprets only fixed agent messages. VDD preserves its existing
+// readiness latch; the synthetic experiment fails immediately on contradictions.
+func (m DisplayMode) DisplayStatus(line string) (bool, error) {
+	if m == DisplaySynthetic {
+		if line == "idd_status:not_found" {
+			return true, nil
+		}
+		return false, errors.New("guest agent contradicted synthetic display mode")
+	}
+	return line == "idd_status:ok", nil
+}
+
+// Topology contains only bounded numeric and boolean desktop observations.
+// AdapterKind: 1 = Hyper-V synthetic video, 2 = AppSandboxVDD, 3 = other
+// (including unresolved hardware ID); zero means no primary was observed.
+type Topology struct {
+	TopologyValid        bool   `json:"topology_valid"`
+	ActiveDisplays       uint32 `json:"active_display_count"`
+	PrimaryDisplays      uint32 `json:"primary_display_count"`
+	PrimaryWidth         uint32 `json:"primary_width"`
+	PrimaryHeight        uint32 `json:"primary_height"`
+	VirtualEqualsPrimary bool   `json:"virtual_equals_primary"`
+	AdapterKind          uint32 `json:"primary_adapter_kind"`
+	VDDNodes             uint32 `json:"vdd_node_count"`
+	HyperVEnabled        bool   `json:"hyperv_video_enabled"`
+	HyperVStarted        bool   `json:"hyperv_video_started"`
+	ProbeForeground      bool   `json:"probe_foreground"`
+	ProbeOnPrimary       bool   `json:"probe_on_primary"`
+	ProbeInput           bool   `json:"probe_input_received"`
+	SecurityWindow       bool   `json:"security_window_found"`
+	SecurityOnPrimary    bool   `json:"security_on_primary"`
+}
+
+func (t Topology) SinglePrimary() bool {
+	return t.TopologyValid && t.ActiveDisplays == 1 && t.PrimaryDisplays == 1 &&
+		t.PrimaryWidth > 0 && t.PrimaryWidth <= 65536 && t.PrimaryHeight > 0 && t.PrimaryHeight <= 65536 &&
+		t.VirtualEqualsPrimary
+}
+
+func (t Topology) SyntheticOK() bool {
+	return t.SinglePrimary() && t.AdapterKind == 1 && t.VDDNodes == 0 && t.HyperVEnabled && t.HyperVStarted
+}
+
+func (t Topology) LabOK() bool {
+	return t.SinglePrimary() && t.ProbeForeground && t.ProbeOnPrimary && t.ProbeInput
+}

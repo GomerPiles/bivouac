@@ -22,7 +22,7 @@ func agentTest(t *testing.T, script func(net.Conn) error) (Agent, error) {
 	go func() { defer func() { _ = guest.Close() }(); done <- script(guest) }()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	a, err := Initialize(ctx, host, []byte(testKey))
+	a, err := Initialize(ctx, host, []byte(testKey), DisplayVDD)
 	_ = host.Close()
 	if scriptErr := <-done; scriptErr != nil && !errors.Is(scriptErr, io.ErrClosedPipe) {
 		t.Fatal(scriptErr)
@@ -109,7 +109,7 @@ func TestAgentCancellationClosesBlockedTransport(t *testing.T) {
 	defer func() { _ = guest.Close() }()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { _, err := Initialize(ctx, host, []byte(testKey)); done <- err }()
+	go func() { _, err := Initialize(ctx, host, []byte(testKey), DisplayVDD); done <- err }()
 	cancel()
 	select {
 	case err := <-done:
@@ -125,7 +125,7 @@ func TestInvalidPublicKeyIsRefusedBeforeIO(t *testing.T) {
 	host, guest := net.Pipe()
 	defer func() { _ = host.Close(); _ = guest.Close() }()
 	for _, key := range []string{"", "ssh-ed25519 a\nssh_deploy_key injected"} {
-		if _, err := Initialize(t.Context(), host, []byte(key)); err == nil {
+		if _, err := Initialize(t.Context(), host, []byte(key), DisplayVDD); err == nil {
 			t.Fatalf("accepted %q", key)
 		}
 	}

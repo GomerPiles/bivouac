@@ -55,7 +55,7 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 		_ = s.Close()
 		return nil, err
 	}
-	a, err := winguest.Initialize(ctx, agent, id.PublicKey)
+	a, err := winguest.Initialize(ctx, agent, id.PublicKey, winguest.DisplayVDD)
 	if err != nil {
 		return fail(errors.Join(provider.GuestAgentUnavailable, err))
 	}

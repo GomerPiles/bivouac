@@ -23,7 +23,10 @@ import (
 
 // initializeDrivers ports the spike protocol; production Initialize deliberately
 // declines these copies. Keep the connection alive through guest preparation.
-func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key []byte) error {
+func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key []byte, display winguest.DisplayMode) error {
+	if display != winguest.DisplayVDD && display != winguest.DisplaySynthetic {
+		return errors.New("invalid display mode")
+	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	reader := bufio.NewReaderSize(conn, 4096)
@@ -81,8 +84,6 @@ func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key
 			if err = gpu(); err != nil {
 				return err
 			}
-		case "idd_status:ok":
-			displayReady = true
 		case "ssh_ready", "1:ssh_ready":
 			if !keySent {
 				if err = write("ssh_deploy_key " + string(key) + "\n"); err != nil {
@@ -98,8 +99,14 @@ func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key
 		case "ssh_failed", "1:ssh_failed", "ssh_key_failed", "service_stopping", "os_shutdown":
 			return errors.New("guest agent initialization failed")
 		}
-		if strings.HasPrefix(line, "idd_status:") && line != "idd_status:ok" {
-			displayReady = false
+		if strings.HasPrefix(line, "idd_status:") {
+			displayReady, err = display.DisplayStatus(line)
+			if err != nil {
+				return err
+			}
+		}
+		if display == winguest.DisplaySynthetic && line == "hyperv_video:disabled" {
+			return errors.New("guest agent disabled synthetic video")
 		}
 		if strings.HasPrefix(line, "gpu_copy_error:") || strings.HasPrefix(line, "gpu_device_failed:") {
 			return errors.New("guest GPU driver copy failed")
@@ -152,7 +159,7 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	if err = initializeDrivers(ctx, conn, c.Drivers, identity.PublicKey); err != nil {
+	if err = initializeDrivers(ctx, conn, c.Drivers, identity.PublicKey, r.Manifest.Display); err != nil {
 		return err
 	}
 	transport, err := dialGuest(ctx, r.RuntimeID, winguest.SSHService)
@@ -179,10 +186,15 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 	data := map[string]any{"name": r.Name, "user": c.GuestUser, "sha256": r.Manifest.ProbeSHA256, "script_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "require_setup": true, "prepared": false}
 	b, err := guestRun(ctx, client, validateEntry, data)
 	if err != nil {
-		return errors.New("guest desktop validation failed")
+		return errors.Join(errors.New("guest desktop validation failed"), err)
 	}
-	if !renderOK(b) {
-		return errors.New("guest desktop rendering checks did not all pass")
+	var topology winguest.Topology
+	if json.Unmarshal(b, &topology) != nil {
+		return errors.New("invalid topology report")
+	}
+	r.Manifest.Topology = &topology
+	if err := factoryDisplayReportOK(b, r.Manifest.Display); err != nil {
+		return err
 	}
 	// VersionInfo reads no runner credentials and does not start the listener.
 	b, err = guestRun(ctx, client, `param($data);$helper='C:\Windows\AppSandbox\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
@@ -215,9 +227,27 @@ func guestRun(ctx context.Context, client *ssh.Client, script string, data any) 
 	}
 	out, err := winguest.Run(ctx, client, "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encodedPowerShell(guestBootstrap), b, 8192)
 	if err != nil {
+		var exit *ssh.ExitError
+		if errors.As(err, &exit) && exit.ExitStatus() > 0 && exit.ExitStatus() <= 255 {
+			return nil, fmt.Errorf("fixed guest operation exited at step %d", exit.ExitStatus())
+		}
 		return nil, errors.New("fixed guest operation failed")
 	}
 	return out, nil
+}
+
+func factoryDisplayReportOK(b []byte, display winguest.DisplayMode) error {
+	if !renderOK(b) {
+		return errors.New("guest desktop rendering checks did not all pass")
+	}
+	var topology winguest.Topology
+	if json.Unmarshal(b, &topology) != nil {
+		return errors.New("invalid topology report")
+	}
+	if display == winguest.DisplaySynthetic && !topology.SyntheticOK() {
+		return errors.New("guest synthetic topology checks did not all pass")
+	}
+	return nil
 }
 
 func renderOK(b []byte) bool {
