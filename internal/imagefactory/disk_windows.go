@@ -41,7 +41,7 @@ func queryDiskInformation(path string) (diskInformation, error) {
 	if err != nil {
 		var code syscall.Errno
 		if errors.As(err, &code) {
-			return info, fmt.Errorf("cannot inspect immutable VHDX metadata (Win32 %d)", code)
+			return info, fmt.Errorf("cannot inspect immutable VHDX metadata (Win32 %d)", uint64(code))
 		}
 		return info, errors.New("cannot inspect immutable VHDX metadata")
 	}

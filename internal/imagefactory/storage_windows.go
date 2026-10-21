@@ -26,16 +26,22 @@ import (
 )
 
 type record struct {
-	BuildID    string      `json:"build_id"`
-	Workspace  string      `json:"workspace"`
-	Name       string      `json:"name"`
-	Owner      string      `json:"owner"`
-	RuntimeID  string      `json:"runtime_id,omitempty"`
-	Phase      string      `json:"phase"`
-	Inspection *Inspection `json:"inspection,omitempty"`
-	Retained   bool        `json:"retained"`
-	Published  bool        `json:"published"`
-	Manifest   Manifest    `json:"manifest"`
+	BuildID          string         `json:"build_id"`
+	Workspace        string         `json:"workspace"`
+	Name             string         `json:"name"`
+	Owner            string         `json:"owner"`
+	RuntimeID        string         `json:"runtime_id,omitempty"`
+	Phase            string         `json:"phase"`
+	Inspection       *Inspection    `json:"inspection,omitempty"`
+	Retained         bool           `json:"retained"`
+	Published        bool           `json:"published"`
+	Manifest         Manifest       `json:"manifest"`
+	HostSteps        map[string]int `json:"host_steps,omitempty"`
+	GuestSetupStep   uint32         `json:"guest_setup_step,omitempty"`
+	GuestSetupFailed bool           `json:"guest_setup_failed,omitempty"`
+	NativeAttempted  bool           `json:"native_attempted"`
+	GuestCompleted   bool           `json:"guest_completed"`
+	SpaceChecks      []SpaceCheck   `json:"space_checks,omitempty"`
 }
 
 func (r *record) disk() string { return filepath.Join(r.Workspace, "disk.vhdx") }
@@ -210,7 +216,7 @@ func copyContext(ctx context.Context, w io.Writer, r io.Reader, limit int64) (in
 func ownerTemplate(c Config) (string, error) {
 	path := filepath.Join(filepath.Dir(c.Source), ".bivouac-template-owner.json")
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return missingOwner(c.ExpectedTemplate)
 	}
 	if err := winhost.CheckProtected(path); err != nil {
 		return "", errors.New("template owner record must be protected")
@@ -235,17 +241,84 @@ func ownerTemplate(c Config) (string, error) {
 	return owner.Template, nil
 }
 
+func missingOwner(expected string) (string, error) {
+	if expected != "" {
+		return "", errors.New("expected template requires a source owner record")
+	}
+	return "", nil
+}
+
+type HostScriptError struct{ Step int }
+
+func (e *HostScriptError) Error() string {
+	return fmt.Sprintf("image host script failed at step %d", e.Step)
+}
+func (r *record) hostError(phase string, err error) {
+	var scriptErr *HostScriptError
+	if errors.As(err, &scriptErr) {
+		if r.HostSteps == nil {
+			r.HostSteps = map[string]int{}
+		}
+		r.HostSteps[phase] = scriptErr.Step
+	}
+}
+
+const resultSentinel = "BIVOUAC_IMAGE_RESULT"
+
+func framedResult(b []byte) ([]byte, error) {
+	lines := bytes.Split(b, []byte{'\n'})
+	var result []byte
+	for i, line := range lines {
+		if strings.TrimSuffix(string(line), "\r") == resultSentinel {
+			if result != nil || i+1 >= len(lines) || len(lines[i+1]) == 0 {
+				return nil, errors.New("invalid image script result frame")
+			}
+			result = bytes.TrimSuffix(lines[i+1], []byte{'\r'})
+		}
+	}
+	if result == nil || len(result) > 49152 {
+		return nil, errors.New("image script result frame unavailable or exceeds bound")
+	}
+	return result, nil
+}
+
 func runHost(ctx context.Context, script string, data any, output bool) ([]byte, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return nil, errors.New("cannot encode setup input")
 	}
 	defer clear(b)
+	paths, ok := data.(map[string]string)
+	if !ok || !validID(paths["instance_id"]) || !localPath(paths["root"]) {
+		return nil, errors.New("invalid owned host script workspace")
+	}
+	workspace := filepath.Join(paths["root"], paths["instance_id"])
+	if err = winhost.CheckProtected(workspace); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(workspace, ".host-*.ps1")
+	if err != nil {
+		return nil, err
+	}
+	path := f.Name()
+	defer func() { _ = os.Remove(path) }()
+	_, err = f.WriteString(script)
+	err = errors.Join(err, f.Close())
+	if err != nil {
+		return nil, err
+	}
+	if err = protect(workspace, path, false); err != nil {
+		return nil, err
+	}
+	return executeHost(ctx, path, b, output)
+}
+
+func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byte, error) {
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(script))
+	cmd := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 	cmd.Stdin = bytes.NewReader(b)
 	cmd.Stderr = io.Discard
@@ -254,16 +327,27 @@ func runHost(ctx context.Context, script string, data any, output bool) ([]byte,
 	if output {
 		cmd.Stdout = &result
 	}
-	if cmd.Run() != nil {
-		return nil, errors.New("image preparation script failed")
+	runErr := cmd.Run()
+	var errResult error
+	if runErr != nil {
+		step := 65535
+		var exit *exec.ExitError
+		if errors.As(runErr, &exit) && exit.ExitCode() > 0 {
+			step = exit.ExitCode()
+		}
+		errResult = &HostScriptError{Step: step}
 	}
-	return result.data, nil
+	if !output {
+		return nil, errResult
+	}
+	payload, frameErr := framedResult(result.data)
+	return payload, errors.Join(errResult, frameErr)
 }
 
 type boundedOutput struct{ data []byte }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
-	if len(b.data)+len(p) > 8192 {
+	if len(b.data)+len(p) > 65536 {
 		return 0, errors.New("script result exceeds bound")
 	}
 	b.data = append(b.data, p...)

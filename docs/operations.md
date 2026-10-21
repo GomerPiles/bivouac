@@ -397,42 +397,61 @@ adapter remains before turning production CI On.
 ## Direct HCS image factory
 
 `bivouac image build` prepares an image for the direct HCS provider from a
-generalized App Sandbox template. It runs in one elevated foreground process,
-uses HCS directly, and attaches no network adapter. Production CI may keep
-running. Admission requires the guest's memory plus 10 GiB available and plus
-8 GiB commit headroom; pressure below 6 GiB available or 2 GiB commit headroom
+generalized App Sandbox template. `image inspect` runs the same copy and offline
+inspection without booting. Both run in one elevated foreground process,
+use HCS directly, and attach no network adapter. Production CI may keep
+running. Before a build boots, admission requires guest memory plus 10 GiB
+available and plus 8 GiB commit headroom; pressure below 6 GiB available or 2 GiB commit headroom
 cancels only the build.
 
 1. Prepare a separate administrator-protected image root and JSON configuration
    under a protected parent. Use a separate `BIVOUAC_HOME` for validation.
+   Keep `image_root` outside App Sandbox's template and instance trees. Short
+   path aliases containing `~` are refused; final source/root paths are compared
+   before use. Allow at least source size × 2.2 plus 10 GiB free before copying.
+   Before publication, the volume must still have source-copy size plus child
+   size plus 5 GiB free. Failed checks report available/required byte counts.
    Configuration fields are `source` (an absolute standalone VHDX path),
    `source_sha256`, optional `expected_template`, `guest_user`, `image_root`,
    `cpu` (default 4, range 1–4), `memory_mb` (default 8192, range 1024–8192), and
-   `timeout_seconds` (default 900, range 300–3600). The optional template name
-   is checked against the source's owner record when present; that record's
-   hash and `export-complete` phase must agree.
+   `timeout_seconds` (default 900, range 300–3600). That timeout covers only guest
+   creation through confirmed absence; copying, hashing and flattening use the
+   caller's cancellation and size bounds. When `expected_template` is set, an
+   owner record is required. Its name, hash and `export-complete` phase must agree.
 2. Pin `render_probe` as `{"source":"<absolute path>","sha256":"<hash>"}`.
    `setup_assets` is an array of that same object plus `name`. Include
    `appsandbox-agent.exe`, `appsandbox-input.exe`, `appsandbox-displays.exe`,
    `AppSandboxVDD.dll`, `AppSandboxVDD.inf`, `AppSandboxVDD.cat`, and `devcon.exe`.
    Optional `OpenSSH.msi` and `RUNNER.ZIP` supply missing SSH and runner installs.
-   Existing components are verified and reused; different pinned component
-   bytes or a configured runner fail the build. Inputs must be protected.
+   Pinned agent/helper files overwrite the child's existing copies, and the
+   agent is installed as in the spike. VDD and OpenSSH installation is skipped
+   when already present. The runner is reused only when unconfigured; otherwise
+   the build refuses it before boot. Inputs must be protected.
    Set `drivers` to an array of existing GPU driver directories directly under
    `%SystemRoot%\System32\DriverStore\FileRepository`; their owned copies are
    shared read-only to the build guest.
 3. Launch once from an administrator shell (one UAC prompt for the shell):
 
    ```text
+   bivouac image inspect --config "<protected parent>\image-factory.json"
    bivouac image build --config "<protected parent>\image-factory.json"
    ```
 
    The source disk is held read-only while it is copied and hashed. Its file,
-   directory, ACL and owner record are never modified. Only the owned child is
-   mounted. Offline inspection must prove `generalized_to_oobe`, setup/OOBE in
+   directory, ACL and owner record are never modified. Do not refresh or replace
+   that template during the copy: the read handle denies write/delete sharing.
+   Only the owned child is mounted, read-write, while hive APIs only query it.
+   Offline inspection must prove `generalized_to_oobe`, setup/OOBE in
    progress, no explicit answer pointer, and an empty or absent
    `Windows\Panther\Unattend` directory. Inspected facts remain in the build
    record if this gate fails; an exported template is not proof of this state.
+   Facts include component hashes, service presence/ImagePath, VDD evidence,
+   runner state/version, `ProgramData\Bivouac` subdirectories and whether the
+   configured user exists in SAM. Unrecognized service arguments are omitted
+   and marked redacted. A configured runner or `ProgramData\Bivouac\Guest`
+   fails the gate; `ImagePolicy` alone is allowed. Inspect prints its build ID
+   and facts before workspace cleanup, and exits nonzero on failed inspection
+   or an ineligible image. It never creates or starts a compute system.
 4. A successful build publishes `<image_root>\<build ID>\disk.vhdx`, a standalone
    flattened image, and writes `manifest.json` last. It never reuses an output
    directory. The manifest binds source/asset/image hashes, guest identity,
@@ -442,6 +461,8 @@ cancels only the build.
    `[providers.windows.hcs]`; that provider's `image` still names the VM host's
    configured image key. Keep the image administrator-protected. The Hyper-V
    VM group has read access to the disk. Validate a fresh clone before promotion.
+   If publication succeeds but cleanup/recording fails, stdout still prints the
+   image values, a warning says the image is published, and exit status is nonzero.
 5. Workspaces live at `<image_root>\.builds\<build ID>` and public build records
    beside them as `<build ID>.json`. Success removes the workspace. Failure
    terminates only the creating handle's guest and requires confirmed native
@@ -452,9 +473,13 @@ cancels only the build.
    bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
    ```
 
-   Cleanup checks the protected record and ownership marker, waits for absence,
-   detaches the owned child and removes only that build's workspace and incomplete
-   output. A matching publication manifest left by an interrupted build preserves
+   Cleanup checks the protected record and ownership marker, acquires the
+   workspace's exclusive lock, and waits for absence; it refuses an active build.
+   Host failures retain numeric script step codes in the record. After a failed
+   guest run, once absence is confirmed, the owned child is inspected for the
+   setup failure's numeric step before removal. Cleanup detaches the owned child
+   and removes only that build's workspace and incomplete output. A matching
+   publication manifest left by an interrupted build preserves
    that published output. Never erase ownership evidence to bypass a
    retained build. Neither command changes the VM host service or CI mode.
 

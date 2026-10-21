@@ -106,7 +106,7 @@ func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key
 		}
 		if count, ok := strings.CutPrefix(line, "gpu_copy_done:"); ok {
 			n, e := strconv.ParseUint(count, 10, 32)
-			if e != nil || n == 0 || n > 8192 {
+			if e != nil || n > 8192 {
 				return errors.New("invalid GPU copy count")
 			}
 			gpuReady = true
@@ -185,7 +185,7 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 		return errors.New("guest desktop rendering checks did not all pass")
 	}
 	// VersionInfo reads no runner credentials and does not start the listener.
-	b, err = guestRun(ctx, client, `param($data);. 'C:\Windows\AppSandbox\hcs-runner-check.ps1';if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, nil)
+	b, err = guestRun(ctx, client, `param($data);$helper='C:\Windows\AppSandbox\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
 	if err != nil {
 		return errors.New("runner verification failed")
 	}
@@ -238,5 +238,5 @@ func renderOK(b []byte) bool {
 		Virtual          uint32 `json:"virtual_render_device_count"`
 		Problem          uint32 `json:"virtual_render_problem_code"`
 	}
-	return json.Unmarshal(b, &r) == nil && r.Ready && r.Desktop && r.Hardware && r.Presented && r.Pixels && r.Stage == 7 && r.HRESULT == 0 && r.Vendor != 0 && !(r.Vendor == 0x1414 && r.Device == 0x8c) && r.Adapters > 0 && r.Adapters <= 32 && r.HardwareAdapters > 0 && r.HardwareAdapters <= r.Adapters && r.GPUValid && r.Displays <= 32 && r.Virtual > 0 && r.Virtual <= r.Displays && r.Problem == 0
+	return json.Unmarshal(b, &r) == nil && r.Ready && r.Desktop && r.Hardware && r.Presented && r.Pixels && r.Stage == 7 && r.HRESULT == 0 && r.Vendor != 0 && (r.Vendor != 0x1414 || r.Device != 0x8c) && r.Adapters > 0 && r.Adapters <= 32 && r.HardwareAdapters > 0 && r.HardwareAdapters <= r.Adapters && r.GPUValid && r.Displays <= 32 && r.Virtual > 0 && r.Virtual <= r.Displays && r.Problem == 0
 }

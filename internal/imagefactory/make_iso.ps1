@@ -2,7 +2,7 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 try {
  $data=[Console]::In.ReadToEnd() | ConvertFrom-Json
- Add-Type -TypeDefinition @"
+ $null=Add-Type -TypeDefinition @"
 using System;using System.IO;using System.Text;using System.Runtime.InteropServices;using System.Runtime.InteropServices.ComTypes;
 public static class SpikeISO {
  [DllImport("ole32.dll")] static extern int CreateStreamOnHGlobal(IntPtr h,bool delete,out IStream stream);

@@ -65,7 +65,7 @@ func DecodeConfig(r io.Reader) (Config, error) {
 
 func pin(s string) bool { b, e := hex.DecodeString(s); return e == nil && len(b) == 32 }
 func localPath(s string) bool {
-	if len(s) < 4 || len(s) > 240 || !((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) || s[1] != ':' || s[2] != '\\' || strings.ContainsAny(s[3:], ":\x00\r\n\"<>|?*/") {
+	if len(s) < 4 || len(s) > 240 || !asciiLetter(s[0]) || s[1] != ':' || s[2] != '\\' || strings.ContainsAny(s[3:], ":\x00\r\n\"<>|?*/~") {
 		return false
 	}
 	for _, part := range strings.Split(s[3:], `\`) {
@@ -79,6 +79,7 @@ func localPath(s string) bool {
 	}
 	return true
 }
+func asciiLetter(b byte) bool { return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' }
 func within(root, path string) bool {
 	r := strings.ToLower(strings.TrimRight(root, `\`))
 	p := strings.ToLower(path)
@@ -89,14 +90,14 @@ func safeUser(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
 			return false
 		}
 	}
 	return true
 }
 func (c Config) Validate() error {
-	if !localPath(c.Source) || !strings.EqualFold(filepath.Ext(c.Source), ".vhdx") || !pin(c.SourceSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.Source) || within(c.Source, c.ImageRoot) {
+	if !localPath(c.Source) || !strings.EqualFold(filepath.Ext(c.Source), ".vhdx") || !pin(c.SourceSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.Source) || within(filepath.Dir(c.Source), c.ImageRoot) {
 		return errors.New("source and image root must be disjoint local absolute paths with a source SHA-256")
 	}
 	if !safeUser(c.GuestUser) || len(c.ExpectedTemplate) > 128 || strings.ContainsAny(c.ExpectedTemplate, "\\/:\x00\r\n") {
@@ -156,19 +157,60 @@ func GuestName(id string) (string, error) {
 func hashBytes(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 type Inspection struct {
-	SystemHiveError       uint32 `json:"system_hive_error"`
-	SoftwareHiveError     uint32 `json:"software_hive_error"`
-	SystemSetupInProgress uint32 `json:"system_setup_in_progress"`
-	OOBEInProgress        uint32 `json:"oobe_in_progress"`
-	SetupPhase            uint32 `json:"setup_phase"`
-	ImageStateKind        string `json:"image_state_kind"`
-	UnattendPointerKind   string `json:"unattend_pointer_kind"`
-	AnswerDirectoryEmpty  bool   `json:"answer_directory_empty"`
-	PantherAnswerPresent  bool   `json:"panther_answer_present"`
+	FailureStep           uint32            `json:"failure_step"`
+	SystemHiveError       uint32            `json:"system_hive_error"`
+	SoftwareHiveError     uint32            `json:"software_hive_error"`
+	SystemSetupInProgress uint32            `json:"system_setup_in_progress"`
+	OOBEInProgress        uint32            `json:"oobe_in_progress"`
+	SetupPhase            uint32            `json:"setup_phase"`
+	ImageStateKind        string            `json:"image_state_kind"`
+	UnattendPointerKind   string            `json:"unattend_pointer_kind"`
+	AnswerDirectoryEmpty  bool              `json:"answer_directory_empty"`
+	PantherAnswerPresent  bool              `json:"panther_answer_present"`
+	AgentService          ServiceFact       `json:"agent_service"`
+	SSHService            ServiceFact       `json:"sshd_service"`
+	Executables           map[string]string `json:"executables"`
+	VDDPresent            bool              `json:"vdd_present"`
+	VDDPackagePresent     bool              `json:"vdd_package_present"`
+	RunnerState           string            `json:"runner_state"`
+	RunnerVersion         string            `json:"runner_version,omitempty"`
+	BivouacPresent        bool              `json:"bivouac_present"`
+	BivouacSubdirectories []string          `json:"bivouac_subdirectories"`
+	GuestStatePresent     bool              `json:"guest_state_present"`
+	SAMHiveError          uint32            `json:"sam_hive_error"`
+	GuestUserExists       *bool             `json:"guest_user_exists"`
+	GuestSetupStep        uint32            `json:"guest_setup_step"`
+	GuestSetupFailed      bool              `json:"guest_setup_failed"`
 }
 
+type ServiceFact struct {
+	Present           bool   `json:"present"`
+	ImagePath         string `json:"image_path"`
+	ImagePathRedacted bool   `json:"image_path_redacted"`
+}
+
+type InspectionReport struct {
+	BuildID string      `json:"build_id"`
+	Facts   *Inspection `json:"inspection"`
+}
+
+// PublishedError distinguishes a usable, committed image from a failed build.
+type PublishedError struct {
+	BuildID string
+	Err     error
+}
+
+func (e *PublishedError) Error() string {
+	return "image is published (build " + e.BuildID + "); workspace cleanup or record update failed: " + e.Err.Error()
+}
+func (e *PublishedError) Unwrap() error { return e.Err }
+
 func (i Inspection) Generalized() bool {
-	return i.SystemHiveError == 0 && i.SoftwareHiveError == 0 && i.SystemSetupInProgress == 1 && i.OOBEInProgress == 1 && i.ImageStateKind == "generalized_to_oobe" && (i.UnattendPointerKind == "absent" || i.UnattendPointerKind == "empty") && i.AnswerDirectoryEmpty
+	return i.FailureStep == 0 && i.SystemHiveError == 0 && i.SoftwareHiveError == 0 && i.SystemSetupInProgress == 1 && i.OOBEInProgress == 1 && i.ImageStateKind == "generalized_to_oobe" && (i.UnattendPointerKind == "absent" || i.UnattendPointerKind == "empty") && i.AnswerDirectoryEmpty
+}
+
+func (i Inspection) Eligible() bool {
+	return i.Generalized() && i.SAMHiveError == 0 && i.GuestUserExists != nil && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured")
 }
 
 type Driver struct {
@@ -209,7 +251,7 @@ func cleanupOwned(terminate func() error, absent func() error, detach func() err
 		return errors.Join(errors.New("build workspace retained: native absence unconfirmed"), err)
 	}
 	if err := detach(); err != nil {
-		return errors.New("build workspace retained: disk detach unconfirmed")
+		return errors.Join(errors.New("build workspace retained: disk detach unconfirmed"), err)
 	}
 	return remove()
 }

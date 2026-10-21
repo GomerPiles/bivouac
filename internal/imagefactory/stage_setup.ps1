@@ -18,7 +18,7 @@ try {
  if($marker.build_id -cne $data.instance_id -or $marker.workspace -cne $child){exit $phaseCode}
  if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit $phaseCode}
  $phaseCode=20
- Add-Type -TypeDefinition @"
+ $null=Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;
 public static class SpikeOfflineAnswer {
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint OROpenHive(string path,out IntPtr hive);
@@ -48,7 +48,7 @@ public static class SpikeOfflineAnswer {
   $disk=$image | Get-Disk
   if($disk.IsReadOnly -or $disk.IsOffline){throw 'Owned child is not online read-write'}
   $partition=Get-Partition -DiskNumber $disk.Number | Sort-Object Size -Descending | Select-Object -First 1
-  Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
+  $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   $phaseCode=40
   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM')){
    $path=Join-Path $mount $relative
@@ -77,7 +77,7 @@ public static class SpikeOfflineAnswer {
    try{$output.Write($content,0,$content.Length);$output.Flush($true)}finally{$output.Dispose();[Array]::Clear($content,0,$content.Length)}
   }
  } finally {
-  if($image){try{if($partition){Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{Dismount-DiskImage -ImagePath $expectedDisk}}
+  if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}
  }
  $phaseCode=70
  if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit $phaseCode}

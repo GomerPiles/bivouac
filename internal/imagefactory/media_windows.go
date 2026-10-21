@@ -6,7 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,10 +58,12 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 	data["specialize"] = guestSpecialize + disableFirstLogonAnimation
 	defer func() { delete(data, "unattend") }()
 	if _, err := run(ctx, makeISO, data, false); err != nil {
-		return errors.New("protected setup ISO creation failed")
+		r.hostError("setup_iso", err)
+		return fmt.Errorf("protected setup ISO creation failed: %w", err)
 	}
 	if _, err := run(ctx, stageSetup, data, false); err != nil {
-		return errors.New("offline owned-child answer staging failed")
+		r.hostError("stage_setup", err)
+		return fmt.Errorf("offline owned-child answer staging failed: %w", err)
 	}
 	return nil
 }

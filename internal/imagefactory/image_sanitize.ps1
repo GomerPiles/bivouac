@@ -11,7 +11,7 @@ try {
  $base='C:\Windows\AppSandbox'
  foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\ProgramData\ssh','C:\actions-runner',"$HOME\.ssh")){Assert-Ordinary $path}
  if(!(Test-Path -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe' -PathType Leaf)){exit 1}
- foreach($path in @('C:\ProgramData\Bivouac','C:\actions-runner\.runner','C:\actions-runner\.credentials','C:\actions-runner\.credentials_rsaparams','C:\actions-runner\_work','C:\actions-runner\_diag')){if(Test-Path -LiteralPath $path){exit 1}}
+ foreach($path in @('C:\ProgramData\Bivouac\Guest','C:\ProgramData\Bivouac\Guest\config.json','C:\ProgramData\Bivouac\Guest\job.json','C:\actions-runner\.runner','C:\actions-runner\.credentials','C:\actions-runner\.credentials_rsaparams','C:\actions-runner\_work','C:\actions-runner\_diag')){if(Test-Path -LiteralPath $path){exit 1}}
  $probeBase='C:\ProgramData\BivouacHcsSpike'
  Assert-Ordinary $probeBase
  $entries=@(Get-ChildItem -Force -LiteralPath $probeBase)
@@ -44,7 +44,7 @@ try {
   $logon.DeleteValue('DefaultPassword',$false)
   $logon.DeleteValue('AutoLogonCount',$false)
  }finally{$logon.Dispose();$password=$null;[Array]::Clear($random,0,$random.Length)}
- foreach($path in @('C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\Panther\Unattend\specialize.ps1','C:\Windows\Panther\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml',"$HOME\.ssh\authorized_keys",'C:\ProgramData\ssh\administrators_authorized_keys')){
+ foreach($path in @('C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\Panther\Unattend\specialize.ps1','C:\Windows\Panther\Unattend\setup-step.json','C:\Windows\Panther\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml',"$HOME\.ssh\authorized_keys",'C:\ProgramData\ssh\administrators_authorized_keys')){
   $parent=Split-Path -Parent $path;Assert-Ordinary $parent;Assert-Ordinary $path
   if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -Force -LiteralPath $path}
  }
@@ -62,8 +62,9 @@ foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecds
  if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
 }
 $sshService=Get-CimInstance Win32_Service -Filter "Name=''sshd''"
-$binary=$sshService.PathName.Trim(''"'')
-if($binary -notin @(''C:\Program Files\OpenSSH\sshd.exe'',''C:\Windows\System32\OpenSSH\sshd.exe'')){exit 1}
+$imagePath=$sshService.PathName
+if($imagePath -notmatch ''^"?([A-Za-z]:\\[^"\r\n]*?\.exe)"?(?:\s.*)?$''){exit 1}
+$binary=$Matches[1]
 & (Join-Path (Split-Path -Parent $binary) ''ssh-keygen.exe'') @(''-A'') *> $null
 if($LASTEXITCODE){exit 1}
 foreach($name in @(''ssh_host_rsa_key'',''ssh_host_ecdsa_key'',''ssh_host_ed25519_key'')){if(!(Test-Path -LiteralPath (Join-Path ''C:\ProgramData\ssh'' $name) -PathType Leaf)){exit 1}}

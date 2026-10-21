@@ -26,6 +26,13 @@ func TestConfig(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	for _, path := range []string{`D:\IMAGES~1`, `D:\Templates\base\images`} {
+		bad := testConfig()
+		bad.ImageRoot = path
+		if bad.Validate() == nil {
+			t.Fatal("short alias or template child accepted")
+		}
+	}
 	for name, mutate := range map[string]func(*Config){
 		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets[1] = c.SetupAssets[0] }, "asset missing": func(c *Config) { c.SetupAssets = c.SetupAssets[:6] }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
 	} {
@@ -132,6 +139,10 @@ func TestAnswerAndMediaScripts(t *testing.T) {
 	}
 }
 func TestScriptConstantsMatchLF(t *testing.T) {
+	b, err := os.ReadFile("offline_files.ps1")
+	if err != nil || string(b) != offlineFiles || strings.ContainsRune(offlineFiles, '\r') {
+		t.Fatal("regenerate LF offline facts script")
+	}
 	for name, content := range map[string]string{"make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
 		b, err := os.ReadFile(name)
 		if err != nil {

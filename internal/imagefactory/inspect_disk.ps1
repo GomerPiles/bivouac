@@ -1,18 +1,24 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$image=$null;$disk=$null;$partition=$null
+$image=$null;$disk=$null;$partition=$null;$step=10;$code=0
+$facts=[ordered]@{failure_step=0;system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;sam_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false;agent_service=@{present=$false;image_path='';image_path_redacted=$false};sshd_service=@{present=$false;image_path='';image_path_redacted=$false};executables=@{};vdd_present=$false;vdd_package_present=$false;runner_state='absent';runner_version='';bivouac_present=$false;bivouac_subdirectories=@();guest_state_present=$false;guest_user_exists=$null;guest_setup_step=0;guest_setup_failed=$false}
 try {
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
- if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){exit 1}
+ if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){throw 'identity'}
  $child=Join-Path $data.root $data.instance_id
  $expectedDisk=Join-Path $child 'disk.vhdx'
  $marker=Get-Content -LiteralPath (Join-Path $child 'owner.json') -Raw|ConvertFrom-Json
- if($data.disk -cne $expectedDisk -or $marker.build_id -cne $data.instance_id -or $marker.workspace -cne $child){exit 1}
- foreach($path in @($child,$expectedDisk)){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1}}
- if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit 1}
- Add-Type -TypeDefinition @"
+ if($data.disk -cne $expectedDisk -or $marker.build_id -cne $data.instance_id -or $marker.workspace -cne $child){throw 'ownership'}
+ foreach($path in @($child,$expectedDisk)){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'link'}}
+ if((Get-DiskImage -ImagePath $expectedDisk).Attached){throw 'attached'}
+ $step=20
+ $null=Add-Type -TypeDefinition @"
 using System;using System.Text;using System.Runtime.InteropServices;
 public static class FactoryInspection {
+ [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint OROpenKey(IntPtr hive,string key,out IntPtr opened);
+ [DllImport("offreg.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORCloseKey(IntPtr key);
+ public static bool Exists(IntPtr hive,string key) {IntPtr opened;uint error=OROpenKey(hive,key,out opened);if(error==2)return false;if(error!=0)throw new InvalidOperationException();try{return true;}finally{ORCloseKey(opened);}}
+ public static string Text(IntPtr hive,string key,string value) {uint type,size=2048;byte[] data=new byte[2048];uint error=ORGetValue(hive,key,value,out type,data,ref size);if(error!=0 || (type!=1 && type!=2) || size<2 || size>2048) return "";return Encoding.Unicode.GetString(data,0,(int)size).TrimEnd('\0');}
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] public static extern uint OROpenHive(string path,out IntPtr hive);
  [DllImport("offreg.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] public static extern uint ORCloseHive(IntPtr hive);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORGetValue(IntPtr hive,string key,string value,out uint type,byte[] data,ref uint size);
@@ -22,43 +28,73 @@ public static class FactoryInspection {
 }
 "@
  $mount=Join-Path $child 'inspect-mount'
- if(Test-Path -LiteralPath $mount){exit 1}
- New-Item -ItemType Directory -Path $mount|Out-Null
+ if(Test-Path -LiteralPath $mount){throw 'mount path'}
+ $null=New-Item -ItemType Directory -Path $mount
  $access=$mount+'\'
- $facts=[ordered]@{system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false}
  try {
-  $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadOnly -NoDriveLetter -PassThru
+  $step=30
+  $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadWrite -NoDriveLetter -PassThru
   $disk=$image|Get-Disk
   $partition=Get-Partition -DiskNumber $disk.Number|Sort-Object Size -Descending|Select-Object -First 1
-  Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
-  foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
-   $path=Join-Path $mount $relative
-   if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Windows path'}
+  $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
+  if($data.mode -eq 'setup'){
+   $step=90;Read-SetupStep $mount $facts
+  }else{
+   $step=40
+   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE','Windows\System32\config\SAM')){
+    $path=Join-Path $mount $relative
+    if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Windows path'}
+   }
+   $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
+   $software=Join-Path $mount 'Windows\System32\config\SOFTWARE'
+   if((Get-Item -LiteralPath $system).Length -gt 256MB){throw 'system hive bound'}
+   $hive=[IntPtr]::Zero
+   $facts.system_hive_error=[FactoryInspection]::OROpenHive($system,[ref]$hive)
+   if($facts.system_hive_error -eq 0){try{
+    $facts.system_setup_in_progress=[FactoryInspection]::Number($hive,'Setup','SystemSetupInProgress')
+    $facts.oobe_in_progress=[FactoryInspection]::Number($hive,'Setup','OOBEInProgress')
+    $facts.setup_phase=[FactoryInspection]::Number($hive,'Setup','SetupPhase')
+    $facts.unattend_pointer_kind=[FactoryInspection]::Pointer($hive)
+    $current=[FactoryInspection]::Number($hive,'Select','Current')
+    if($current -lt 1 -or $current -gt 999){throw 'control set'}
+    $control='ControlSet'+$current.ToString('000')
+    foreach($service in @(@('AppSandboxAgent','agent_service'),@('sshd','sshd_service'))){
+     $key=$control+'\Services\'+$service[0]
+     $facts[$service[1]].present=[FactoryInspection]::Exists($hive,$key)
+     if($facts[$service[1]].present){
+      $value=[FactoryInspection]::Text($hive,$key,'ImagePath')
+      # Preserve ordinary service ImagePath data, never arbitrary arguments
+      # that could contain a credential or a signed URL.
+      Set-PublicImagePath $value $facts[$service[1]]
+     }
+    }
+    $facts.vdd_present=[FactoryInspection]::Exists($hive,($control+'\Enum\ROOT\APPSANDBOXVDD'))
+   }finally{[void][FactoryInspection]::ORCloseHive($hive)}}
+   $step=50
+   $hive=[IntPtr]::Zero
+   $facts.software_hive_error=[FactoryInspection]::OROpenHive($software,[ref]$hive)
+   if($facts.software_hive_error -eq 0){try{$facts.image_state_kind=[FactoryInspection]::State($hive)}finally{[void][FactoryInspection]::ORCloseHive($hive)}}
+   $step=60
+   $answer=Join-Path $mount 'Windows\Panther\Unattend'
+   if(!(Test-Path -LiteralPath $answer)){$facts.answer_directory_empty=$true}else{
+    $item=Get-Item -Force -LiteralPath $answer
+    $facts.answer_directory_empty=($item.PSIsContainer -and !($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and !@(Get-ChildItem -Force -LiteralPath $answer|Select-Object -First 1).Count)
+   }
+   $facts.panther_answer_present=Test-Path -LiteralPath (Join-Path $mount 'Windows\Panther\unattend.xml')
+   $step=70;Read-FactoryFiles $mount $facts
+   $step=80
+   if($data.guest_user -notmatch '^[a-zA-Z0-9_-]{1,20}$'){throw 'guest user'}
+   $hive=[IntPtr]::Zero
+   $facts.sam_hive_error=[FactoryInspection]::OROpenHive((Join-Path $mount 'Windows\System32\config\SAM'),[ref]$hive)
+   if($facts.sam_hive_error -eq 0){try{$facts.guest_user_exists=[FactoryInspection]::Exists($hive,('SAM\Domains\Account\Users\Names\'+$data.guest_user))}finally{[void][FactoryInspection]::ORCloseHive($hive)}}
   }
-  $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
-  $software=Join-Path $mount 'Windows\System32\config\SOFTWARE'
-  if((Get-Item -LiteralPath $system).Length -gt 256MB -or (Get-Item -LiteralPath $software).Length -gt 256MB){throw 'hive bound'}
-  $hive=[IntPtr]::Zero
-  $facts.system_hive_error=[FactoryInspection]::OROpenHive($system,[ref]$hive)
-  if($facts.system_hive_error -eq 0){try{
-   $facts.system_setup_in_progress=[FactoryInspection]::Number($hive,'Setup','SystemSetupInProgress')
-   $facts.oobe_in_progress=[FactoryInspection]::Number($hive,'Setup','OOBEInProgress')
-   $facts.setup_phase=[FactoryInspection]::Number($hive,'Setup','SetupPhase')
-   $facts.unattend_pointer_kind=[FactoryInspection]::Pointer($hive)
-  }finally{[void][FactoryInspection]::ORCloseHive($hive)}}
-  $hive=[IntPtr]::Zero
-  $facts.software_hive_error=[FactoryInspection]::OROpenHive($software,[ref]$hive)
-  if($facts.software_hive_error -eq 0){try{$facts.image_state_kind=[FactoryInspection]::State($hive)}finally{[void][FactoryInspection]::ORCloseHive($hive)}}
-  $answer=Join-Path $mount 'Windows\Panther\Unattend'
-  if(!(Test-Path -LiteralPath $answer)){$facts.answer_directory_empty=$true}else{
-   $item=Get-Item -Force -LiteralPath $answer
-   $facts.answer_directory_empty=($item.PSIsContainer -and !($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and !@(Get-ChildItem -Force -LiteralPath $answer|Select-Object -First 1).Count)
-  }
-  $facts.panther_answer_present=Test-Path -LiteralPath (Join-Path $mount 'Windows\Panther\unattend.xml')
  }finally{
-  if($image){try{if($partition){Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{Dismount-DiskImage -ImagePath $expectedDisk}}
+  if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}
  }
- if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit 1}
- Remove-Item -LiteralPath $mount
- [Console]::Out.Write(($facts|ConvertTo-Json -Compress));exit 0
-}catch{exit 1}
+ $step=95
+ if((Get-DiskImage -ImagePath $expectedDisk).Attached){throw 'still attached'}
+ $null=Remove-Item -LiteralPath $mount
+}catch{$code=$step;$facts.failure_step=$step}
+[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
+[Console]::Out.WriteLine(($facts|ConvertTo-Json -Compress -Depth 5))
+exit $code
