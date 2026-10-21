@@ -214,6 +214,14 @@ not do until its endpoint is deleted. After the fix, Recover settled that
 leftover in 0.85 s. The App Sandbox broker had no guest during the batch and
 was not restarted.
 
+A failed start is cleaned up (lab batch `failed-start`, no network or GPU).
+A second disk whose file does not exist made HCS refuse start with HRESULT
+0x80070002. Afterwards the creating handle's properties reported the owner
+mismatched, system type `Container` and no runtime ID, so they no longer proved
+the guest. Create closed that handle, confirmed absence and removed the
+journal and storage. Excess vCPUs are not a start
+failure: HCS refuses them at create.
+
 Open:
 
 - Installing and running the VM host service live.
@@ -224,11 +232,6 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- A guest whose start fails is retained rather than cleaned up: after the
-  failure, its properties no longer prove ownership. Recover settles it, but
-  until then the VM host keeps its reservation. Seen once, when a creation
-  document pinned the firmware's boot entry and HCS refused to start the guest
-  (HRESULT 0x8007139f).
 - The provider running live as part of the manager.
 - The image factory.
 - The warm spare.

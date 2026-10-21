@@ -801,6 +801,13 @@ holds their handles:
   that guest's disk and network.
 - Upgrading the VM host therefore requires draining first.
 
+The VM host touches a system it opened by name only once its properties
+prove it ours (ID, owner, VM type and journalled runtime ID). Its own creating
+handle, proven right after create, is trusted for cleanup even when that proof
+later fails: after a failed start HCS reports the same system as an unowned
+`Container` with no runtime ID. Closing that handle ends the guest, and
+absence is still confirmed by name before its storage and network are removed.
+
 Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
 above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated
 /28 from 10.251.0.0/16, with a MAC derived from its name. An owned stateless
