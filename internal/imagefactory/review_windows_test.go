@@ -157,7 +157,7 @@ func TestGuestSetupFailureStep(t *testing.T) {
 }
 
 func TestOfflineFilesystemFacts(t *testing.T) {
-	for _, state := range []string{"absent", "unconfigured", "configured", "guest state"} {
+	for _, state := range []string{"absent", "unconfigured", "configured", "residue", "incomplete", "invalid", "guest state"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
 			for _, dir := range []string{"Windows/AppSandbox", "ProgramData/Bivouac/ImagePolicy"} {
@@ -180,6 +180,24 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 			}
 			if state == "configured" {
 				if err := os.WriteFile(filepath.Join(root, "actions-runner/.credentials_future"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == "residue" {
+				if err := os.MkdirAll(filepath.Join(root, "actions-runner/_work/public-job"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == "incomplete" {
+				if err := os.Remove(filepath.Join(root, "actions-runner/run.cmd")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state == "invalid" {
+				if err := os.RemoveAll(filepath.Join(root, "actions-runner")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "actions-runner"), nil, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -209,6 +227,12 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 			if facts.RunnerState != want || facts.GuestStatePresent != (state == "guest state") || !facts.BivouacPresent || facts.Executables["agent.exe"] != hashBytes([]byte("public-component")) {
 				t.Fatal("incorrect offline facts")
 			}
+			if state == "residue" {
+				entries := facts.RunnerResidue["_work"].Entries
+				if len(entries) != 1 || entries[0].Name != "public-job" || !entries[0].Directory {
+					t.Fatal("residue names/types missing")
+				}
+			}
 		})
 	}
 	if !strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac\Guest'`) || strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac',`) {
@@ -228,12 +252,17 @@ func TestOfflineEligibility(t *testing.T) {
 	if !good.Eligible() {
 		t.Fatal("clean generalized image rejected")
 	}
-	for _, mutate := range []func(*Inspection){func(i *Inspection) { i.GuestStatePresent = true }, func(i *Inspection) { i.RunnerState = "configured" }, func(i *Inspection) { i.SAMHiveError = 5 }, func(i *Inspection) { i.GuestUserExists = nil }, func(i *Inspection) { i.FailureStep = 70 }} {
+	for _, mutate := range []func(*Inspection){func(i *Inspection) { i.GuestStatePresent = true }, func(i *Inspection) { i.RunnerState = "configured" }, func(i *Inspection) { i.RunnerState = "residue" }, func(i *Inspection) { i.RunnerState = "incomplete" }, func(i *Inspection) { i.RunnerState = "invalid" }, func(i *Inspection) { i.RunnerState = "unknown" }, func(i *Inspection) { i.FailureStep = 70 }} {
 		bad := good
 		mutate(&bad)
 		if bad.Eligible() {
 			t.Fatal("unsafe/unknown facts accepted")
 		}
+	}
+	good.SAMHiveError = 5
+	good.GuestUserExists = nil
+	if !good.Eligible() {
+		t.Fatal("informational SAM failure blocked eligibility")
 	}
 }
 

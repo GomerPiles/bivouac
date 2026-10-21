@@ -423,6 +423,7 @@ cancels only the build.
    `appsandbox-agent.exe`, `appsandbox-input.exe`, `appsandbox-displays.exe`,
    `AppSandboxVDD.dll`, `AppSandboxVDD.inf`, `AppSandboxVDD.cat`, and `devcon.exe`.
    Optional `OpenSSH.msi` and `RUNNER.ZIP` supply missing SSH and runner installs.
+   An absent runner requires a pinned `RUNNER.ZIP` before boot.
    Pinned agent/helper files overwrite the child's existing copies, and the
    agent is installed as in the spike. VDD and OpenSSH installation is skipped
    when already present. The runner is reused only when unconfigured; otherwise
@@ -437,6 +438,7 @@ cancels only the build.
    bivouac image build --config "<protected parent>\image-factory.json"
    ```
 
+   MachinePolicy/UserPolicy execution policy GPO overrides the scripts' `-ExecutionPolicy Bypass`.
    The source disk is held read-only while it is copied and hashed. Its file,
    directory, ACL and owner record are never modified. Do not refresh or replace
    that template during the copy: the read handle denies write/delete sharing.
@@ -447,9 +449,16 @@ cancels only the build.
    record if this gate fails; an exported template is not proof of this state.
    Facts include component hashes, service presence/ImagePath, VDD evidence,
    runner state/version, `ProgramData\Bivouac` subdirectories and whether the
-   configured user exists in SAM. Unrecognized service arguments are omitted
-   and marked redacted. A configured runner or `ProgramData\Bivouac\Guest`
-   fails the gate; `ImagePolicy` alone is allowed. Inspect prints its build ID
+   configured user exists in SAM. Optional unreadable or oversized metadata is
+   unknown or omitted. Cached Panther answer-file facts are booleans only
+   (passes, matching local account and autologon); values are never reported.
+   Unrecognized service arguments are omitted and marked redacted. Runner
+   states are `absent`, `unconfigured`, `configured` (registration markers),
+   `residue` (nonempty `_work`/`_diag`), `incomplete`, and `invalid` (links or
+   invalid directory types). Only absent/unconfigured runners pass. Residue
+   facts list at most 64 safe top-level names per directory, with directory
+   flags; unusual names are counted and contents are never read.
+   `ProgramData\Bivouac\Guest` fails the gate; `ImagePolicy` alone is allowed. Inspect prints its build ID
    and facts before workspace cleanup, and exits nonzero on failed inspection
    or an ineligible image. It never creates or starts a compute system.
 4. A successful build publishes `<image_root>\<build ID>\disk.vhdx`, a standalone

@@ -227,6 +227,9 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, err
 	}
 	if err = phase("preparation", func() error {
+		if e := r.Inspection.RunnerInput(c); e != nil {
+			return e
+		}
 		if e := prepareMedia(buildCtx, c, r); e != nil {
 			return e
 		}

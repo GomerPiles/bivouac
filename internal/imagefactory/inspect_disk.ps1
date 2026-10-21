@@ -1,7 +1,7 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $image=$null;$disk=$null;$partition=$null;$step=10;$code=0
-$facts=[ordered]@{failure_step=0;system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;sam_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false;agent_service=@{present=$false;image_path='';image_path_redacted=$false};sshd_service=@{present=$false;image_path='';image_path_redacted=$false};executables=@{};vdd_present=$false;vdd_package_present=$false;runner_state='absent';runner_version='';bivouac_present=$false;bivouac_subdirectories=@();guest_state_present=$false;guest_user_exists=$null;guest_setup_step=0;guest_setup_failed=$false}
+$facts=[ordered]@{failure_step=0;system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;sam_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false;panther_answer=$null;agent_service=$null;sshd_service=$null;executables=@{};vdd_present=$null;vdd_package_present=$null;runner_state='invalid';runner_residue=@{};runner_version='';bivouac_present=$false;bivouac_subdirectories=@();guest_state_present=$false;guest_user_exists=$null;guest_setup_step=0;guest_setup_failed=$false}
 try {
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){throw 'identity'}
@@ -41,7 +41,7 @@ public static class FactoryInspection {
    $step=90;Read-SetupStep $mount $facts
   }else{
    $step=40
-   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE','Windows\System32\config\SAM')){
+   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
     $path=Join-Path $mount $relative
     if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Windows path'}
    }
@@ -55,20 +55,23 @@ public static class FactoryInspection {
     $facts.oobe_in_progress=[FactoryInspection]::Number($hive,'Setup','OOBEInProgress')
     $facts.setup_phase=[FactoryInspection]::Number($hive,'Setup','SetupPhase')
     $facts.unattend_pointer_kind=[FactoryInspection]::Pointer($hive)
-    $current=[FactoryInspection]::Number($hive,'Select','Current')
-    if($current -lt 1 -or $current -gt 999){throw 'control set'}
-    $control='ControlSet'+$current.ToString('000')
-    foreach($service in @(@('AppSandboxAgent','agent_service'),@('sshd','sshd_service'))){
+    try{
+     $current=[FactoryInspection]::Number($hive,'Select','Current')
+     if($current -lt 1 -or $current -gt 999){throw 'control set'}
+     $control='ControlSet'+$current.ToString('000')
+     foreach($service in @(@('AppSandboxAgent','agent_service'),@('sshd','sshd_service'))){try{
      $key=$control+'\Services\'+$service[0]
-     $facts[$service[1]].present=[FactoryInspection]::Exists($hive,$key)
-     if($facts[$service[1]].present){
+     $fact=@{present=[FactoryInspection]::Exists($hive,$key);image_path='';image_path_redacted=$false}
+     if($fact.present){
       $value=[FactoryInspection]::Text($hive,$key,'ImagePath')
       # Preserve ordinary service ImagePath data, never arbitrary arguments
       # that could contain a credential or a signed URL.
-      Set-PublicImagePath $value $facts[$service[1]]
+      Set-PublicImagePath $value $fact
      }
-    }
-    $facts.vdd_present=[FactoryInspection]::Exists($hive,($control+'\Enum\ROOT\APPSANDBOXVDD'))
+     $facts[$service[1]]=$fact
+     }catch{}}
+     $facts.vdd_present=[FactoryInspection]::Exists($hive,($control+'\Enum\ROOT\APPSANDBOXVDD'))
+    }catch{}
    }finally{[void][FactoryInspection]::ORCloseHive($hive)}}
    $step=50
    $hive=[IntPtr]::Zero
@@ -80,13 +83,18 @@ public static class FactoryInspection {
     $item=Get-Item -Force -LiteralPath $answer
     $facts.answer_directory_empty=($item.PSIsContainer -and !($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and !@(Get-ChildItem -Force -LiteralPath $answer|Select-Object -First 1).Count)
    }
-   $facts.panther_answer_present=Test-Path -LiteralPath (Join-Path $mount 'Windows\Panther\unattend.xml')
+   try{$facts.panther_answer_present=Test-Path -LiteralPath (Join-Path $mount 'Windows\Panther\unattend.xml')}catch{}
+   Read-PantherAnswerFacts $mount $data.guest_user $facts
    $step=70;Read-FactoryFiles $mount $facts
    $step=80
    if($data.guest_user -notmatch '^[a-zA-Z0-9_-]{1,20}$'){throw 'guest user'}
-   $hive=[IntPtr]::Zero
-   $facts.sam_hive_error=[FactoryInspection]::OROpenHive((Join-Path $mount 'Windows\System32\config\SAM'),[ref]$hive)
-   if($facts.sam_hive_error -eq 0){try{$facts.guest_user_exists=[FactoryInspection]::Exists($hive,('SAM\Domains\Account\Users\Names\'+$data.guest_user))}finally{[void][FactoryInspection]::ORCloseHive($hive)}}
+   try{
+    $sam=Join-Path $mount 'Windows\System32\config\SAM'
+    if(!(Test-OrdinaryFilePath $sam)){throw 'SAM unavailable'}
+    $hive=[IntPtr]::Zero
+    $facts.sam_hive_error=[FactoryInspection]::OROpenHive($sam,[ref]$hive)
+    if($facts.sam_hive_error -eq 0){try{$facts.guest_user_exists=[FactoryInspection]::Exists($hive,('SAM\Domains\Account\Users\Names\'+$data.guest_user))}finally{[void][FactoryInspection]::ORCloseHive($hive)}}
+   }catch{$facts.guest_user_exists=$null}
   }
  }finally{
   if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}

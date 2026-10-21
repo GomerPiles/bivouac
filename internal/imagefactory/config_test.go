@@ -176,6 +176,21 @@ func TestManifestPublicFields(t *testing.T) {
 		}
 	}
 }
+func TestRunnerInput(t *testing.T) {
+	c := testConfig()
+	for _, state := range []string{"absent", "unconfigured"} {
+		facts := Inspection{RunnerState: state}
+		if (facts.RunnerInput(c) != nil) != (state == "absent") {
+			t.Fatal("conditional runner archive requirement")
+		}
+		withArchive := c
+		withArchive.SetupAssets = append(append([]Asset(nil), c.SetupAssets...), Asset{Name: "runner.zip"})
+		if facts.RunnerInput(withArchive) != nil {
+			t.Fatal("pinned runner archive not recognized")
+		}
+	}
+}
+
 func TestCleanupOrdering(t *testing.T) {
 	for _, test := range []struct {
 		name           string

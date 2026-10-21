@@ -120,7 +120,11 @@ func runTestPS(t *testing.T, script string, stdin []byte) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(script))
+	path := filepath.Join(t.TempDir(), "fixture.ps1")
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
 	cmd.Stdin = strings.NewReader(string(stdin))
 	b, err := cmd.Output()
 	if err != nil {

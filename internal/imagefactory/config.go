@@ -157,30 +157,52 @@ func GuestName(id string) (string, error) {
 func hashBytes(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
 type Inspection struct {
-	FailureStep           uint32            `json:"failure_step"`
-	SystemHiveError       uint32            `json:"system_hive_error"`
-	SoftwareHiveError     uint32            `json:"software_hive_error"`
-	SystemSetupInProgress uint32            `json:"system_setup_in_progress"`
-	OOBEInProgress        uint32            `json:"oobe_in_progress"`
-	SetupPhase            uint32            `json:"setup_phase"`
-	ImageStateKind        string            `json:"image_state_kind"`
-	UnattendPointerKind   string            `json:"unattend_pointer_kind"`
-	AnswerDirectoryEmpty  bool              `json:"answer_directory_empty"`
-	PantherAnswerPresent  bool              `json:"panther_answer_present"`
-	AgentService          ServiceFact       `json:"agent_service"`
-	SSHService            ServiceFact       `json:"sshd_service"`
-	Executables           map[string]string `json:"executables"`
-	VDDPresent            bool              `json:"vdd_present"`
-	VDDPackagePresent     bool              `json:"vdd_package_present"`
-	RunnerState           string            `json:"runner_state"`
-	RunnerVersion         string            `json:"runner_version,omitempty"`
-	BivouacPresent        bool              `json:"bivouac_present"`
-	BivouacSubdirectories []string          `json:"bivouac_subdirectories"`
-	GuestStatePresent     bool              `json:"guest_state_present"`
-	SAMHiveError          uint32            `json:"sam_hive_error"`
-	GuestUserExists       *bool             `json:"guest_user_exists"`
-	GuestSetupStep        uint32            `json:"guest_setup_step"`
-	GuestSetupFailed      bool              `json:"guest_setup_failed"`
+	FailureStep           uint32                   `json:"failure_step"`
+	SystemHiveError       uint32                   `json:"system_hive_error"`
+	SoftwareHiveError     uint32                   `json:"software_hive_error"`
+	SystemSetupInProgress uint32                   `json:"system_setup_in_progress"`
+	OOBEInProgress        uint32                   `json:"oobe_in_progress"`
+	SetupPhase            uint32                   `json:"setup_phase"`
+	ImageStateKind        string                   `json:"image_state_kind"`
+	UnattendPointerKind   string                   `json:"unattend_pointer_kind"`
+	AnswerDirectoryEmpty  bool                     `json:"answer_directory_empty"`
+	PantherAnswerPresent  bool                     `json:"panther_answer_present"`
+	PantherAnswer         *AnswerFacts             `json:"panther_answer,omitempty"`
+	AgentService          *ServiceFact             `json:"agent_service,omitempty"`
+	SSHService            *ServiceFact             `json:"sshd_service,omitempty"`
+	Executables           map[string]string        `json:"executables"`
+	VDDPresent            *bool                    `json:"vdd_present,omitempty"`
+	VDDPackagePresent     *bool                    `json:"vdd_package_present,omitempty"`
+	RunnerState           string                   `json:"runner_state"`
+	RunnerResidue         map[string]RunnerResidue `json:"runner_residue"`
+	RunnerVersion         string                   `json:"runner_version,omitempty"`
+	BivouacPresent        bool                     `json:"bivouac_present"`
+	BivouacSubdirectories []string                 `json:"bivouac_subdirectories"`
+	GuestStatePresent     bool                     `json:"guest_state_present"`
+	SAMHiveError          uint32                   `json:"sam_hive_error"`
+	GuestUserExists       *bool                    `json:"guest_user_exists"`
+	GuestSetupStep        uint32                   `json:"guest_setup_step"`
+	GuestSetupFailed      bool                     `json:"guest_setup_failed"`
+}
+
+// AnswerFacts contains only predicates, never answer-file values or commands.
+type AnswerFacts struct {
+	SpecializePass     bool `json:"specialize_pass"`
+	OOBESystemPass     bool `json:"oobe_system_pass"`
+	GuestLocalAccount  bool `json:"guest_local_account"`
+	AutologonPresent   bool `json:"autologon_present"`
+	AutologonGuestUser bool `json:"autologon_guest_user"`
+}
+
+type RunnerResidue struct {
+	Entries      []RunnerEntry `json:"entries"`
+	OmittedNames uint64        `json:"omitted_names"`
+	Truncated    bool          `json:"truncated"`
+}
+
+type RunnerEntry struct {
+	Name      string `json:"name"`
+	Directory bool   `json:"directory"`
 }
 
 type ServiceFact struct {
@@ -210,7 +232,21 @@ func (i Inspection) Generalized() bool {
 }
 
 func (i Inspection) Eligible() bool {
-	return i.Generalized() && i.SAMHiveError == 0 && i.GuestUserExists != nil && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured")
+	return i.Generalized() && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured")
+}
+
+// RunnerInput checks the conditional asset requirement after offline inspection,
+// before any guest can be created. Inspect itself does not need setup media.
+func (i Inspection) RunnerInput(c Config) error {
+	if i.RunnerState != "absent" {
+		return nil
+	}
+	for _, asset := range c.SetupAssets {
+		if strings.EqualFold(asset.Name, "RUNNER.ZIP") {
+			return nil
+		}
+	}
+	return errors.New("runner is absent; a pinned RUNNER.ZIP asset is required before boot")
 }
 
 type Driver struct {
