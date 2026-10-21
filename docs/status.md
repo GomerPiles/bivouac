@@ -257,11 +257,22 @@ isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
     scripts. The runner now gets a process-scope RemoteSigned policy on such
     a guest.
 
-The HCS cache adapter is implemented and unit-tested: a dedicated authenticated
-HvSocket SSH client, setup before JIT, cleanup-before-fallback, refusal on
-uncertain cleanup, and revocation on confirmed deletion/absence or provider
-shutdown. Real SSH tests cover the shared attachment entry point. Live HCS
-cache validation (archives, releases, loss fallback and upload storage) is pending.
+HCS guests use the host cache through a dedicated authenticated HvSocket SSH
+client. The adapter sets up before JIT, removes partial settings before any
+fallback, refuses the launch when that removal is uncertain, and revokes on
+confirmed deletion, confirmed absence or provider shutdown. It passed the
+cache validation fixture live with production's Windows cache settings
+(release proxy, no upload storage), each run on a fresh guest:
+
+- `save`: two concurrent archive saves passed upstream, and the release
+  proxy served its second download from the first.
+- First `restore`: both archives (216 MiB) filled from upstream, and the
+  release downloads hit the cache the previous guest filled.
+- Second `restore`: both archives and both releases hit locally, with no
+  misses or failures.
+
+Loss fallback, `outage`, `interrupt` and upload storage have not run on HCS
+guests.
 
 Open:
 
