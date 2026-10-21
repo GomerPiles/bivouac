@@ -331,7 +331,8 @@ compute and network services must already be running.
    reports no guest reservations from any caller. A foreground VM host is
    never stopped by bivouac. Manual `bivouac vmhost start`,
    `bivouac vmhost stop` and `bivouac vmhost status` still work; a manual
-   stop destroys the service's guests first.
+   stop destroys the service's guests first, and while CI is On the daemon
+   starts the service again within a tick, so stop it outside On.
    Any Off exit, including a login start while Off, stops an idle service even
    if it was started manually. For manual lab use, use foreground `vmhost run`
    or leave the daemon off.

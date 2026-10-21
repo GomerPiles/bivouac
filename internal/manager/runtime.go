@@ -91,6 +91,7 @@ func (m *Manager) observeMode(mode control.Mode) {
 				r := m.runtimes[name]
 				r.active = false
 				r.generation++
+				r.retry = time.Time{} // an explicit On retries at once
 				m.runtimes[name] = r
 			}
 		}

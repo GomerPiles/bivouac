@@ -224,7 +224,8 @@ failure: HCS refuses them at create.
 
 Open:
 
-- Installing and running the VM host service live.
+- Installing and running the VM host service live, and `bivouac on`/`off`
+  starting and stopping it (unit-tested only).
 - Isolation controls that batch 2 did not cover:
   - A control with the deny layer removed. Without it, a refused host
     listener does not rule out the host firewall; the gateway's DNS proxy is
