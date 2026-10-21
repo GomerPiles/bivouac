@@ -33,39 +33,34 @@ type Client struct {
 	verifyServer func(windows.Handle) error
 }
 
-func NewClient() *Client { return &Client{pipe: PipeName, verifyServer: elevatedServer} }
+func NewClient() *Client { return &Client{pipe: PipeName, verifyServer: privilegedServer} }
 
-// elevatedServer refuses a pipe served by an unprivileged process: a user
+// privilegedServer refuses a pipe an unprivileged process created: a user
 // process that created the name first must not be trusted as the VM host.
-func elevatedServer(pipe windows.Handle) error {
-	var pid uint32
-	if err := windows.GetNamedPipeServerProcessId(pipe, &pid); err != nil {
-		return err
-	}
-	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+// The pipe's owner is its creator's default owner, and only an elevated or
+// SYSTEM process can own an object as Administrators or SYSTEM (a filtered
+// token holds Administrators for deny only). The server's process token is
+// not checked: an unelevated client cannot open a SYSTEM service's process.
+func privilegedServer(pipe windows.Handle) error {
+	sd, err := windows.GetSecurityInfo(pipe, windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = windows.CloseHandle(process) }()
-	var token windows.Token
-	if err = windows.OpenProcessToken(process, windows.TOKEN_QUERY, &token); err != nil {
+	owner, _, err := sd.Owner()
+	if err != nil {
 		return err
 	}
-	defer func() { _ = token.Close() }()
-	if token.IsElevated() {
+	if owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
 		return nil
 	}
-	user, err := token.GetTokenUser()
-	if err == nil && user.User.Sid.IsWellKnown(windows.WinLocalSystemSid) {
-		return nil
-	}
-	return errors.New("VM host pipe is served by an unprivileged process")
+	return errors.New("VM host pipe was created by an unprivileged account")
 }
 
 func (c *Client) do(ctx context.Context, req Request) (Response, error) {
 	// Identification lets the VM host learn the caller's account without
-	// being able to act as it.
-	conn, err := winio.DialPipeAccessImpLevel(ctx, c.pipe, clientAccess, winio.PipeImpLevelIdentification)
+	// being able to act as it. READ_CONTROL lets the client read the pipe's
+	// owner.
+	conn, err := winio.DialPipeAccessImpLevel(ctx, c.pipe, clientAccess|windows.READ_CONTROL, winio.PipeImpLevelIdentification)
 	if err != nil {
 		return Response{}, errors.Join(errors.New("VM host unavailable"), err)
 	}

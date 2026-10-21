@@ -222,10 +222,22 @@ the guest. Create closed that handle, confirmed absence and removed the
 journal and storage. Excess vCPUs are not a start
 failure: HCS refuses them at create.
 
+The VM host service runs live. It was installed elevated from a protected
+directory with one UAC prompt and no reboot. The ordinary account then
+started and stopped it with the installer's rights (about 0.3 s each), and
+the pipe answered about 20 ms after start with an empty journal. The first
+attempt exposed a client bug: an unelevated client cannot open a SYSTEM
+service's process token, so it refused every service-hosted pipe. The client
+now checks the pipe's owner instead. Called directly, the provider's
+`Activate` started the stopped service and saw it serve in 0.27 s, and
+`Deactivate` found no guests and stopped it in 0.25 s. Both were no-ops when
+repeated. No guest has run under the service yet.
+
 Open:
 
-- Installing and running the VM host service live, and `bivouac on`/`off`
-  starting and stopping it (unit-tested only).
+- `bivouac on`/`off` driving the service through a live daemon, and
+  `Deactivate` refusing to stop a VM host that holds guests (unit-tested
+  only).
 - Isolation controls that batch 2 did not cover:
   - A control with the deny layer removed. Without it, a refused host
     listener does not rule out the host firewall; the gateway's DNS proxy is

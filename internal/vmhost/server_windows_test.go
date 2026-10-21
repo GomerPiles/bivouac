@@ -203,8 +203,8 @@ func TestPipeIdentifiesCallersAndClientsRefuseUnprivilegedServers(t *testing.T) 
 		t.Fatal("identified caller refused", info, err)
 	}
 	if !windows.GetCurrentProcessToken().IsElevated() {
-		if _, err := (&Client{pipe: name, verifyServer: elevatedServer}).Info(callCtx); err == nil {
-			t.Fatal("client trusted a pipe served by an unprivileged process")
+		if _, err := (&Client{pipe: name, verifyServer: privilegedServer}).Info(callCtx); err == nil {
+			t.Fatal("client trusted a pipe an unprivileged account created")
 		}
 	}
 	// An anonymous-level client cannot be identified, so it is refused.

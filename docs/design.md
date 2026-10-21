@@ -775,8 +775,11 @@ connection: info, create, status, destroy or list.
   - Anonymous callers are refused.
   - The DACL grants accounts read and write data only. It never grants
     create-instance, so no account can serve the name.
-  - The client refuses a server that is neither elevated nor SYSTEM, so a
-    process that squats on the name is not trusted.
+  - The client refuses a pipe whose owner is neither SYSTEM nor
+    Administrators, so a process that squats on the name is not trusted.
+    The owner is the creator's, and only an elevated or SYSTEM process can
+    own an object as either. An unelevated client cannot open a SYSTEM
+    service's process token, so the server process itself is not inspected.
 - Each guest belongs to the account that created it. Status, destroy and list
   see only that account's guests.
 - A create names a configured image, not a path. The VM host sets each
