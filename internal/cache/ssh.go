@@ -228,6 +228,27 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 		return nil, errors.New("cache SSH identity or authentication failed")
 	}
 	client := ssh.NewClient(conn, channels, requests)
+	bootstrap, err := s.AttachSSHClient(ctx, name, client)
+	_ = socket.SetDeadline(time.Time{})
+	return bootstrap, err
+}
+
+// AttachSSHClient takes ownership of a dedicated, already-authenticated client
+// to a currently verified owned guest whose host key the caller has pinned.
+// It closes the client on failure, revocation or service shutdown. Cancellation
+// bounds attachment only; a successful transport outlives ctx. The caller must
+// not share this client with command sessions or close it after handing it off.
+func (s *Service) AttachSSHClient(ctx context.Context, name string, client *ssh.Client) ([]byte, error) {
+	if client == nil {
+		return nil, errors.New("cache SSH client unavailable")
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stopCancel()
+	u, err := url.Parse(s.url)
+	if ctx.Err() != nil || err != nil || u.Hostname() != "127.0.0.1" {
+		_ = client.Close()
+		return nil, errors.New("cache SSH attachment requires active context and loopback TLS identity")
+	}
 	listener, err := client.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = client.Close()
@@ -238,7 +259,6 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 		_ = client.Close()
 		return nil, errors.New("guest cache listener not loopback")
 	}
-	_ = socket.SetDeadline(time.Time{})
 	bootstrap, err := s.issueAt(name, "https://"+listener.Addr().String())
 	if err != nil {
 		_ = client.Close()
@@ -249,6 +269,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	transport.server = server
 	var issued Bootstrap
 	if json.Unmarshal(bootstrap, &issued) != nil {
+		clear(bootstrap)
 		_ = transport.Close()
 		return nil, errors.New("cache bootstrap unavailable")
 	}
@@ -256,6 +277,7 @@ func (s *Service) AttachSSH(ctx context.Context, name string, b SSHBinding) ([]b
 	grant, valid := s.grants[issued.Token]
 	if s.closed || !valid || grant.name != name {
 		s.mu.Unlock()
+		clear(bootstrap)
 		_ = transport.Close()
 		return nil, errors.New("cache closed during SSH attachment")
 	}

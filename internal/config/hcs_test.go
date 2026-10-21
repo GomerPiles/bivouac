@@ -54,11 +54,25 @@ func TestHCSConfigRequiresBoundedExplicitSettings(t *testing.T) {
 			t.Errorf("accepted invalid %s", change[1])
 		}
 	}
-	if _, err := Parse([]byte(hcsExample + "\n[cache]\nenabled = true\n")); err == nil {
-		t.Fatal("unsupported cache accepted for hcs guests")
-	}
 	both := strings.Replace(hcsExample, "[providers.windows.hcs]", "[providers.windows.appsandbox]\nexperimental = true\n[providers.windows.hcs]", 1)
 	if _, err := Parse([]byte(both)); err == nil {
 		t.Fatal("mixed provider settings accepted")
+	}
+}
+
+func TestHCSCacheRequiresLiteralLoopback(t *testing.T) {
+	for _, uploads := range []string{"false", "true"} {
+		base := hcsExample + "\n[cache]\nenabled = true\nrelease_proxy = true\nstore_uploads = " + uploads + "\n"
+		if _, err := Parse([]byte(base)); err != nil {
+			t.Fatal("loopback cache defaults refused", err)
+		}
+		if _, err := Parse([]byte(base + "listen = '127.0.0.1:0'\nguest_host = '127.0.0.1'\n")); err != nil {
+			t.Fatal("explicit loopback cache refused", err)
+		}
+		for _, invalid := range []string{"listen = '0.0.0.0:0'", "listen = 'localhost:0'", "guest_host = '10.0.0.1'", "guest_host = 'localhost'"} {
+			if _, err := Parse([]byte(base + invalid + "\n")); err == nil {
+				t.Errorf("accepted cache %s", invalid)
+			}
+		}
 	}
 }

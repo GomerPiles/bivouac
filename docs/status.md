@@ -257,6 +257,12 @@ isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
     scripts. The runner now gets a process-scope RemoteSigned policy on such
     a guest.
 
+The HCS cache adapter is implemented and unit-tested: a dedicated authenticated
+HvSocket SSH client, setup before JIT, cleanup-before-fallback, refusal on
+uncertain cleanup, and revocation on confirmed deletion/absence or provider
+shutdown. Real SSH tests cover the shared attachment entry point. Live HCS
+cache validation (archives, releases, loss fallback and upload storage) is pending.
+
 Open:
 
 - `Deactivate` refusing to stop a VM host that holds guests (unit-tested
@@ -270,7 +276,7 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
-- Production routing, longer and heavier jobs, cache support, and recovery
+- Production routing, longer and heavier jobs, live cache validation, and recovery
   after a daemon or host restart with HCS guests.
 - The image factory, including a UTC RTC and a script-capable policy in the
   image itself.
@@ -307,7 +313,7 @@ breakaway and log-cap retirement are untested on Windows.
 ## Caching
 
 Actions v2 archive restores and public GitHub release downloads are
-validated live on all three guest types: cold and warm hits, and direct
+validated live on macOS, App Sandbox Windows and Crosvm Linux guests: cold and warm hits, and direct
 fallback after cache loss. Windows and Linux guests reach the cache over
 SSH on guest loopback. Not covered: container images, npm/Cargo/rustup,
 private releases, and GHES; tools with their own trust stores need setup.
@@ -315,6 +321,11 @@ private releases, and GHES; tools with their own trust stores need setup.
 Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
+
+Open parity item, including App Sandbox and HCS: cache admission rejects private
+and special addresses but does not use the host's dynamic interface prefixes.
+A publicly addressed host or LAN prefix is therefore not refused through the
+proxy. Native guest NIC denial does not cover those host-side proxy connections.
 
 Upload storage (`store_uploads`) passed every fixture mode live on isolated
 macOS guests, with production cache limits (4 GiB, 512 MiB objects). The host

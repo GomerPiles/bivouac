@@ -16,16 +16,18 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
+	"golang.org/x/crypto/ssh"
 )
 
 const controller = "ctl-test"
 
 type fakeHost struct {
-	mu        sync.Mutex
-	guests    map[string]vmhost.GuestInfo
-	creates   []vmhost.CreateRequest
-	destroyed []string
-	network   bool
+	mu         sync.Mutex
+	guests     map[string]vmhost.GuestInfo
+	creates    []vmhost.CreateRequest
+	destroyed  []string
+	network    bool
+	destroyErr error
 }
 
 func (h *fakeHost) Info(context.Context) (vmhost.Info, error) { return vmhost.Info{}, nil }
@@ -52,6 +54,9 @@ func (h *fakeHost) Status(_ context.Context, name string) (vmhost.GuestInfo, err
 func (h *fakeHost) Destroy(_ context.Context, name string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.destroyErr != nil {
+		return h.destroyErr
+	}
 	if _, ok := h.guests[name]; !ok {
 		return &vmhost.Error{Code: vmhost.CodeNotFound, Message: "no such guest"}
 	}
@@ -75,12 +80,14 @@ type call struct {
 }
 
 type fakeTransport struct {
-	mu      sync.Mutex
-	opens   int
-	calls   []call
-	sent    map[string][]byte
-	replies map[string]string
-	fail    error // next Run fails with this once
+	mu          sync.Mutex
+	opens       int
+	calls       []call
+	sent        map[string][]byte
+	replies     map[string]string
+	fail        error // next Run fails with this once
+	cacheClient func(context.Context) (*ssh.Client, error)
+	runHook     func(string, []byte) error
 }
 
 func (f *fakeTransport) Open(_ context.Context, _, _ string, pin Pin) (Session, error) {
@@ -99,7 +106,16 @@ type fakeSession struct{ f *fakeTransport }
 func (s *fakeSession) Run(_ context.Context, command string, stdin []byte, _ int) ([]byte, error) {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
-	s.f.calls = append(s.f.calls, call{command, append([]byte(nil), stdin...)})
+	var recorded []byte
+	if !strings.HasSuffix(command, "cache-setup") {
+		recorded = append([]byte(nil), stdin...)
+	}
+	s.f.calls = append(s.f.calls, call{command, recorded})
+	if s.f.runHook != nil {
+		if err := s.f.runHook(command, stdin); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.f.fail; err != nil {
 		s.f.fail = nil
 		return nil, err
@@ -122,6 +138,13 @@ func (s *fakeSession) Send(_ context.Context, name string, data io.Reader, size 
 	return nil
 }
 func (s *fakeSession) Close() error { return nil }
+
+func (s *fakeSession) CacheClient(ctx context.Context) (*ssh.Client, error) {
+	if s.f.cacheClient == nil {
+		return nil, errors.New("cache client unavailable")
+	}
+	return s.f.cacheClient(ctx)
+}
 
 func fixture(t *testing.T, network bool) (*Provider, *fakeHost, *fakeTransport) {
 	t.Helper()

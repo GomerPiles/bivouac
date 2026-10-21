@@ -372,6 +372,16 @@ limits, and warns when the installed service is merely stopped. The provider
 asks for an isolated network on every guest. It has run validation jobs but
 no production routing yet.
 
+The host cache works as for App Sandbox, including the optional release proxy
+and upload storage. With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
+and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
+defaults). A separate authenticated SSH client over HvSocket carries the cache;
+no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
+partial settings refuses launch. Cache transport loss falls back upstream
+without reattachment. HCS cache live validation is pending; leave upload storage
+off on Windows hosts until validated. Use the isolated cache validation fixture
+below for archive/release cold and warm hits, outage fallback and uploads.
+
 To validate it end to end, turn production Windows CI Off first: each
 guest's network adapter trips the App Sandbox broker's interface guard. Use a
 separate `BIVOUAC_HOME` with REST JIT demand, one isolated `bivouac-` label,
@@ -782,7 +792,9 @@ Do not configure workflows to depend on the proxy for network availability.
 
 Opaque bytes live in `~/Library/Caches/bivouac` on macOS. The portable core
 uses `%LOCALAPPDATA%\bivouac\cache` on Windows and the XDG cache directory
-on Linux, but their guest adapters are not yet implemented or validated.
+on Linux. App Sandbox Windows and Crosvm Linux guest adapters are implemented
+and validated for downloads; direct HCS Windows guests have unit coverage with
+live cache validation pending. Upload validation remains as described above.
 `BIVOUAC_HOME` isolates a cache under that test home.
 
 To revert, finish work with `bivouac off --wait`, set `cache.enabled = false`,

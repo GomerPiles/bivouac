@@ -23,12 +23,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
 	"github.com/GomerPiles/bivouac/internal/winguest"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/GomerPiles/bivouac/internal/winrunner"
+	"golang.org/x/crypto/ssh"
 )
 
 // Host is the VM host's pipe client.
@@ -49,6 +51,9 @@ type Transport interface {
 type Session interface {
 	Run(ctx context.Context, command string, stdin []byte, limit int) ([]byte, error)
 	Send(ctx context.Context, name string, data io.Reader, size int64) error
+	// CacheClient opens a separate authenticated client with this session's
+	// in-memory identity and host-key pin. Ownership passes to the caller.
+	CacheClient(context.Context) (*ssh.Client, error)
 	Close() error
 }
 
@@ -103,6 +108,13 @@ type Provider struct {
 
 	mu       sync.Mutex
 	sessions map[string]Session
+
+	// cacheMu serializes attachment and revocation with provider shutdown.
+	// The service owns the clients; this provider owns their per-guest grants.
+	cacheMu     sync.Mutex
+	cache       *cache.Service
+	cacheGuests map[string]struct{}
+	closed      bool
 }
 
 var _ provider.Provider = (*Provider)(nil)
@@ -121,10 +133,13 @@ func New(opts Options, host Host, transport Transport) (*Provider, error) {
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, sessions: map[string]Session{}}, nil
+	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, sessions: map[string]Session{}, cacheGuests: map[string]struct{}{}}, nil
 }
 
 func (p *Provider) Name() string { return p.opts.Name }
+
+// SetCache is configured once, before guest operations begin.
+func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
 
 func (p *Provider) Capabilities() provider.Capabilities {
 	gpu := provider.GPUNone
@@ -365,11 +380,62 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	if len(jit) == 0 || len(jit) > 128<<10 {
 		return errors.New("invalid bounded runner JIT configuration")
 	}
+	if err := p.prepareCache(ctx, name); err != nil {
+		return err
+	}
 	if _, err := p.run(ctx, name, guestHelper+" guest windows seed-jit", jit, 4096); err != nil {
 		return err
 	}
 	_, err := p.run(ctx, name, control+"start", nil, 4096)
 	return err
+}
+
+func (p *Provider) prepareCache(ctx context.Context, name string) error {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	if p.closed {
+		return errors.New("HCS provider closed")
+	}
+	if p.cache == nil {
+		return nil
+	}
+	// Repeat the same current ownership/running proof used before JIT. The
+	// VM host reports quarantined guests as stopped; its guard owns policy.
+	s, _, err := p.session(ctx, name)
+	if err != nil {
+		return err
+	}
+	if _, attached := p.cacheGuests[name]; attached {
+		return nil // Transport loss uses upstream fallback, never reattachment.
+	}
+	client, err := s.CacheClient(ctx)
+	if err == nil {
+		var bootstrap []byte
+		bootstrap, err = p.cache.AttachSSHClient(ctx, name, client)
+		if err == nil {
+			_, err = p.run(ctx, name, guestHelper+" guest windows cache-setup", bootstrap, 4096)
+		}
+		clear(bootstrap)
+	}
+	if err != nil {
+		p.cache.GuestUnavailable(name)
+		p.cache.Revoke(name)
+		if _, err := p.run(ctx, name, guestHelper+" guest windows cache-remove", nil, 4096); err != nil {
+			return errors.New("remove incomplete guest cache adapter")
+		}
+		return nil
+	}
+	p.cacheGuests[name] = struct{}{}
+	return nil
+}
+
+func (p *Provider) revokeCache(name string) {
+	p.cacheMu.Lock()
+	defer p.cacheMu.Unlock()
+	if _, attached := p.cacheGuests[name]; attached {
+		delete(p.cacheGuests, name)
+		p.cache.Revoke(name)
+	}
 }
 
 func (p *Provider) StopRunner(ctx context.Context, name string) error {
@@ -427,6 +493,7 @@ func (p *Provider) Delete(ctx context.Context, name string) error {
 	}
 	g, err := p.guest(ctx, name)
 	if errors.Is(err, provider.ErrNotFound) {
+		p.revokeCache(name)
 		p.forget(name)
 		return nil
 	}
@@ -443,6 +510,7 @@ func (p *Provider) Delete(ctx context.Context, name string) error {
 	if err = p.host.Destroy(ctx, name); err != nil && !vmhost.IsCode(err, vmhost.CodeNotFound) {
 		return err
 	}
+	p.revokeCache(name)
 	_ = os.Remove(p.pinPath(g))
 	return nil
 }
@@ -501,6 +569,13 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 
 // Close ends every guest session. Guests keep running in the VM host.
 func (p *Provider) Close() {
+	p.cacheMu.Lock()
+	p.closed = true
+	for name := range p.cacheGuests {
+		p.cache.Revoke(name)
+		delete(p.cacheGuests, name)
+	}
+	p.cacheMu.Unlock()
 	p.mu.Lock()
 	sessions := p.sessions
 	p.sessions = map[string]Session{}

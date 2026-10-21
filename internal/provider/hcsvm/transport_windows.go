@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/hvsock"
@@ -49,7 +50,7 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 		_ = agent.Close()
 		return nil, err
 	}
-	s := &hvSession{agent: agent, id: id}
+	s := &hvSession{agent: agent, id: id, address: hvsock.Addr{VMID: vmID, ServiceID: sshID}, user: t.user, pin: pin}
 	fail := func(err error) (Session, error) {
 		_ = s.Close()
 		return nil, err
@@ -61,30 +62,55 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 	if !a.DisplayReady || !a.KeyDeployed {
 		return fail(errors.New("guest agent did not confirm the display and SSH key"))
 	}
-	transport, err := hvsock.Dial(ctx, hvsock.Addr{VMID: vmID, ServiceID: sshID})
+	client, err := s.connect(ctx)
 	if err != nil {
-		return fail(errors.Join(provider.SSHUnavailable, err))
-	}
-	client, _, err := winguest.Connect(ctx, transport, t.user, id, pin.Check)
-	switch {
-	case errors.Is(err, winguest.ErrSSHHostKey) || errors.Is(err, provider.SSHHostKey):
-		_ = transport.Close()
-		return fail(provider.SSHHostKey)
-	case errors.Is(err, winguest.ErrSSHRejected):
-		_ = transport.Close()
-		return fail(provider.SSHAuthentication)
-	case err != nil:
-		_ = transport.Close()
-		return fail(provider.SSHUnavailable)
+		return fail(err)
 	}
 	s.client = client
 	return s, nil
 }
 
+func (s *hvSession) connect(ctx context.Context) (*ssh.Client, error) {
+	transport, err := hvsock.Dial(ctx, s.address)
+	if err != nil {
+		return nil, provider.SSHUnavailable
+	}
+	client, _, err := winguest.Connect(ctx, transport, s.user, s.id, s.pin.Check)
+	switch {
+	case errors.Is(err, winguest.ErrSSHHostKey) || errors.Is(err, provider.SSHHostKey):
+		_ = transport.Close()
+		return nil, provider.SSHHostKey
+	case errors.Is(err, winguest.ErrSSHRejected):
+		_ = transport.Close()
+		return nil, provider.SSHAuthentication
+	case err != nil:
+		_ = transport.Close()
+		return nil, provider.SSHUnavailable
+	}
+	return client, nil
+}
+
 type hvSession struct {
-	agent  net.Conn
-	id     *winguest.Identity
-	client *ssh.Client
+	agent   net.Conn
+	id      *winguest.Identity
+	client  *ssh.Client
+	address hvsock.Addr
+	user    string
+	pin     Pin
+	// Identity signing must finish before Close clears the private key.
+	identityMu sync.Mutex
+	closed     bool
+}
+
+func (s *hvSession) CacheClient(ctx context.Context) (*ssh.Client, error) {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+	if s.closed {
+		return nil, provider.SSHClosed
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return s.connect(ctx)
 }
 
 // Run reports a nonzero exit as a command failure and anything else as a
@@ -115,6 +141,12 @@ func (s *hvSession) Send(ctx context.Context, name string, data io.Reader, size 
 }
 
 func (s *hvSession) Close() error {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	var err error
 	if s.client != nil {
 		err = s.client.Close()

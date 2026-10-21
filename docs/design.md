@@ -819,7 +819,16 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   gateway, prefix and MAC) goes to the guest in its runner configuration.
   WaitReady still refuses a guest without a lease, because its runner could
   not reach GitHub.
-- **Not yet:** the download cache is not supported for these guests.
+- **Cache:** after readiness and before JIT delivery, a dedicated SSH client
+  authenticates over HvSocket with the command session's in-memory identity and
+  host-key pin. It serves the shared cache handler through a guest-loopback
+  listener without using the guest NIC or relaxing HCN/VFP isolation. Cache
+  revocation and command cancellation close independent clients. Setup uses
+  the shared Windows adapter with the bootstrap on stdin, cleared after use.
+  Failed setup revokes the grant and removes partial guest settings before
+  upstream fallback; uncertain cleanup refuses JIT. Confirmed deletion or
+  absence revokes the grant, and provider Close closes its cache transports.
+  Transport loss uses upstream fallback without reattachment.
 
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
@@ -1294,14 +1303,17 @@ Windows-hosted providers use a guest-loopback listener on the existing owned SSH
 transport. The host terminates TLS and serves only the cache HTTP handler through
 SSH channels; it does not relay arbitrary guest connections to host TCP sockets.
 The SSH host key must already be pinned by normal guest preparation, and the
-provider repeats ownership/network verification before cache setup or JIT.
+provider repeats its current admission proof before cache setup or JIT. HCS
+checks ownership and running state (quarantine reports stopped); its VM host
+verifies the deny layer during create and reproves it every 10 s, without a
+new synchronous policy check.
 No NIC allow rule, host trust change, host directory share, external service or
 automatic privileged startup is needed. Host cache configuration is restricted
 to literal IPv4 loopback. Each grant records its guest endpoint so archive leases
 remain reachable through the same transport. TLS identity and capabilities stay
 in memory on the host; bootstrap reaches only the disposable guest over stdin.
 
-The shared Node preload is used by all three adapters. Windows installs temporary
+The shared Node preload is used by every guest adapter. Windows installs temporary
 machine root trust inside the clone and exports its logical root collection
 for OpenSSL clients. Guest administrator access avoids the interactive protected
 CurrentUser root-store consent that fails over SSH. Proxy leaf certificates name

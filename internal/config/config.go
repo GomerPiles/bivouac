@@ -493,8 +493,8 @@ func (c *Config) Validate() error {
 			if (h.RunnerArchive == "") != (h.RunnerSHA256 == "") || (h.RunnerSHA256 != "" && (len(h.RunnerSHA256) != 64 || strings.Trim(h.RunnerSHA256, "0123456789abcdefABCDEF") != "")) {
 				errs = append(errs, fmt.Errorf("provider %q: runner_archive requires its SHA-256", name))
 			}
-			if c.Cache.Enabled {
-				errs = append(errs, fmt.Errorf("provider %q: the download cache is not yet supported for hcs guests", name))
+			if c.Cache.Enabled && !c.Cache.loopback() {
+				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
 		case "appsandbox":
 			if p.AppSandbox == nil || p.VZ != nil || p.Crosvm != nil || p.HCS != nil {
