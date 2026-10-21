@@ -37,6 +37,9 @@ func TestHCSConfigRequiresBoundedExplicitSettings(t *testing.T) {
 	if h := c.Providers["windows"].HCS; h == nil || h.Image != "windows" || h.CPU != 4 || h.MemoryGB != 8 {
 		t.Fatal("hcs settings not parsed", h)
 	}
+	if c.Cache.Listen != "127.0.0.1:0" || c.Cache.GuestHost != "127.0.0.1" {
+		t.Fatal("HCS host defaults must use loopback", c.Cache.Listen, c.Cache.GuestHost)
+	}
 	for _, change := range [][2]string{
 		{"experimental = true", "experimental = false"},
 		{`image = "windows"`, `image = 'C:\Images\x.vhdx'`},

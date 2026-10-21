@@ -4,11 +4,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
@@ -16,6 +14,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/provider/hcsvm"
 	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
+	"golang.org/x/sys/windows/svc"
 )
 
 // buildHCSProvider does not contact the VM host: the manager may start
@@ -26,7 +25,8 @@ func buildHCSProvider(name string, cfg config.HCS, store *state.Store) (provider
 		return nil, err
 	}
 	return hcsvm.New(hcsvm.Options{
-		Name: name, ControllerID: store.ControllerID(), Image: cfg.Image, GuestName: cfg.GuestName, GuestUser: cfg.GuestUser,
+		Service: vmHostService{},
+		Name:    name, ControllerID: store.ControllerID(), Image: cfg.Image, GuestName: cfg.GuestName, GuestUser: cfg.GuestUser,
 		CPU: uint32(cfg.CPU), MemoryMB: uint64(cfg.MemoryGB) * 1024, LazyMemory: cfg.LazyMemory, GPU: cfg.GPU, // #nosec G115 -- config bounds CPU to 1-64 and memory to 1-256 GiB.
 		RunnerDir: cfg.RunnerDir, RunnerArchive: cfg.RunnerArchive, RunnerSHA256: cfg.RunnerSHA256,
 		Helper: helper, StateDir: filepath.Join(filepath.Dir(store.Path()), "hcs", name),
@@ -38,15 +38,32 @@ func buildHCSProvider(name string, cfg config.HCS, store *state.Store) (provider
 func checkVMHost(ctx context.Context, cfg config.HCS) error {
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	info, err := vmhost.NewClient().Info(callCtx)
+	check := hcsvm.Options{Image: cfg.Image, CPU: uint32(cfg.CPU), MemoryMB: uint64(cfg.MemoryGB) * 1024} // #nosec G115 -- config bounds CPU and memory.
+	_, err := check.CheckVMHost(callCtx, vmhost.NewClient())
+	return err
+}
+
+type vmHostService struct{}
+
+func (vmHostService) State(ctx context.Context) (bool, svc.State, error) {
+	if err := ctx.Err(); err != nil {
+		return false, 0, err
+	}
+	return vmhost.ServiceState()
+}
+
+func (vmHostService) Start(ctx context.Context) error { return vmhost.StartService(ctx) }
+func (vmHostService) Stop(ctx context.Context) error  { return vmhost.StopService(ctx) }
+
+func (e env) printHCSOff() {
+	cfg, err := config.Load(e.layout.Config)
 	if err != nil {
-		return fmt.Errorf("VM host unavailable (start it with bivouac vmhost start, or run it elevated): %w", err)
+		return
 	}
-	if !slices.Contains(info.Images, cfg.Image) {
-		return fmt.Errorf("VM host has no image %q", cfg.Image)
+	for _, p := range cfg.Providers {
+		if p.Type == "hcs" {
+			fmt.Println("the VM host service stops too once it has no guests; a foreground host stays running")
+			return
+		}
 	}
-	if uint32(cfg.CPU) > info.MaxCPU || uint64(cfg.MemoryGB)*1024 > info.MaxMemoryMB { // #nosec G115 -- config bounds CPU and memory.
-		return errors.New("guest size exceeds the VM host's limits")
-	}
-	return nil
 }

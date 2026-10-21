@@ -286,7 +286,7 @@ func Parse(data []byte) (*Config, error) {
 func (c *Config) applyDefaults() {
 	isWindowsHostCache := false
 	for _, p := range c.Providers {
-		if p.Type == "appsandbox" || p.Type == "crosvm" {
+		if p.Type == "appsandbox" || p.Type == "crosvm" || p.Type == "hcs" {
 			isWindowsHostCache = true
 		}
 	}

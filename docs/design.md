@@ -418,6 +418,31 @@ file, never argv), `RunnerStatus`, `Status`, `Stop` (graceful then forced),
 `Delete` (refuses without our metadata), `List` (owned and foreign),
 `CollectDiagnostics`.
 
+The optional `provider.Activator` interface owns host runtime activation.
+`Activate(ctx)` idempotently starts or checks a runtime for this provider;
+`Deactivate(ctx)` stops a runtime it can control only once no caller has
+instances, and leaves operator-owned foreground runtimes alone. Each call
+has a 3-minute bound. Before startup reconciliation the manager synchronously
+activates providers when On or when they have retained records; failure aborts
+startup. An inactive Activator without records may fail inventory without
+aborting reconciliation; other inventory errors still fail startup.
+
+After startup, On starts one manager-owned activation worker per inactive
+provider, with at least 30 seconds after failure before retry. The manager
+owns activation state under its lock, separately from idle-pool retries.
+Inactive providers have no admission capacity, and `launch` enforces the gate
+for pools, assignments and sweeps; pollers keep receiving job messages and
+other providers continue. Status reports `starting host runtimes` until all
+are active. Drain and stop preserve activation, so returning On does not
+reactivate a serving provider.
+
+Off stops pollers, joins lifecycles and activation workers, and deactivates
+every Activator, including ones this daemon never activated. It publishes
+`releasing host runtimes` before release and `exiting` only afterwards, so
+`off --wait` includes release. Release failures are logged and still allow
+exit; activation state becomes inactive. Context cancellation cancels and
+joins workers but never deactivates: guests remain for adoption.
+
 ### macOS (`vz` provider)
 
 Each VM is a directory in bivouac's VM store
@@ -791,6 +816,22 @@ reboot. Installation grants the configured accounts start and stop rights on
 that one service, so mode changes never need elevation. The service starts from
 the service manager with a clean environment. That closes the same-account UAC
 concern above.
+
+The HCS provider implements `Activator`. It checks the serving host's image
+and CPU/memory limits using the same observational check as doctor. If the
+pipe is unavailable it starts the installed service, waits through SCM
+StartPending/StopPending, then waits for pipe readiness after startup recovery.
+Without the service, the operator must run an elevated foreground VM host.
+The manager reserves the configured HCS CPU/memory in each instance record;
+Create refuses an explicit spec that disagrees with its configured image or size.
+
+Off stops the service only after Info positively reports zero guest
+reservations across all callers. Unknown inventory, pending service states,
+or retained failed-cleanup reservations leave it running with a logged reason.
+The check/stop window is accepted because the configured accounts are
+bivouac's own and this daemon is exiting. A foreground VM host is never
+stopped. Drain, stop and manager signal shutdown keep the runtime active;
+manual service start/stop commands remain available.
 
 Guests are created with `ShouldTerminateOnLastHandleClosed`, and the VM host
 holds their handles:

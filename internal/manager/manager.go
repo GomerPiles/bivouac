@@ -89,6 +89,7 @@ type Manager struct {
 	phase       string
 	wg          sync.WaitGroup
 	poolRetry   map[string]time.Time
+	runtimes    map[string]runtimeState // guarded by mu; separate from pool retries
 }
 
 type run struct {
@@ -153,18 +154,23 @@ func New(o Options) (*Manager, error) {
 	if o.ProviderTimeout == 0 {
 		o.ProviderTimeout = 2 * time.Minute
 	}
-	return &Manager{o: o, runs: map[string]*run{}, pollers: map[string]*poller{}, events: make(chan struct{}, 1), poolRetry: map[string]time.Time{}}, nil
+	return &Manager{o: o, runs: map[string]*run{}, pollers: map[string]*poller{}, events: make(chan struct{}, 1), poolRetry: map[string]time.Time{}, runtimes: map[string]runtimeState{}}, nil
 }
 
 // Run executes the control loop until ctx is cancelled or the mode is off and
 // nothing is active. It returns nil in both cases.
 func (m *Manager) Run(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	m.mu.Lock()
-	m.root = ctx
+	m.root = runCtx
 	m.mu.Unlock()
 	mode, err := m.o.Files.ReadMode()
 	m.accepting.Store(err == nil && mode == control.ModeOn)
-	if err := m.Reconcile(ctx); err != nil {
+	if err := m.activateStartup(runCtx, mode); err != nil {
+		return err
+	}
+	if err := m.Reconcile(runCtx); err != nil {
 		return fmt.Errorf("reconcile: %w", err)
 	}
 	ticker := time.NewTicker(m.o.Tick)
@@ -178,7 +184,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.o.Log.Error("read mode", "error", err)
 			mode = control.ModeDrain
 		}
-		exit := m.apply(ctx, mode)
+		exit := m.apply(runCtx, mode)
 		m.writeStatus(ctx, mode)
 		if !time.Now().Before(nextPerformance) {
 			if sample, err := performance.Sample(); err == nil {
@@ -202,7 +208,15 @@ func (m *Manager) Run(ctx context.Context) error {
 			// Only parked teardowns remain; their records wait for the next
 			// start. Join every lifecycle goroutine before returning.
 			m.cancelRuns(false)
+			cancel()
 			m.wg.Wait()
+			// A signal always leaves runtimes for adoption, including a signal
+			// racing with the off-exit join.
+			if ctx.Err() == nil {
+				m.deactivate(ctx)
+				m.setPhase("exiting")
+				m.writeStatus(ctx, mode)
+			}
 			return nil
 		}
 		select {
@@ -210,6 +224,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			m.o.Log.Info("shutting down; active guests keep running and are reconciled on the next start")
 			m.stopPollers()
 			m.cancelRuns(false)
+			cancel()
 			m.wg.Wait()
 			return nil
 		case <-m.o.Wake:
@@ -227,13 +242,18 @@ func (m *Manager) apply(ctx context.Context, mode control.Mode) bool {
 	m.accepting.Store(mode == control.ModeOn)
 	switch mode {
 	case control.ModeOn:
+		starting := m.activateAsync(ctx, time.Now())
+		phase := "polling"
 		if m.o.Config.GitHub.Demand == config.DemandJIT {
 			m.fillPool(ctx)
-			m.setPhase("maintaining idle pool")
+			phase = "maintaining idle pool"
 		} else {
 			m.startPollers(ctx)
-			m.setPhase("polling")
 		}
+		if starting {
+			phase = "starting host runtimes"
+		}
+		m.setPhase(phase)
 	case control.ModeDrain:
 		if m.o.Config.GitHub.Demand == config.DemandScaleSet {
 			m.startPollers(ctx)
@@ -260,7 +280,7 @@ func (m *Manager) apply(ctx context.Context, mode control.Mode) bool {
 		if m.activeCount() > 0 {
 			m.setPhase("draining")
 		} else {
-			m.setPhase("exiting")
+			m.setPhase("releasing host runtimes")
 			return true
 		}
 	}
@@ -369,6 +389,9 @@ func (m *Manager) rawCapacity(ctx context.Context, name string) (int, int) {
 }
 
 func (m *Manager) rawCapacityWith(ctx context.Context, name string, inv *inventory) (int, int) {
+	if !m.runtimeActive(name) {
+		return 0, 0
+	}
 	pcfg := m.o.Config.Providers[name]
 	p := m.o.Providers[name]
 	all := m.o.Store.List()
@@ -478,6 +501,9 @@ func recordedNames(active []*state.Instance) map[string]bool {
 }
 
 func guestSize(p config.Provider) (cpu, memGB int) {
+	if p.HCS != nil {
+		return p.HCS.CPU, p.HCS.MemoryGB
+	}
 	if p.Crosvm != nil {
 		return p.Crosvm.CPU, p.Crosvm.MemoryGB
 	}
@@ -497,6 +523,9 @@ func guestSize(p config.Provider) (cpu, memGB int) {
 func (m *Manager) launch(ctx context.Context, providerName string, scaleSetID int, sweep bool) (*state.Instance, error) {
 	m.admissionMu.Lock()
 	defer m.admissionMu.Unlock()
+	if !m.runtimeActive(providerName) {
+		return nil, fmt.Errorf("no capacity for provider %s: host runtime is inactive", providerName)
+	}
 	if capacity, _ := m.capacity(ctx, providerName); capacity == 0 {
 		return nil, fmt.Errorf("no capacity for provider %s", providerName)
 	}
@@ -510,7 +539,7 @@ func (m *Manager) launch(ctx context.Context, providerName string, scaleSetID in
 		CreatedAt:  time.Now(),
 		Sweep:      sweep,
 	}
-	if m.o.Config.Providers[providerName].AppSandbox != nil || m.o.Config.Providers[providerName].Crosvm != nil {
+	if m.o.Config.Providers[providerName].AppSandbox != nil || m.o.Config.Providers[providerName].Crosvm != nil || m.o.Config.Providers[providerName].HCS != nil {
 		inst.CPU, inst.MemoryGB = guestSize(m.o.Config.Providers[providerName])
 	}
 	if t := m.o.Config.Providers[providerName].VZ; t != nil && t.Containers != nil {
@@ -780,6 +809,14 @@ func (m *Manager) spec(inst *state.Instance, pcfg config.Provider) (provider.Spe
 		Meta: provider.Metadata{ControllerID: m.o.Store.ControllerID(), InstanceID: inst.ID, CreatedAt: inst.CreatedAt.UTC().Format(time.RFC3339)},
 	}
 	switch pcfg.Type {
+	case "hcs":
+		spec.Baseline = pcfg.HCS.Image
+		spec.CPU = pcfg.HCS.CPU
+		spec.MemoryMB = pcfg.HCS.MemoryGB * 1024
+		if inst.CPU > 0 && inst.MemoryGB > 0 {
+			spec.CPU = inst.CPU
+			spec.MemoryMB = inst.MemoryGB * 1024
+		}
 	case "crosvm":
 		spec.Baseline = pcfg.Crosvm.BaselineName
 		spec.CPU = pcfg.Crosvm.CPU
@@ -1165,6 +1202,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	for name, p := range m.o.Providers {
 		inv := m.list(ctx, name)
 		if inv.err != nil {
+			if !m.runtimeActive(name) && len(m.activeFor(name)) == 0 {
+				m.o.Log.Warn("inactive host runtime unavailable; skipping inventory", "provider", name, "error", inv.err)
+				continue
+			}
 			return fmt.Errorf("list %s: %w", name, inv.err)
 		}
 		for _, o := range inv.owned {
@@ -1229,7 +1270,10 @@ func (m *Manager) writeStatus(ctx context.Context, mode control.Mode) {
 	for _, name := range names {
 		// One bounded inventory per provider per tick serves both capacity
 		// and the unmanaged report.
-		inv := m.list(ctx, name)
+		var inv inventory
+		if m.runtimeActive(name) {
+			inv = m.list(ctx, name)
+		}
 		c, foreign := m.capacityWith(ctx, name, &inv)
 		s.Budgets.Capacity[name] = c
 		s.Budgets.Foreign += foreign

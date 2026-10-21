@@ -326,14 +326,21 @@ compute and network services must already be running.
    Installing registers a manual-start service that restarts after a crash,
    and grants the configured accounts query, start and stop rights on that
    service only.
-4. From the ordinary account, use `bivouac vmhost start`, `bivouac vmhost stop`
-   and `bivouac vmhost status`. Stopping the service destroys its guests
-   first.
+4. From the ordinary account, `bivouac on` starts the installed service;
+   `bivouac off` stops it after the daemon's guests finish and the VM host
+   reports no guest reservations from any caller. A foreground VM host is
+   never stopped by bivouac. Manual `bivouac vmhost start`,
+   `bivouac vmhost stop` and `bivouac vmhost status` still work; a manual
+   stop destroys the service's guests first.
 5. To remove it, stop it, then run `bivouac vmhost uninstall` elevated. A
    running service is refused.
 
 The service logs to `vmhost.log` in its root. Any guest left by an earlier VM
 host is settled when it next starts.
+Drain and stop leave the service active. Off logs why if it cannot prove the
+VM host has no guests, including reservations retained by failed cleanups,
+or cannot stop the service. The daemon still exits; once satisfied it is safe,
+the operator settles the host with `bivouac vmhost stop`.
 
 The manager's provider then names one of the VM host's images. `guest_name`
 and `guest_user` are that prepared image's Windows computer name and console
@@ -357,8 +364,8 @@ runner_dir = 'C:\actions-runner'
 ```
 
 `bivouac doctor` checks that the VM host is serving this image within its
-limits. The provider asks for an isolated network on every guest; networked
-guests have not yet passed a live lab batch, so do not route jobs to it.
+limits. The provider asks for an isolated network on every guest. It has not
+yet run live as part of the manager, so do not route production jobs to it.
 
 ## Direct HCS lab batch
 

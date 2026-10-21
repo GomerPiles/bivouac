@@ -140,8 +140,10 @@ func (e env) run(ctx context.Context, args []string) error {
 		return fail(err)
 	}
 	err = m.Run(ctx)
-	if errors.Is(err, manager.ErrRefused) {
-		// A restart cannot help: report it in status and exit cleanly.
+	var activationErr *manager.ActivationError
+	if errors.Is(err, manager.ErrRefused) || errors.As(err, &activationErr) {
+		// Configuration conflicts and unavailable required runtimes use the
+		// startup-failure status path, without an automatic restart loop.
 		return fail(err)
 	}
 	log.Info("bivouac stopped", "error", err)

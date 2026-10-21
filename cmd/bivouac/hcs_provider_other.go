@@ -18,3 +18,5 @@ func buildHCSProvider(string, config.HCS, *state.Store) (provider.Provider, erro
 func checkVMHost(context.Context, config.HCS) error {
 	return errors.New("hcs guests run only on Windows hosts")
 }
+
+func (e env) printHCSOff() {}

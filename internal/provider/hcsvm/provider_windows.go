@@ -58,6 +58,8 @@ type Pin interface {
 }
 
 type Options struct {
+	// Service is optional; nil leaves an operator-owned foreground host alone.
+	Service      Service
 	Name         string
 	ControllerID string
 	// Image is the VM host's configured image name.
@@ -97,6 +99,7 @@ type Provider struct {
 }
 
 var _ provider.Provider = (*Provider)(nil)
+var _ provider.Activator = (*Provider)(nil)
 
 func New(opts Options, host Host, transport Transport) (*Provider, error) {
 	if opts.Name == "" || opts.ControllerID == "" || opts.Image == "" || opts.GuestName == "" || opts.GuestUser == "" || host == nil || transport == nil {
@@ -142,6 +145,13 @@ func meta(g vmhost.GuestInfo) provider.Metadata {
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if spec.Meta.ControllerID != p.opts.ControllerID || spec.Name != p.prefix()+spec.Meta.InstanceID {
 		return provider.ErrNotOwned
+	}
+	// Zero values use the configured size. Explicit manager reservations must
+	// agree with the request: this provider uses its immutable Options to create.
+	if (spec.Baseline != "" && spec.Baseline != p.opts.Image) ||
+		(spec.CPU != 0 && (spec.CPU < 0 || uint64(spec.CPU) != uint64(p.opts.CPU))) ||
+		(spec.MemoryMB != 0 && (spec.MemoryMB < 0 || uint64(spec.MemoryMB) != p.opts.MemoryMB)) {
+		return errors.New("HCS spec image or resources disagree with provider settings")
 	}
 	labels := map[string]string{"controller_id": spec.Meta.ControllerID, "instance_id": spec.Meta.InstanceID}
 	if spec.Meta.CreatedAt != "" {
