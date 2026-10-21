@@ -15,7 +15,8 @@ package vmhost
 //   2. Lazily committed (virtual-address-backed) memory with GPU-PV.
 //   3. A guest whose parent is a flattened single-file copy of the image.
 //   4-5. Production sizing (4 CPU, 8 GiB), twice.
-//   6. Opt-in failed start (64 CPU, 2 GiB lazy memory, no GPU).
+//   6. Opt-in failed start (2 CPU, 2 GiB lazy memory, no GPU, a missing
+//      second disk).
 
 import (
 	"bufio"
@@ -31,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -146,7 +148,17 @@ type failedStartNative struct {
 	result      *failedStart
 }
 
+// Create adds a second disk whose file does not exist. HCS accepts the
+// document and fails only at start, when the VM worker opens its disks;
+// excess vCPUs are refused at create instead.
 func (n *failedStartNative) Create(ctx context.Context, name string, doc hcs.ComputeSystem) (system, error) {
+	vm := *doc.VirtualMachine
+	primary := vm.Devices.Scsi["Primary"]
+	attachments := maps.Clone(primary.Attachments)
+	attachments["1"] = hcs.Attachment{Type: hcs.AttachmentVirtualDisk, Path: filepath.Join(filepath.Dir(attachments["0"].Path), "missing.vhdx")}
+	vm.Devices.Scsi = maps.Clone(vm.Devices.Scsi)
+	vm.Devices.Scsi["Primary"] = hcs.Scsi{Attachments: attachments}
+	doc.VirtualMachine = &vm
 	s, err := n.native.Create(ctx, name, doc)
 	if s != nil {
 		s = &failedStartSystem{system: s, recorder: n, handle: "create"}
@@ -302,7 +314,7 @@ func TestLabBatch(t *testing.T) {
 		{"flattened", 2, 4096, false, true, false},
 		{"production-size-1", 4, 8192, false, false, false},
 		{"production-size-2", 4, 8192, false, false, false},
-		{"failed-start", 64, 2048, true, false, false},
+		{"failed-start", 2, 2048, true, false, false},
 	}
 	for _, run := range runs {
 		if *lab.only == "" && run.label == "failed-start" {
@@ -356,7 +368,7 @@ func TestLabBatch(t *testing.T) {
 }
 
 func failStartAndValidate(t *testing.T, host *Host, image string) (r labRun) {
-	r = labRun{Run: "failed-start", CPU: 64, MemoryMB: 2048, LazyMemory: true, Timings: map[string]int64{}}
+	r = labRun{Run: "failed-start", CPU: 2, MemoryMB: 2048, LazyMemory: true, Timings: map[string]int64{}}
 	r.FailedStart = &failedStart{HostCPU: runtime.NumCPU(), Calls: []failedStartCall{}}
 	f := r.FailedStart
 	var id [5]byte

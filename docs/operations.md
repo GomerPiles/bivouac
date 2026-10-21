@@ -377,9 +377,10 @@ also checks that an unelevated process reaches only the HvSocket service its
 account was granted.
 
 `-lab.only=failed-start` explicitly selects an additional run, skipped when
-`-lab.only` is empty. It requests 64 vCPUs and 2048 MiB of lazy memory from
-the prepared image to force HCS to refuse start on a host with fewer logical
-processors; it needs no networking or GPU. Its `failed_start` record contains
+`-lab.only` is empty. It boots the prepared image with 2 vCPUs and 2048 MiB of
+lazy memory plus a second disk whose file does not exist, which HCS accepts at
+create and refuses at start (more vCPUs than the host has are refused at
+create instead); it needs no networking or GPU. Its `failed_start` record contains
 the host CPU count, ordered property/start/terminate observations (ownership
 comparisons and runtime-ID presence only), create error and HCS operation/code,
 retention status, and journal-empty/native-absent cleanup checks. An unexpected
