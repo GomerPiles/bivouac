@@ -222,3 +222,26 @@ func TestCleanupOrdering(t *testing.T) {
 		})
 	}
 }
+
+func TestEligibleAdmitsOnlyDiagLogResidue(t *testing.T) {
+	exists := true
+	base := func(residue map[string]RunnerResidue) Inspection {
+		return Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &exists, RunnerState: "residue", RunnerResidue: residue}
+	}
+	log := RunnerEntry{Name: "Runner_20260101-000000-utc.log"}
+	if !base(map[string]RunnerResidue{"_diag": {Entries: []RunnerEntry{log}}}).Eligible() {
+		t.Fatal("diag log residue refused")
+	}
+	for name, residue := range map[string]map[string]RunnerResidue{
+		"work":      {"_work": {Entries: []RunnerEntry{log}}},
+		"both":      {"_diag": {Entries: []RunnerEntry{log}}, "_work": {Entries: []RunnerEntry{log}}},
+		"directory": {"_diag": {Entries: []RunnerEntry{{Name: "pages", Directory: true}}}},
+		"omitted":   {"_diag": {Entries: []RunnerEntry{log}, OmittedNames: 1}},
+		"truncated": {"_diag": {Entries: []RunnerEntry{log}, Truncated: true}},
+		"empty":     {"_diag": {}},
+	} {
+		if base(residue).Eligible() {
+			t.Fatalf("%s residue admitted", name)
+		}
+	}
+}

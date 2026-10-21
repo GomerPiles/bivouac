@@ -45,6 +45,18 @@ if($agent.Status -ne 'Running'){throw 'setup failed'}
 
 $step=70;Write-SetupStep $step $false
 . (Join-Path $PSScriptRoot 'HCSCHECK.PS1')
+# Offline inspection admits a template whose only runner residue is regular
+# files in _diag (logs from template preparation). Remove them; the runner
+# recreates _diag when it starts.
+$diag='C:\actions-runner\_diag'
+if(Test-Path -LiteralPath $diag){
+ $item=Get-Item -Force -LiteralPath $diag
+ if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'runner residue'}
+ foreach($entry in @(Get-ChildItem -Force -LiteralPath $diag)){
+  if($entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'runner residue'}
+  $null=Remove-Item -Force -LiteralPath $entry.FullName
+ }
+}
 if(!(Assert-CleanRunner 'C:\actions-runner')){
  $runnerZip=Join-Path $PSScriptRoot 'RUNNER.ZIP'
  if(!(Test-Path -LiteralPath $runnerZip -PathType Leaf)){throw 'runner absent'}

@@ -232,7 +232,26 @@ func (i Inspection) Generalized() bool {
 }
 
 func (i Inspection) Eligible() bool {
-	return i.Generalized() && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured")
+	return i.Generalized() && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
+}
+
+// diagLogsOnly admits residue that is only regular files in _diag, such as
+// logs from template preparation; guest setup removes them before its runner
+// check. Anything in _work, any directory, or any omitted name stays refused.
+func (i Inspection) diagLogsOnly() bool {
+	if i.RunnerState != "residue" || len(i.RunnerResidue) != 1 {
+		return false
+	}
+	diag, ok := i.RunnerResidue["_diag"]
+	if !ok || diag.Truncated || diag.OmittedNames != 0 || len(diag.Entries) == 0 {
+		return false
+	}
+	for _, e := range diag.Entries {
+		if e.Directory {
+			return false
+		}
+	}
+	return true
 }
 
 // RunnerInput checks the conditional asset requirement after offline inspection,
