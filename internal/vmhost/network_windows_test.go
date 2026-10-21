@@ -473,22 +473,28 @@ func TestNetworkCreateFailureRetainsForeignCleanup(t *testing.T) {
 	requireNetworkGone(t, h, n, f)
 }
 
-func TestNetworkVerifyFailureRetainsGuestWhenTerminationFails(t *testing.T) {
+func TestNetworkVerifyFailureEndsGuestByClosingWhenTerminateFails(t *testing.T) {
 	h, n, f := networkFixture(t)
 	verifyErr := errors.New("policy verification failed")
-	terminateErr := errors.New("termination unavailable")
-	f.verify.once, n.terminateErr = verifyErr, terminateErr
-	if _, err := h.Create(t.Context(), networkSpec()); !errors.Is(err, verifyErr) || !errors.Is(err, terminateErr) {
+	f.verify.once, n.terminateErr, n.terminateOnClose = verifyErr, errors.New("termination unavailable"), true
+	if _, err := h.Create(t.Context(), networkSpec()); !errors.Is(err, verifyErr) || errors.Is(err, errRetained) {
+		t.Fatal("closing this host's handle did not end the guest", err)
+	}
+	requireNetworkGone(t, h, n, f)
+}
+
+func TestNetworkVerifyFailureRetainsGuestWhenItsNetworkCannotBeDeleted(t *testing.T) {
+	h, n, f := networkFixture(t)
+	verifyErr := errors.New("policy verification failed")
+	f.verify.once, f.delete.sticky = verifyErr, hostnet.ErrForeign
+	if _, err := h.Create(t.Context(), networkSpec()); !errors.Is(err, verifyErr) || !errors.Is(err, errRetained) {
 		t.Fatal("create lost the verification or cleanup failure", err)
 	}
 	var r record
-	if err := h.read(recordName(networkSpec().Name), &r); err != nil || r.Phase != phaseCreated || r.Network == nil || r.Network.VMRuntimeID == "" {
-		t.Fatal("failed termination lost committed network journal", err)
+	if err := h.read(recordName(networkSpec().Name), &r); err != nil || r.Phase != phaseDeleting || r.Network == nil || len(n.systems) != 0 {
+		t.Fatal("unfinished cleanup lost the network journal", err)
 	}
-	if s := n.systems[r.Spec.Name]; s == nil || s.props.State != hcs.StateRunning || f.delete.calls != 0 {
-		t.Fatal("failed termination deleted a live guest's network")
-	}
-	n.terminateErr = nil
+	f.delete.sticky = nil
 	if err := h.Recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}

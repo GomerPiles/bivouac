@@ -30,6 +30,9 @@ type Server struct {
 	host     *Host
 	cfg      Config
 	identify func(net.Conn) (string, error)
+	// guardTimeout bounds the guard's work on one guest, including its
+	// quarantine.
+	guardTimeout time.Duration
 
 	mu      sync.Mutex
 	closing bool
@@ -57,7 +60,7 @@ type owned struct {
 }
 
 func NewServer(host *Host, cfg Config) *Server {
-	return &Server{host: host, cfg: cfg, identify: pipeCaller, guests: map[string]*owned{}}
+	return &Server{host: host, cfg: cfg, identify: pipeCaller, guardTimeout: 30 * time.Second, guests: map[string]*owned{}}
 }
 
 // Serve handles connections until ctx ends, then waits for requests in flight.
@@ -434,7 +437,7 @@ func (s *Server) guardPass(ctx context.Context) {
 	s.mu.Unlock()
 	var failures []error
 	for _, o := range claimed {
-		passCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		passCtx, cancel := context.WithTimeout(ctx, s.guardTimeout)
 		err := s.host.VerifyNetwork(passCtx, o.guest)
 		destroyed := false
 		if err != nil && ctx.Err() == nil {

@@ -228,9 +228,24 @@ type Guest struct {
 	system  system
 }
 
+// prove reports which of the guest's identity checks failed, if any. The
+// detail is HCS state, never guest output.
 func (h *Host) prove(name string, r record, p hcs.Properties) error {
-	if p.ID != name || p.Owner != h.owner || p.SystemType != hcs.SystemTypeVM || (r.RuntimeID != "" && !strings.EqualFold(r.RuntimeID, p.RuntimeID)) {
-		return ErrForeign
+	var failed []string
+	if p.ID != name {
+		failed = append(failed, "id")
+	}
+	if p.Owner != h.owner {
+		failed = append(failed, "owner")
+	}
+	if p.SystemType != hcs.SystemTypeVM {
+		failed = append(failed, "system type")
+	}
+	if r.RuntimeID != "" && !strings.EqualFold(r.RuntimeID, p.RuntimeID) {
+		failed = append(failed, "runtime id")
+	}
+	if len(failed) != 0 {
+		return fmt.Errorf("%w (%s differs; state %q)", ErrForeign, strings.Join(failed, ", "), p.State)
 	}
 	return nil
 }
@@ -271,6 +286,7 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		return nil, fmt.Errorf("cannot journal guest intent: %w", err)
 	}
 	var held system
+	heldProven := false // held was proven this host's exact new instance
 	retain := false
 	defer func() {
 		if err == nil || retain {
@@ -278,7 +294,7 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
-		if destroyErr := h.destroy(cleanupCtx, spec.Name, held); destroyErr != nil {
+		if destroyErr := h.destroy(cleanupCtx, spec.Name, held, heldProven); destroyErr != nil {
 			err = errors.Join(err, errRetained, destroyErr)
 		}
 	}()
@@ -343,6 +359,7 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 	if err = h.prove(spec.Name, r, p); err != nil {
 		return nil, err
 	}
+	heldProven = true
 	// Install the port policy before the guest's first instruction when the
 	// switch port already exists; otherwise immediately after start.
 	if r.Network != nil {
@@ -481,7 +498,8 @@ func (h *Host) Running(ctx context.Context, g *Guest) error {
 func (h *Host) Destroy(ctx context.Context, g *Guest) error {
 	held := g.system
 	g.system = nil
-	return h.destroy(ctx, g.Name, held)
+	// A Guest exists only once its instance was proven and started.
+	return h.destroy(ctx, g.Name, held, true)
 }
 
 // Recover settles every journalled guest left by an earlier VM host. Those
@@ -499,14 +517,17 @@ func (h *Host) Recover(ctx context.Context) error {
 		if !ok || entry.IsDir() || !strings.HasPrefix(name, NamePrefix) {
 			continue
 		}
-		if err := h.destroy(ctx, name, nil); err != nil {
+		if err := h.destroy(ctx, name, nil, false); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (h *Host) destroy(ctx context.Context, name string, held system) error {
+// destroy ends a journalled guest and removes its storage. held is this
+// host's own handle, if any; heldProven says it was proven this host's exact
+// new instance when it was created.
+func (h *Host) destroy(ctx context.Context, name string, held system, heldProven bool) error {
 	if held != nil {
 		defer held.Close()
 	}
@@ -547,19 +568,26 @@ func (h *Host) destroy(ctx context.Context, name string, held system) error {
 			defer s.Close()
 		}
 	}
+	var ending error // why a held guest may not have ended, for the error below
 	if s != nil {
 		p, err := s.Properties(ctx)
-		if err != nil {
-			return err
+		if err == nil {
+			err = h.prove(name, r, p)
 		}
-		if err = h.prove(name, r, p); err != nil {
-			return err
-		}
-		if p.State != hcs.StateStopped {
-			if err = s.Terminate(ctx); err != nil {
-				return err
+		switch {
+		case err == nil && p.State != hcs.StateStopped:
+			if ending = s.Terminate(ctx); ending != nil && !heldProven {
+				return ending
 			}
+		case err != nil && !heldProven:
+			// A system opened by name is touched only once proven ours.
+			return err
+		case err != nil:
+			ending = err
 		}
+		// A handle from this host's own create, proven right after it, is
+		// ours even when a failed start leaves properties that no longer
+		// prove it. Closing it ends the guest; absence is confirmed below.
 		s.Close()
 	}
 	// Terminate completing is not proof of absence. Poll only this name.
@@ -573,7 +601,7 @@ func (h *Host) destroy(ctx context.Context, name string, held system) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("guest absence unconfirmed; storage retained")
+			return errors.Join(errors.New("guest absence unconfirmed; storage retained"), ending)
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,13 +34,22 @@ type fakeNative struct {
 	propertyCalls  int
 	terminateCalls int
 	terminateErr   error
+	// startErr fails Start; afterFailedStart then changes what the guest's
+	// properties report, as a real failed start can.
+	startErr         error
+	afterFailedStart func(*hcs.Properties)
+	propertiesErr    error
+	// terminateOnClose ends a guest when its creating handle closes, as
+	// TerminateOnLastHandleClosed does.
+	terminateOnClose bool
 }
 
 type fakeSystem struct {
-	n      *fakeNative
-	name   string
-	props  hcs.Properties
-	closed bool
+	n       *fakeNative
+	name    string
+	props   hcs.Properties
+	closed  bool
+	creator bool // returned by Create rather than Open
 }
 
 func (n *fakeNative) Open(_ context.Context, name string) (system, error) {
@@ -76,7 +86,7 @@ func (n *fakeNative) Create(_ context.Context, name string, doc hcs.ComputeSyste
 	if n.owner != "" {
 		owner = n.owner
 	}
-	s := &fakeSystem{n: n, name: name, props: hcs.Properties{ID: name, Owner: owner, SystemType: hcs.SystemTypeVM, State: "Created"}}
+	s := &fakeSystem{n: n, name: name, props: hcs.Properties{ID: name, Owner: owner, SystemType: hcs.SystemTypeVM, State: "Created"}, creator: true}
 	n.systems[name] = s
 	n.created = append(n.created, name)
 	return s, nil
@@ -106,6 +116,9 @@ func (s *fakeSystem) Properties(context.Context) (hcs.Properties, error) {
 	s.n.mu.Lock()
 	defer s.n.mu.Unlock()
 	s.n.propertyCalls++
+	if s.n.propertiesErr != nil {
+		return hcs.Properties{}, s.n.propertiesErr
+	}
 	if live, ok := s.n.systems[s.name]; ok {
 		return live.props, nil
 	}
@@ -115,6 +128,13 @@ func (s *fakeSystem) Start(context.Context) error {
 	s.n.mu.Lock()
 	defer s.n.mu.Unlock()
 	live := s.n.systems[s.name]
+	if s.n.startErr != nil {
+		live.props.State = hcs.StateStopped
+		if s.n.afterFailedStart != nil {
+			s.n.afterFailedStart(&live.props)
+		}
+		return s.n.startErr
+	}
 	live.props.State, live.props.RuntimeID = hcs.StateRunning, fakeRuntimeID
 	return nil
 }
@@ -129,7 +149,14 @@ func (s *fakeSystem) Terminate(context.Context) error {
 	return nil
 }
 func (s *fakeSystem) Modify(context.Context, hcs.ModifyRequest) error { return nil }
-func (s *fakeSystem) Close()                                          { s.closed = true }
+func (s *fakeSystem) Close() {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	s.closed = true
+	if live, ok := s.n.systems[s.name]; ok && s.creator && s.n.terminateOnClose {
+		live.props.State = hcs.StateStopped
+	}
+}
 
 func fixture(t *testing.T) (*Host, *fakeNative) {
 	t.Helper()
@@ -271,6 +298,45 @@ func TestAbsenceIsRequiredBeforeStorageIsRemoved(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(h.dir, g.Name, diskFile)); err != nil {
 		t.Fatal("storage removed before absence was confirmed")
+	}
+}
+
+func TestFailedStartIsCleanedUpWhenItsPropertiesNoLongerProveIt(t *testing.T) {
+	startErr := &hcs.Error{Op: "HcsStartComputeSystem", Code: 0x8007139f}
+	for name, after := range map[string]func(*fakeNative) func(*hcs.Properties){
+		"proven":      func(*fakeNative) func(*hcs.Properties) { return nil },
+		"owner":       func(*fakeNative) func(*hcs.Properties) { return func(p *hcs.Properties) { p.Owner = "" } },
+		"system type": func(*fakeNative) func(*hcs.Properties) { return func(p *hcs.Properties) { p.SystemType = "" } },
+		"properties": func(n *fakeNative) func(*hcs.Properties) {
+			return func(*hcs.Properties) { n.propertiesErr = errors.New("unavailable") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, n := fixture(t)
+			n.startErr, n.afterFailedStart, n.terminateOnClose = startErr, after(n), true
+			if _, err := h.Create(t.Context(), validSpec()); !errors.Is(err, startErr) || errors.Is(err, errRetained) {
+				t.Fatal("failed start not cleaned up", err)
+			}
+			if left := entries(t, h); len(left) != 0 || len(n.systems) != 0 {
+				t.Fatal("failed start retained its guest or storage", left)
+			}
+		})
+	}
+}
+
+func TestUnprovenSystemOpenedByNameIsStillRetained(t *testing.T) {
+	h, n := fixture(t)
+	g, err := h.Create(t.Context(), validSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.system.Close() // an earlier VM host's handle
+	n.systems[g.Name].props.Owner = ""
+	if err := h.Recover(t.Context()); !errors.Is(err, ErrForeign) || !strings.Contains(err.Error(), "owner differs") {
+		t.Fatal("recovery touched an unproven guest, or did not say why", err)
+	}
+	if n.terminateCalls != 0 || n.systems[g.Name] == nil {
+		t.Fatal("unproven guest was stopped")
 	}
 }
 

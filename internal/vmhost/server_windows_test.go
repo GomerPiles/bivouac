@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/hostnet"
 	"github.com/GomerPiles/bivouac/internal/winguest"
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -302,16 +303,16 @@ func requireAdmissionReopens(t *testing.T, s *Server) {
 }
 
 func TestFailedCreateWhoseCleanupFailsKeepsItsReservation(t *testing.T) {
-	s, n, f := networkServerFixture(t)
+	s, _, f := networkServerFixture(t)
 	f.verify.once = errors.New("policy verification failed")
-	n.terminateErr = errors.New("termination unavailable")
+	f.delete.sticky = hostnet.ErrForeign
 	req := createReq("bivouac-net")
 	req.Create.Network = true
 	if resp := call(t, s, alice, req); resp.Code != CodeFailed {
 		t.Fatal("failed create reported success", resp)
 	}
-	if info := s.info(); info.Running != 1 || info.RunningCPU != 2 || info.RunningMB != 4096 || len(n.systems) != 1 {
-		t.Fatal("reservation released while the guest may still run", info)
+	if info := s.info(); info.Running != 1 || info.RunningCPU != 2 || info.RunningMB != 4096 {
+		t.Fatal("reservation released while the guest's cleanup is unfinished", info)
 	}
 	if resp := call(t, s, alice, Request{Op: "status", Name: "bivouac-net"}); resp.Code != CodeNotFound {
 		t.Fatal("retained create became visible as a guest", resp)
@@ -397,6 +398,7 @@ func TestGuardFailedDestroyOwnerRetriesByName(t *testing.T) {
 	f.verify.once = errors.New("policy changed")
 	f.block.once = errors.New("block unavailable")
 	n.terminateErr = errors.New("terminate unavailable")
+	s.guardTimeout = 300 * time.Millisecond // the guest outlives the guard's attempt
 	s.guardPass(t.Context())
 	if s.guests[g.Name].guardDestroyed || n.terminateCalls != 1 || len(n.systems) != 1 || f.delete.calls != 0 {
 		t.Fatal("failed guard destroy was treated as confirmed absence")
