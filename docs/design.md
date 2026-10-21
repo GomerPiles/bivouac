@@ -871,10 +871,14 @@ zone; the creation document has no time-sync channel. Until the image
 factory builds images that read a UTC RTC, the provider's `WaitReady` sets the
 guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
-skewed clock. Likewise, the Windows runner launcher gives the runner a
-process-scope `RemoteSigned` execution policy when the guest has no policy,
-or one that refuses local scripts, because the runner dot-sources a script
-file for its hooks and every `powershell` step.
+skewed clock. The clock is set through local time, so in the guest's
+fall-back hour it can land an hour off; the check then refuses the guest
+rather than accept it. Likewise, the Windows runner launcher, shared with App
+Sandbox guests, gives the runner a process-scope `RemoteSigned` execution
+policy when neither the CurrentUser nor the LocalMachine scope sets one that
+allows local scripts and none is inherited, because the runner dot-sources a
+script file for its hooks and every `powershell` step. A Group Policy setting
+outranks it and is left as it is.
 
 Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
 above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated

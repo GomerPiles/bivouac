@@ -89,8 +89,9 @@ const (
 	// The operation bound covers a VM host create or destroy and its cleanup.
 	operationTimeout = 5 * time.Minute
 	// clockSync reads a UTC time (ISO 8601, 7 fractional digits) from stdin,
-	// sets the guest clock to it and prints the guest's UTC time afterwards.
-	clockSync    = `powershell.exe -NoProfile -NonInteractive -Command "$t=[DateTime]::ParseExact([Console]::In.ReadLine().Trim(),'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind); Set-Date -Date $t.ToLocalTime() | Out-Null; [DateTime]::UtcNow.ToString('o')"`
+	// advances it by the time since PowerShell started, sets the guest clock
+	// to it and prints the guest's UTC time afterwards.
+	clockSync    = `powershell.exe -NoProfile -NonInteractive -Command "$t=[DateTime]::ParseExact([Console]::In.ReadLine().Trim(),'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind); $t=$t.Add((Get-Date)-(Get-Process -Id $PID).StartTime); Set-Date -Date $t.ToLocalTime() | Out-Null; [DateTime]::UtcNow.ToString('o')"`
 	maxClockSkew = 5 * time.Second
 )
 

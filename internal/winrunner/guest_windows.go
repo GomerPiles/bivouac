@@ -36,10 +36,20 @@ const jobHookName = "job-started.ps1"
 // for the runner and every process it starts.
 const executionPolicyVariable = "PSExecutionPolicyPreference"
 
-// machineExecutionPolicy is Windows PowerShell's LocalMachine policy, or ""
-// when none is set.
-func machineExecutionPolicy() string {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell`, registry.QUERY_VALUE)
+// configuredExecutionPolicy is Windows PowerShell's policy below the process
+// scope: CurrentUser if set, else LocalMachine, else "". Group Policy, which
+// outranks the process scope, is not read: nothing here can change it.
+func configuredExecutionPolicy() string {
+	for _, hive := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
+		if v := executionPolicyIn(hive); v != "" && !strings.EqualFold(v, "Undefined") {
+			return v
+		}
+	}
+	return ""
+}
+
+func executionPolicyIn(hive registry.Key) string {
+	k, err := registry.OpenKey(hive, `SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell`, registry.QUERY_VALUE)
 	if err != nil {
 		return ""
 	}
@@ -55,11 +65,11 @@ func machineExecutionPolicy() string {
 // The runner dot-sources a script file for its hooks and every powershell
 // step, which a client image's default (Restricted) or AllSigned refuses. A
 // guest that already allows scripts, or an inherited setting, is left alone.
-func runnerExecutionPolicy(inherited bool, machine string) string {
+func runnerExecutionPolicy(inherited bool, configured string) string {
 	if inherited {
 		return ""
 	}
-	switch strings.ToLower(machine) {
+	switch strings.ToLower(configured) {
 	case "", "undefined", "restricted", "allsigned":
 		return "RemoteSigned"
 	}
@@ -377,7 +387,7 @@ func guestListener(ctx context.Context, cfg Config) error {
 			cmd.Env = append(cmd.Env, value)
 		}
 	}
-	if policy := runnerExecutionPolicy(inheritedPolicy, machineExecutionPolicy()); policy != "" {
+	if policy := runnerExecutionPolicy(inheritedPolicy, configuredExecutionPolicy()); policy != "" {
 		cmd.Env = append(cmd.Env, executionPolicyVariable+"="+policy)
 	}
 	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(guestBase, jobHookName))

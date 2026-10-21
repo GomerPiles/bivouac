@@ -4,9 +4,9 @@ import "testing"
 
 func TestRunnerExecutionPolicyOnlyLoosensARefusingGuest(t *testing.T) {
 	for _, c := range []struct {
-		inherited bool
-		machine   string
-		want      string
+		inherited  bool
+		configured string
+		want       string
 	}{
 		{false, "", "RemoteSigned"},
 		{false, "Restricted", "RemoteSigned"},
@@ -17,8 +17,8 @@ func TestRunnerExecutionPolicyOnlyLoosensARefusingGuest(t *testing.T) {
 		{false, "Bypass", ""},
 		{true, "Restricted", ""},
 	} {
-		if got := runnerExecutionPolicy(c.inherited, c.machine); got != c.want {
-			t.Errorf("inherited=%v machine=%q: got %q, want %q", c.inherited, c.machine, got, c.want)
+		if got := runnerExecutionPolicy(c.inherited, c.configured); got != c.want {
+			t.Errorf("inherited=%v configured=%q: got %q, want %q", c.inherited, c.configured, got, c.want)
 		}
 	}
 }
