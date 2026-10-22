@@ -84,12 +84,6 @@ const jobCompletedHook = `& 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest win
 exit 0
 `
 
-type listenerIdentity struct {
-	PID      uint32 `json:"pid"`
-	Creation uint64 `json:"creation"`
-	Image    string `json:"image"`
-}
-
 func readGuestFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -119,12 +113,15 @@ func writeGuestJSON(name string, value any) error {
 	return root.Rename(tmp, name)
 }
 func loadGuestConfig() (Config, error) {
+	return loadGuestConfigFile("config.json")
+}
+
+func loadGuestConfigFile(name string) (Config, error) {
 	var cfg Config
-	self, err := os.Executable()
-	if err != nil || !strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac.exe")) {
-		return cfg, errors.New("guest adapter must run from the fixed disposable-guest installation")
+	if err := checkGuestExecutable(); err != nil {
+		return cfg, err
 	}
-	data, err := readGuestFile(filepath.Join(guestBase, "config.json"), 65536)
+	data, err := readGuestFile(filepath.Join(guestBase, name), 65536)
 	if err != nil {
 		return cfg, err
 	}
@@ -138,15 +135,46 @@ func loadGuestConfig() (Config, error) {
 	return cfg, nil
 }
 
+func checkGuestExecutable() error {
+	self, err := os.Executable()
+	if err != nil || (!strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac.exe")) && !strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac-helper.exe"))) {
+		return errors.New("guest adapter must run from the fixed disposable-guest installation")
+	}
+	return nil
+}
+
 // RunGuest is the fixed helper copied into a disposable VM. It never
-// loads the host config or touches its credential store. Interactive methods
-// are launched by guest Task Scheduler in the logged-in user's session.
+// loads the host config or touches its credential store. The agent supplies
+// the interactive session; legacy tasks remain supported until provider cutover.
 func RunGuest(ctx context.Context, mode string, out io.Writer) error {
+	if mode == "prepare" {
+		return guestPrepare(ctx, out)
+	}
+	if mode == "preflight" {
+		cfg, err := loadGuestConfigFile("bivouac-config.json")
+		if err != nil {
+			return err
+		}
+		return guestPreflight(ctx, cfg, out)
+	}
 	cfg, err := loadGuestConfig()
 	if err != nil {
 		return err
 	}
 	switch mode {
+	case "start":
+		return guestStart(ctx, cfg)
+	case "stop":
+		root, err := os.OpenRoot(guestBase)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = root.Close() }()
+		return stopGuest(root, func() error { return guestCancel(cfg) })
+	case "clock":
+		return guestClock(os.Stdin, out)
+	case "cache-listen":
+		return cacheListen(ctx, guestStdio{os.Stdin, out}, func(port cachePort) error { return writeGuestJSON("cache-port.json", port) })
 	case "cache-setup":
 		data, err := io.ReadAll(io.LimitReader(os.Stdin, 32<<10+1))
 		if err != nil {
@@ -261,22 +289,26 @@ func processIdentity(pid uint32) (listenerIdentity, bool, error) {
 	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, true, nil
 }
 func recordedListener(cfg Config) (listenerIdentity, bool, error) {
-	var identity listenerIdentity
 	data, err := readGuestFile(filepath.Join(guestBase, "listener.json"), 4096)
 	if errors.Is(err, os.ErrNotExist) {
-		return identity, false, nil
+		return listenerIdentity{}, false, nil
 	}
 	if err != nil {
-		return identity, false, err
+		return listenerIdentity{}, false, err
 	}
+	return checkListenerIdentity(cfg, data, processIdentity)
+}
+
+func checkListenerIdentity(cfg Config, data []byte, inspect func(uint32) (listenerIdentity, bool, error)) (listenerIdentity, bool, error) {
+	var identity listenerIdentity
 	if json.Unmarshal(data, &identity) != nil || identity.PID == 0 || identity.Creation == 0 || !strings.EqualFold(identity.Image, filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener.exe")) {
 		return identity, false, errors.New("recorded listener identity differs")
 	}
-	current, live, err := processIdentity(identity.PID)
+	current, live, err := inspect(identity.PID)
 	if err != nil || !live {
 		return identity, live, err
 	}
-	if current.Creation != identity.Creation || !strings.EqualFold(current.Image, identity.Image) {
+	if current.PID != identity.PID || current.Creation != identity.Creation || !strings.EqualFold(current.Image, identity.Image) {
 		return identity, false, errors.New("listener PID was reused")
 	}
 	return identity, true, nil

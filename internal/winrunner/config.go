@@ -78,7 +78,8 @@ func VerifyArchive(path, expected string) error {
 		return errors.New("invalid bounded runner archive")
 	}
 	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
+	n, err := io.Copy(hash, io.LimitReader(f, 512<<20+1))
+	if err != nil || n > 512<<20 || n != stat.Size() {
 		return errors.New("read runner archive")
 	}
 	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected) {
