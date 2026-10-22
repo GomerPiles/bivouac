@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,17 @@ func TestDisplayMediaAndManifest(t *testing.T) {
 		}
 		r := &record{Name: "bivouac-aaaaaaa", Workspace: t.TempDir(), Manifest: Manifest{Assets: map[string]string{}}}
 		copyFile := func(_ context.Context, _, _, pin string, _ int64) (int64, string, error) { return 1, pin, nil }
-		run := func(context.Context, string, any, bool) ([]byte, error) { return nil, nil }
+		run := func(_ context.Context, _ string, input any, _ bool) ([]byte, error) {
+			expected := "$display='vdd'\n"
+			if mode == winguest.DisplaySynthetic {
+				expected = "$display='synthetic'\n"
+			}
+			content := input.(map[string]string)["specialize"]
+			if !strings.HasPrefix(content, expected) || content != expected+guestSpecialize+disableFirstLogonAnimation {
+				t.Fatal("specialize display mode")
+			}
+			return nil, nil
+		}
 		if err := prepareMediaWith(t.Context(), c, r, func(p string) error { return os.Mkdir(p, 0700) }, copyFile, run); err != nil {
 			t.Fatal(err)
 		}

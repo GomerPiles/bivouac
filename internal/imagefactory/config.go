@@ -201,6 +201,14 @@ type Inspection struct {
 	GuestUserExists       *bool                    `json:"guest_user_exists"`
 	GuestSetupStep        uint32                   `json:"guest_setup_step"`
 	GuestSetupFailed      bool                     `json:"guest_setup_failed"`
+	GuestSetupVideo       *SetupVideoStatus        `json:"guest_setup_video,omitempty"`
+}
+
+// SetupVideoStatus holds a single failing synthetic video's numeric PnP facts.
+// A nil status means no complete problem-code/status pair was available.
+type SetupVideoStatus struct {
+	ProblemCode   uint32 `json:"problem_code"`
+	DevNodeStatus uint32 `json:"devnode_status"`
 }
 
 // AnswerFacts contains only predicates, never answer-file values or commands.

@@ -986,12 +986,18 @@ ACL and deny-write handles, not hashed per job.
 - **Display candidate:** optional factory `display` is `vdd` by default,
   preserving the existing agent/VDD setup and `idd_status:ok` contract.
   `synthetic` keeps the agent, input/display helpers and GPU-PV driver copy,
-  but stops the agent, removes every AppSandboxVDD root device (including
-  phantom nodes) and driver-store package matched by original INF name,
+  but disables/stops the agent during specialize, removes every AppSandboxVDD
+  root device (including phantom nodes) and driver-store package matched by
+  original INF name,
   deletes its adjacent `drivers` directory (including devcon), and enables
-  the Hyper-V synthetic video device. Setup verifies absence and the video's
-  enabled/started state before restarting the agent. Synthetic configs refuse
-  all VDD/devcon assets. Without devcon the reference agent cannot repair VDD
+  the Hyper-V synthetic video device before Windows setup's following boot.
+  FirstLogon verifies absence and the video's enabled/started state before
+  restarting the agent; it preserves a failed or incomplete specialize status.
+  Numbered status facts distinguish video startup (35), remaining VDD nodes
+  (36), packages (37) and driver directory (38); a video failure records only
+  the failing device's numeric problem code and DevNodeStatus flags, carried
+  through offline inspection into the build record/error. Synthetic configs
+  refuse all VDD/devcon assets. Without devcon the reference agent cannot repair VDD
   or disable synthetic video; the pinned binary's behavior remains a live
   validation gate. Synthetic initialization requires `idd_status:not_found`
   and acknowledged key deployment, and rejects any other IDD status or

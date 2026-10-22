@@ -143,11 +143,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 				facts, diagnosticErr := inspectOwned(cleanupCtx, c, r, true, runHost)
 				r.hostError("setup_diagnostics", diagnosticErr)
 				if facts != nil {
-					r.GuestSetupStep = facts.GuestSetupStep
-					r.GuestSetupFailed = facts.GuestSetupFailed
-					if r.GuestSetupFailed {
-						err = errors.Join(err, fmt.Errorf("guest setup failed at step %d", r.GuestSetupStep))
-					}
+					err = errors.Join(err, r.setupFailure(facts))
 				}
 				if diagnosticErr != nil {
 					err = errors.Join(err, fmt.Errorf("offline setup diagnostics unavailable: %w", diagnosticErr))

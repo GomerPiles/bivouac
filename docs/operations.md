@@ -236,9 +236,18 @@ or owner record. It mounts, grants and boots only files it created.
      `.inf` and `.cat`, and `devcon.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are
      optional; a template without a runner needs `RUNNER.ZIP`.
      Synthetic mode requires the same agent and two helper executables, but
-     refuses all three VDD files and `devcon.exe`. Setup removes VDD devices
+     refuses all three VDD files and `devcon.exe`. Specialize removes VDD devices
      (including phantom nodes), packages and the agent's `drivers` directory,
-     enables synthetic video, and verifies these changes before continuing.
+     enables synthetic video before Windows setup's following boot, and leaves
+     the agent disabled. FirstLogon then verifies these changes before starting
+     the agent. Specialize failures use steps 80–85; 88 marks completion and
+     89 means FirstLogon could not confirm completion. Verification failures
+     distinguish video startup (35), VDD nodes (36), packages (37) and the
+     drivers directory (38). Step 35 includes numeric problem code/DevNodeStatus
+     diagnostics when a complete pair is available, also in the offline facts,
+     build record and error. The synchronous specialize command does not
+     explicitly request a reboot; confirm the template's setup-to-OOBE reboot
+     boundary and specialize-pass PnP availability during live validation.
    - `drivers` names the host's GPU driver directories. The build copies
      them into the image, so an image matches the host driver it was built
      with.
