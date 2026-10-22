@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	openFrame      byte = 1
-	dataFrame      byte = 2
-	eofFrame       byte = 3
-	closeFrame     byte = 4
-	creditFrame    byte = 5
-	maxFrame            = 32 << 10
-	maxConnections      = 16
+	openFrame   byte = 1
+	dataFrame   byte = 2
+	eofFrame    byte = 3
+	closeFrame  byte = 4
+	creditFrame byte = 5
+	maxFrame         = 32 << 10
+	// ContainerConnections preserves the container relay's existing bound.
+	ContainerConnections = 16
 )
 
 type frame struct {
@@ -67,6 +68,7 @@ func (w *writer) send(f frame) error {
 }
 
 type session struct {
+	limit  int
 	stream io.ReadWriteCloser
 	w      writer
 	mu     sync.Mutex
@@ -79,13 +81,13 @@ type channel struct {
 	cancel  context.CancelFunc
 }
 
-func newSession(s io.ReadWriteCloser) *session {
-	return &session{stream: s, w: writer{out: s}, active: make(map[uint32]*channel)}
+func newSession(s io.ReadWriteCloser, limit int) *session {
+	return &session{stream: s, limit: limit, w: writer{out: s}, active: make(map[uint32]*channel)}
 }
 
 func (s *session) attach(ctx context.Context, id uint32, dial func(context.Context) (net.Conn, error), announce bool) bool {
 	s.mu.Lock()
-	if len(s.active) >= maxConnections {
+	if len(s.active) >= s.limit {
 		s.mu.Unlock()
 		return false
 	}
@@ -230,9 +232,13 @@ func (s *session) close() {
 	s.wg.Wait()
 }
 
-// Relay serves frames from one guest and dials only the fixed per-job engine.
-func Relay(ctx context.Context, stream io.ReadWriteCloser, dial func(context.Context) (net.Conn, error)) error {
-	s := newSession(stream)
+// Relay serves frames from one guest and dials only the caller's fixed service.
+// limit bounds concurrent connections and must be between 1 and 64.
+func Relay(ctx context.Context, stream io.ReadWriteCloser, dial func(context.Context) (net.Conn, error), limit int) error {
+	if limit < 1 || limit > 64 {
+		return errors.New("invalid engine connection limit")
+	}
+	s := newSession(stream, limit)
 	defer s.close()
 	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
 	defer stop()
@@ -258,10 +264,14 @@ func Relay(ctx context.Context, stream io.ReadWriteCloser, dial func(context.Con
 	}
 }
 
-// Listen exports a guest-local Unix socket over an attached VSOCK exec stream.
-// Losing the stream closes the socket and every container API connection.
-func Listen(ctx context.Context, stream io.ReadWriteCloser, listener net.Listener) error {
-	s := newSession(stream)
+// Listen exports a guest-local listener over an attached VSOCK exec stream.
+// Losing the stream closes the listener and every connection. limit must be
+// between 1 and 64; container callers retain ContainerConnections.
+func Listen(ctx context.Context, stream io.ReadWriteCloser, listener net.Listener, limit int) error {
+	if limit < 1 || limit > 64 {
+		return errors.New("invalid engine connection limit")
+	}
+	s := newSession(stream, limit)
 	defer s.close()
 	defer func() { _ = listener.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = stream.Close(); _ = listener.Close() })

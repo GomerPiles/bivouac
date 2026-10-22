@@ -164,5 +164,5 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 			return nil, provider.ErrNotOwned
 		}
 		return rt.Duplex(ctx, r.Name+"-engine", []string{engine.GuestHelper, "engine", "dial", r.Engine})
-	})
+	}, engine.ContainerConnections)
 }

@@ -767,6 +767,45 @@ process of an admitted host account can already deploy an SSH key and execute
 as the guest administrator; the new transport executes as that same user
 directly. Provider admission and image registration are later phases.
 
+The delivered Windows adapter also implements Go `preflight`, `prepare`,
+`start`, `stop`, `clock` and `cache-listen` modes for that later switch. The
+current provider still uses its existing scripts and interactive tasks.
+
+- `preflight` reads `bivouac-config.json` in the protected guest directory,
+  checks computer/user identity, console ownership, completed setup/OOBE,
+  Explorer in that session, its own console session and the Default input
+  desktop. Five consecutive observations 500 ms apart are required within
+  ten minutes. Its small JSON proof includes `ready`, `session`, `desktop`.
+- `prepare` holds the receiver's directory guard and exclusive lock, refuses
+  another recorded instance or an existing launch marker, and installs the
+  delivered helper/config as `bivouac.exe` and `config.json` for existing
+  listener/hook modes. It selects exactly one MAC and uses fixed netsh argv
+  for static IPv4, DHCP disablement, gateway and public DNS. Archive mode
+  verifies SHA-256 and extracts only into a fresh directory: at most 512 MiB
+  compressed, 65,536 entries, 512 MiB per file and 2 GiB expanded. Absolute
+  paths, traversal, Windows path aliases, duplicate paths and special/link
+  entries are refused. A failed extraction is not reused. The generic runner
+  must be present and unconfigured; desktop proof needs no scheduled task.
+- `start` checks single-use state and bounded private JIT input while holding
+  the receiver lock. It flushes `launched` before dispatch, then starts the
+  existing listener supervisor with `CREATE_BREAKAWAY_FROM_JOB` and
+  `DETACHED_PROCESS`, fixed argv and independent NUL streams. Failed or
+  uncertain dispatch retains the marker and is never replayed. Startup waits
+  at most 45 s for a live recorded listener identity. `stop` is an in-process
+  cancel with the existing PID/creation-time/path checks and console recheck;
+  exited or never-launched runners are no-ops.
+- `clock` accepts one bounded UTC RFC3339 line on stdin and uses
+  `SetSystemTime` directly, returning current UTC. It has no local-time/DST
+  conversion. The current provider's PowerShell clock path is unchanged.
+- `cache-listen` binds only `127.0.0.1:0`, publishes `cache-port.json` and
+  emits the same `{ "port": <number> }` JSON line before engine frames on
+  stdout. The later host adapter must consume that bounded line (preserving
+  any buffered frame bytes), use the port in the existing cache bootstrap URL,
+  and call `engine.Relay` with limit 64. The guest uses `engine.Listen` with
+  that same limit until stream closure. Container relays retain limit 16.
+  Cache setup/removal files and the agent protocol remain unchanged; this
+  adds no host transport, automatic reconnection or NIC exception.
+
 HCS and Windows networking refuse ordinary tokens, so the work splits in two:
 
 - The manager stays unprivileged. It holds GitHub credentials and budgets, and

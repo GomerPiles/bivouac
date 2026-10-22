@@ -7,6 +7,14 @@ gates. No provider is ready for untrusted (for example fork) pull requests.
 Rootless macOS networking has disposable-guest evidence below; the complete
 production migration gates remain open.
 
+The Windows guest adapter's Go preflight/prepare/start/stop/clock modes and
+64-connection cache listener have unit coverage, including launch/delivery
+serialization, bounded extraction and relay closure. The HCS provider and images
+still use their existing PowerShell/SSH path. Console/OOBE readiness, native
+static networking, UTC clock setting, listener survival across request/agent
+restarts, cancellation and cache behavior on agent-served guests require live
+validation after the provider and factory switches.
+
 ## Checks
 
 Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
