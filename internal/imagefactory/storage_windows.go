@@ -201,6 +201,14 @@ func copyPinned(ctx context.Context, source, dest, expected string, limit int64)
 	}
 	return n, sum, err
 }
+
+// driverRuntimeLog reports a log the running host driver writes into its own
+// FileRepository directory (for example AMD's atikmdag_*.log). It is not part
+// of the driver package, and it can grow while the factory copies it.
+func driverRuntimeLog(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".log")
+}
+
 func copyContext(ctx context.Context, w io.Writer, r io.Reader, limit int64) (int64, error) {
 	buf := make([]byte, 1<<20)
 	var total int64
@@ -430,6 +438,9 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 			target := filepath.Join(r.Workspace, "drivers", fmt.Sprint(i), filepath.FromSlash(path))
 			if entry.IsDir() {
 				return os.MkdirAll(target, 0700)
+			}
+			if driverRuntimeLog(path) {
+				return nil
 			}
 			info, err := entry.Info()
 			if err != nil || !info.Mode().IsRegular() {
