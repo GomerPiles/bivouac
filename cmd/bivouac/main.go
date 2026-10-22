@@ -49,8 +49,6 @@ Setup:
   vz import        copy a Tart-format VM into the VM store as a baseline
   vz list          show guests bivouac owns and guests it does not
   vz cleanup       delete orphaned guests that carry bivouac's own metadata
-  appsandbox inspect  read-only daemon/version/VM inventory (no startup)
-  appsandbox broker   operator-started elevated lifecycle broker
   vmhost run          elevated foreground VM host (Windows HCS guests)
   vmhost install      register the optional VM host service (elevated; also: uninstall)
   vmhost start|stop   start or stop the installed service without elevation
@@ -113,9 +111,6 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 			return winrunner.RunGuest(ctx, args[1], os.Stdout)
 		}
 		return errUsage
-	}
-	if cmd == "appsandbox" {
-		return appsandboxCmd(ctx, args, os.Stdout)
 	}
 	if cmd == "vmhost" {
 		return vmhostCmd(ctx, args, os.Stdout)

@@ -19,7 +19,7 @@ func TestSpecValidationRefusesUnsafeInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Spec){
-		"foreign name":      func(s *Spec) { s.Name = "appsandbox-1" },
+		"foreign name":      func(s *Spec) { s.Name = "foreign-1" },
 		"uppercase name":    func(s *Spec) { s.Name = "bivouac-Lab" },
 		"trailing hyphen":   func(s *Spec) { s.Name = "bivouac-lab-" },
 		"relative image":    func(s *Spec) { s.Image = `prepared.vhdx` },

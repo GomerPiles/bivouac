@@ -4,7 +4,7 @@ Ephemeral GitHub Actions runners in disposable guests on personal machines.
 
 Bivouac runs each CI job in a fresh guest that is destroyed afterwards: on
 macOS through Apple's Virtualization framework from Tart-format baselines; on
-Windows through App Sandbox and Crosvm. Guests never see host files or long-lived credentials.
+Windows through HCS and Crosvm. Guests never see host files or long-lived credentials.
 The manager needs one binary, one config file, local state/logs, and secrets in
 the OS credential store, alongside the selected VM engine and its prerequisites.
 Run it in the foreground with `bivouac run`. Starting it at login is optional,

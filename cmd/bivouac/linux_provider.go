@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/GomerPiles/bivouac/internal/config"
-	"github.com/GomerPiles/bivouac/internal/provider/appsandbox"
 	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/state"
 )
@@ -35,11 +37,18 @@ func buildLinuxProvider(_ context.Context, name string, cfg config.Crosvm, store
 	return p, nil
 }
 
-// linuxGuestKey keeps the existing default: without ssh_key, Linux guests use
-// the App Sandbox guest key already provisioned on the Windows host.
+// linuxGuestKey keeps the default key already authorized by the Linux baseline
+// when ssh_key is omitted. This path is independent of the host VM provider.
 func linuxGuestKey(configured string) (string, error) {
 	if configured != "" {
 		return configured, nil
 	}
-	return appsandbox.DefaultSSHKey()
+	if runtime.GOOS != "windows" {
+		return "", errors.New("windows guest transport requires Windows")
+	}
+	base := os.Getenv("ProgramData")
+	if base == "" {
+		return "", errors.New("ProgramData is unavailable")
+	}
+	return filepath.Join(base, "AppSandbox", "ssh", "id_appsandbox"), nil
 }

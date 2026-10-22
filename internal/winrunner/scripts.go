@@ -1,6 +1,6 @@
 package winrunner
 
-// This runs before an external NIC is attached. SSH/agent availability alone
+// This runs before runner setup. SSH/agent availability alone
 // does not prove that unattended setup and the intended console logon finished.
 const PreflightScript = `$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
@@ -33,7 +33,7 @@ throw 'Guest console preflight timed out'
 
 // This script is fixed code. All instance settings arrive in a JSON file,
 // never interpolated into PowerShell, an SSH command, or a task argument.
-const ControlScript = `param([ValidateSet('prepare','start','status','stop','diag')][string]$Mode)
+const ControlScript = `param([ValidateSet('prepare','start','stop')][string]$Mode)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $base='C:\ProgramData\Bivouac\Guest'
@@ -108,7 +108,6 @@ switch($Mode) {
     Wait-File (Join-Path $base 'listener.json') 45
     'started'
   }
-  'status' { & $helper guest windows status; if($LASTEXITCODE -ne 0){throw 'Guest status failed'} }
   'stop' {
     if(Test-Path -LiteralPath (Join-Path $base 'runner.exit')){exit 0}
     if(!(Test-Path -LiteralPath (Join-Path $base 'listener.json'))){exit 0}
@@ -116,6 +115,5 @@ switch($Mode) {
     Wait-File (Join-Path $base 'cancelled') 30
     'cancel requested'
   }
-  'diag' { & $helper guest windows diagnostics; if($LASTEXITCODE -ne 0){throw 'Guest diagnostics failed'} }
 }
 `

@@ -54,7 +54,7 @@ func TestHCSConfigRequiresBoundedExplicitSettings(t *testing.T) {
 			t.Errorf("accepted invalid %s", change[1])
 		}
 	}
-	both := strings.Replace(hcsExample, "[providers.windows.hcs]", "[providers.windows.appsandbox]\nexperimental = true\n[providers.windows.hcs]", 1)
+	both := strings.Replace(hcsExample, "[providers.windows.hcs]", "[providers.windows.crosvm]\nexperimental = true\n[providers.windows.hcs]", 1)
 	if _, err := Parse([]byte(both)); err == nil {
 		t.Fatal("mixed provider settings accepted")
 	}

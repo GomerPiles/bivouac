@@ -25,7 +25,7 @@ func TestPlansAreBoundToTheirGuestAndPool(t *testing.T) {
 		t.Fatal("plan accepted for another guest")
 	}
 	for name, mutate := range map[string]func(*Plan){
-		"App Sandbox pool":     func(p *Plan) { p.Subnet, p.Gateway, p.Address = "10.250.0.16/28", "10.250.0.17", "10.250.0.18" },
+		"outside host pool":    func(p *Plan) { p.Subnet, p.Gateway, p.Address = "10.250.0.16/28", "10.250.0.17", "10.250.0.18" },
 		"wide subnet":          func(p *Plan) { p.Subnet = "10.251.0.0/24" },
 		"gateway mismatch":     func(p *Plan) { p.Gateway = "10.251.0.20" },
 		"shared IDs":           func(p *Plan) { p.EndpointID = p.NetworkID },

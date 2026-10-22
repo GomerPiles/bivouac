@@ -9,16 +9,16 @@ import (
 )
 
 // A per-user temporary directory is owned by, and writable by, the ordinary
-// user the broker options must constrain.
+// user the VM host configuration must constrain.
 func TestCheckProtectedRejectsUserWritableConfiguration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "broker-options.json")
+	path := filepath.Join(t.TempDir(), "vmhost.json")
 	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckProtected(path); err == nil {
-		t.Fatal("user-writable broker configuration accepted")
+		t.Fatal("user-writable VM host configuration accepted")
 	}
-	if err := CheckProtected("broker-options.json"); err == nil {
+	if err := CheckProtected("vmhost.json"); err == nil {
 		t.Fatal("relative protected path accepted")
 	}
 }

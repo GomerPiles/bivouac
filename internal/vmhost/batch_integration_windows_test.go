@@ -6,7 +6,7 @@ package vmhost
 // this package, the HvSocket transport and the guest client, and records
 // bounded numeric results. It is excluded from default tests: it needs the
 // integration tag, explicit elevation and lab flags. It never touches another
-// compute system, the App Sandbox broker or any production state.
+// compute system or any production state.
 //
 // Runs, each a fresh cold boot from a new differencing disk:
 //   1. Baseline (2 CPU, 4 GiB): agent, SSH, desktop rendering; plus an

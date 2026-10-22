@@ -494,7 +494,7 @@ func (m *Manager) rawCapacityWith(ctx context.Context, name string, inv *invento
 }
 
 // recordedNames are the guest names of active records. A provider reports a
-// guest it cannot prove ours as foreign (App Sandbox and Crosvm conservatively
+// guest it cannot prove ours as foreign (Crosvm conservatively
 // as running); its record already holds a slot, so capacity must not count it
 // twice, and status lists it as a guest rather than as unmanaged.
 func recordedNames(active []*state.Instance) map[string]bool {
@@ -514,9 +514,6 @@ func guestSize(p config.Provider) (cpu, memGB int) {
 	}
 	if p.Crosvm != nil {
 		return p.Crosvm.CPU, p.Crosvm.MemoryGB
-	}
-	if p.AppSandbox != nil {
-		return p.AppSandbox.CPU, p.AppSandbox.MemoryGB
 	}
 	if p.VZ != nil {
 		if e := p.VZ.Containers; e != nil {
@@ -547,7 +544,7 @@ func (m *Manager) launch(ctx context.Context, providerName string, scaleSetID in
 		CreatedAt:  time.Now(),
 		Sweep:      sweep,
 	}
-	if m.o.Config.Providers[providerName].AppSandbox != nil || m.o.Config.Providers[providerName].Crosvm != nil || m.o.Config.Providers[providerName].HCS != nil {
+	if m.o.Config.Providers[providerName].Crosvm != nil || m.o.Config.Providers[providerName].HCS != nil {
 		inst.CPU, inst.MemoryGB = guestSize(m.o.Config.Providers[providerName])
 	}
 	if t := m.o.Config.Providers[providerName].VZ; t != nil && t.Containers != nil {
@@ -833,14 +830,6 @@ func (m *Manager) spec(inst *state.Instance, pcfg config.Provider) (provider.Spe
 			spec.CPU = inst.CPU
 			spec.MemoryMB = inst.MemoryGB * 1024
 		}
-	case "appsandbox":
-		spec.Baseline = pcfg.AppSandbox.Baseline
-		spec.CPU = pcfg.AppSandbox.CPU
-		spec.MemoryMB = pcfg.AppSandbox.MemoryGB * 1024
-		if inst.CPU > 0 && inst.MemoryGB > 0 {
-			spec.CPU = inst.CPU
-			spec.MemoryMB = inst.MemoryGB * 1024
-		}
 	case "vz":
 		spec.Baseline = pcfg.VZ.Baseline
 		spec.CPU = pcfg.VZ.CPU
@@ -1032,8 +1021,8 @@ func (m *Manager) teardown(ctx context.Context, inst *state.Instance, reason str
 
 	if cur.Phase != state.PhaseDeregistering {
 		st, err := status()
-		// vz reports a guest without our metadata as Exists && !Owned; App
-		// Sandbox and Crosvm return ErrNotOwned. Both wait for an operator.
+		// vz reports a guest without our metadata as Exists && !Owned;
+		// HCS and Crosvm return ErrNotOwned. Both wait for an operator.
 		if errors.Is(err, provider.ErrNotOwned) || err == nil && st.Exists && !st.Owned {
 			log.Error("guest exists without provable ownership; refusing to touch it", "error", err)
 			_ = m.o.Store.RecordError(inst.ID, "guest "+inst.Name+" is not owned; left untouched")

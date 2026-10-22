@@ -68,7 +68,7 @@ func (p *Provider) Capabilities() provider.Capabilities { return p.caps }
 
 // AddForeign makes a running guest bivouac does not own appear in List. A
 // name with the bivouac prefix is reported as prefixed, like an unprovable
-// record of App Sandbox or Crosvm.
+// record of Crosvm.
 func (p *Provider) AddForeign(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

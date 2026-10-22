@@ -87,25 +87,6 @@ func (e env) doctor(ctx context.Context, args []string) error {
 			}
 			continue
 		}
-		if p.Type == "appsandbox" {
-			st, err := state.Open(e.layout.State, newID)
-			if err != nil {
-				add("FAIL", "state", err.Error())
-				continue
-			}
-			wp, err := buildWindowsProvider(ctx, name, *p.AppSandbox, st)
-			if err != nil {
-				add("FAIL", "appsandbox "+name, err.Error())
-				continue
-			}
-			wp.Close()
-			add("PASS", "appsandbox "+name, "authenticated protected broker and local transport/package settings; no VM started")
-			add("WARN", "Windows validation", "experimental: live broker/guest lifecycle, isolation, and GitHub job checks remain required")
-			if p.AppSandbox.CPU > host.CPUs-cfg.Budget.ReserveCPU || (host.MemoryBytes > 0 && p.AppSandbox.MemoryGB > int(host.MemoryBytes>>30)-cfg.Budget.ReserveMemoryGB) {
-				add("FAIL", "budget "+name, "guest resources exceed host capacity after reservations")
-			}
-			continue
-		}
 		if p.Type == "hcs" {
 			if err := checkVMHost(ctx, *p.HCS); errors.Is(err, errVMHostStopped) {
 				add("WARN", "hcs "+name, err.Error())
