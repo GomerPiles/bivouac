@@ -1,39 +1,5 @@
 package winguest
 
-import "errors"
-
-// DisplayMode selects the prepared image's guest-agent contract.
-type DisplayMode string
-
-const (
-	DisplayVDD       DisplayMode = "vdd"
-	DisplaySynthetic DisplayMode = "synthetic"
-)
-
-// ParseDisplayMode supplies the documented default and never echoes input.
-func ParseDisplayMode(s string) (DisplayMode, error) {
-	switch DisplayMode(s) {
-	case "", DisplayVDD:
-		return DisplayVDD, nil
-	case DisplaySynthetic:
-		return DisplaySynthetic, nil
-	default:
-		return "", errors.New("display must be vdd or synthetic")
-	}
-}
-
-// DisplayStatus interprets only fixed agent messages. VDD preserves its existing
-// readiness latch; the synthetic experiment fails immediately on contradictions.
-func (m DisplayMode) DisplayStatus(line string) (bool, error) {
-	if m == DisplaySynthetic {
-		if line == "idd_status:not_found" {
-			return true, nil
-		}
-		return false, errors.New("guest agent contradicted synthetic display mode")
-	}
-	return line == "idd_status:ok", nil
-}
-
 // Topology contains only bounded numeric and boolean desktop observations.
 // AdapterKind: 1 = Hyper-V synthetic video, 2 = AppSandboxVDD, 3 = other
 // (including unresolved hardware ID); zero means no primary was observed.
@@ -66,5 +32,5 @@ func (t Topology) SyntheticOK() bool {
 }
 
 func (t Topology) LabOK() bool {
-	return t.SinglePrimary() && t.ProbeForeground && t.ProbeOnPrimary && t.ProbeInput
+	return t.SyntheticOK() && t.ProbeForeground && t.ProbeOnPrimary && t.ProbeInput
 }

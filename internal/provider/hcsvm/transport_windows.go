@@ -55,12 +55,12 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 		_ = s.Close()
 		return nil, err
 	}
-	a, err := winguest.Initialize(ctx, agent, id.PublicKey, winguest.DisplayVDD)
+	a, err := winguest.Initialize(ctx, agent, id.PublicKey)
 	if err != nil {
 		return fail(errors.Join(provider.GuestAgentUnavailable, err))
 	}
-	if !a.DisplayReady || !a.KeyDeployed {
-		return fail(errors.New("guest agent did not confirm the display and SSH key"))
+	if !a.VDDAbsent || !a.KeyDeployed {
+		return fail(errors.New("guest agent did not confirm VDD absence and the SSH key"))
 	}
 	client, err := s.connect(ctx, nil)
 	if err != nil {

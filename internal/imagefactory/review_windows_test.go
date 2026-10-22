@@ -139,11 +139,11 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("setup status writer missing")
 	}
-	// Replace the fixed-path writer and fail at the first media read, before
+	// Replace the fixed-path writer and fail at the first specialize-status read, before
 	// any guest service/install command can execute. No host guest paths are used.
 	safeWriter := `function Write-SetupStep([int]$Code,[bool]$Failed){if($Failed){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine((@{guest_setup_step=$Code;guest_setup_failed=$Failed}|ConvertTo-Json -Compress))}}
 `
-	script := "function Get-Content {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
+	script := "function Get-Item {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
 	path := filepath.Join(t.TempDir(), "fake-setup.ps1")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	b, err := executeHost(context.Background(), path, nil, true)
 	var scriptErr *HostScriptError
 	var facts Inspection
-	if !errors.As(err, &scriptErr) || scriptErr.Step != 10 || json.Unmarshal(b, &facts) != nil || facts.GuestSetupStep != 10 || !facts.GuestSetupFailed {
+	if !errors.As(err, &scriptErr) || scriptErr.Step != 89 || json.Unmarshal(b, &facts) != nil || facts.GuestSetupStep != 89 || !facts.GuestSetupFailed {
 		t.Fatal("setup failure lost numeric step")
 	}
 }
@@ -261,8 +261,11 @@ func TestOfflineEligibility(t *testing.T) {
 	}
 	good.SAMHiveError = 5
 	good.GuestUserExists = nil
+	present := true
+	good.VDDPresent = &present
+	good.VDDPackagePresent = &present
 	if !good.Eligible() {
-		t.Fatal("informational SAM failure blocked eligibility")
+		t.Fatal("informational SAM/VDD facts blocked template eligibility")
 	}
 }
 
@@ -360,7 +363,7 @@ func TestAgentZeroCopies(t *testing.T) {
 				return
 			}
 		}
-		if _, err := io.WriteString(guest, "gpu_copy_done:0\nidd_status:ok\nssh_ready\n"); err != nil {
+		if _, err := io.WriteString(guest, "gpu_copy_done:0\nidd_status:not_found\nssh_ready\n"); err != nil {
 			done <- err
 			return
 		}
@@ -378,7 +381,7 @@ func TestAgentZeroCopies(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key"), "vdd"); err != nil {
+	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key")); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {

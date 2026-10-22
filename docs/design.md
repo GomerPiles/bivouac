@@ -737,10 +737,11 @@ native dispatch; installation must use the same user as the credential owner.
 ### Windows guests through HCS
 
 Bivouac drives the Host Compute Service (`internal/hcs`) directly.
-The first increment changes only the host: guests still boot an image that
-contains App Sandbox's guest agent and display driver. A later increment
-replaces them with a bivouac guest agent over HvSocket, along with OpenSSH and
-the PowerShell boot steps they need.
+Guests retain App Sandbox's guest agent, input/display helpers, OpenSSH and
+the PowerShell boot task, but the image factory removes App Sandbox's display
+driver. HCS synthetic video supplies the sole desktop display, alongside GPU-PV
+for hardware rendering. A later increment replaces the guest agent with
+bivouac's own agent over HvSocket.
 
 HCS and Windows networking refuse ordinary tokens, so the work splits in two:
 
@@ -982,27 +983,28 @@ ACL and deny-write handles, not hashed per job.
 - **Manifest:** source, asset and output hashes, the guest identity the
   provider needs, the host GPU driver versions the image was built with, and
   the lab batch's probe, validation and autologon pins. It also records the
-  image's display mode and fixed numeric/boolean topology observations.
-- **Display candidate:** optional factory `display` is `vdd` by default,
-  preserving the existing agent/VDD setup and `idd_status:ok` contract.
-  `synthetic` keeps the agent, input/display helpers and GPU-PV driver copy,
-  but disables/stops the agent during specialize, removes every AppSandboxVDD
-  root device (including phantom nodes) and driver-store package matched by
-  original INF name,
-  deletes its adjacent `drivers` directory (including devcon), and enables
-  the Hyper-V synthetic video device before Windows setup's following boot.
+  image's fixed numeric/boolean topology observations.
+- **Guest display:** every image keeps the agent, input/display helpers and
+  GPU-PV driver copy, but disables/stops the agent during specialize, removes
+  every AppSandboxVDD root device (including phantom nodes) and driver-store
+  package matched by original INF name, deletes its adjacent `drivers`
+  directory (including devcon), and enables the Hyper-V synthetic video device
+  before Windows setup's following boot.
   FirstLogon verifies absence and the video's enabled/started state before
   restarting the agent; it preserves a failed or incomplete specialize status.
   Numbered status facts distinguish video startup (35), remaining VDD nodes
   (36), packages (37) and driver directory (38); a video failure records only
   the failing device's numeric problem code and DevNodeStatus flags, carried
-  through offline inspection into the build record/error. Synthetic configs
-  refuse all VDD/devcon assets. Without devcon the reference agent cannot repair VDD
+  through offline inspection into the build record/error. Setup assets include
+  the agent and two helpers, with optional OpenSSH/runner archives; all VDD/devcon
+  assets are unsupported. Template VDD inspection facts remain informational.
+  Without devcon the reference agent cannot repair VDD
   or disable synthetic video; the pinned binary's behavior remains a live
-  validation gate. Synthetic initialization requires `idd_status:not_found`
+  validation gate. Initialization requires `idd_status:not_found`
   and acknowledged key deployment, and rejects any other IDD status or
-  `hyperv_video:disabled`. The provider explicitly retains VDD mode; synthetic
-  images are factory/lab candidates only, with no runtime configuration support.
+  `hyperv_video:disabled`. The provider accepts only this factory's prepared
+  images. Rollback uses the previously deployed binary and previously built
+  image together; this branch has no path for earlier images.
 - **Single-display invariant:** exactly one attached-to-desktop display must
   be primary. The hash-pinned validation script carries an inline topology
   probe launched by an interactive scheduled task in the console user's
@@ -1016,17 +1018,11 @@ ACL and deny-write handles, not hashed per job.
   `windowsdefender:` launch records Windows Security's top-level window and
   primary-display containment, then closes it. No names, IDs, titles or other
   guest text enter the report, which remains bounded to 8 KiB.
-  Synthetic factory publication requires the single primary to use Hyper-V
+  Factory publication requires the single primary to use Hyper-V
   video, no VDD nodes, enabled/started synthetic video, and all existing render
-  gates. VDD factory gates stay unchanged. Every desktop lab run requires a
-  single primary and all probe-window checks, in addition to existing render
-  gates. Synthetic lab runs also require the synthetic factory topology gates;
-  Windows Security observations are diagnostic only. A multiple-display
-  VDD control failing this lab gate is useful experimental evidence.
-- The image's guest content matches the spike-built image's, so the
-  provider and the lab batch accept either. It still holds App Sandbox's
-  guest agent, OpenSSH and the PowerShell boot task, and its time zone and
-  execution policy are the template's.
+  gates. Every desktop lab run also requires those topology gates and all
+  probe-window checks. Windows Security observations are diagnostic only.
+- The image's time zone and execution policy are the template's.
 - Admission does not yet compare the host GPU driver with the one the image
   was built with; rebuild the image after a host driver update.
 

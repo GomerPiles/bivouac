@@ -25,9 +25,9 @@ const (
 
 // Agent reports what the guest agent confirmed during initialization.
 type Agent struct {
-	Connected    bool
-	DisplayReady bool
-	KeyDeployed  bool
+	Connected   bool
+	VDDAbsent   bool
+	KeyDeployed bool
 }
 
 const (
@@ -51,12 +51,10 @@ func Hello(ctx context.Context, conn net.Conn) error {
 
 // Initialize declines GPU driver copies (prepared images already contain the
 // host's drivers), enables guest SSH and deploys publicKey. It succeeds only
-// once the agent confirms the image's display contract and acknowledges the key.
-func Initialize(ctx context.Context, conn net.Conn, publicKey []byte, display DisplayMode) (Agent, error) {
+// once the agent confirms VDD is absent and acknowledges the key. Prepared
+// images must retain Hyper-V synthetic video and cannot contain AppSandboxVDD.
+func Initialize(ctx context.Context, conn net.Conn, publicKey []byte) (Agent, error) {
 	var a Agent
-	if display != DisplayVDD && display != DisplaySynthetic {
-		return a, errors.New("invalid display mode")
-	}
 	if len(publicKey) == 0 || len(publicKey) > 1024 || strings.ContainsAny(string(publicKey), "\r\n") {
 		return a, errors.New("invalid SSH public key")
 	}
@@ -86,12 +84,11 @@ func Initialize(ctx context.Context, conn net.Conn, publicKey []byte, display Di
 			if err = write(ctx, conn, "gpu_none\n"); err != nil {
 				return a, errors.New("guest agent GPU response failed")
 			}
+		case line == "idd_status:not_found":
+			a.VDDAbsent = true
 		case strings.HasPrefix(line, "idd_status:"):
-			a.DisplayReady, err = display.DisplayStatus(line)
-			if err != nil {
-				return a, err
-			}
-		case display == DisplaySynthetic && line == "hyperv_video:disabled":
+			return a, errors.New("guest agent did not confirm VDD absence")
+		case line == "hyperv_video:disabled":
 			return a, errors.New("guest agent disabled synthetic video")
 		case line == "ssh_ready" || line == "1:ssh_ready":
 			if !keySent {
@@ -111,7 +108,7 @@ func Initialize(ctx context.Context, conn net.Conn, publicKey []byte, display Di
 		case strings.HasPrefix(line, "gpu_copy_") || strings.HasPrefix(line, "gpu_device_failed:"):
 			return a, errors.New("guest agent attempted a GPU driver copy for a prepared image")
 		}
-		if a.KeyDeployed && a.DisplayReady {
+		if a.KeyDeployed && a.VDDAbsent {
 			return a, nil
 		}
 	}

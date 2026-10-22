@@ -8,18 +8,15 @@ function Write-SetupStep([int]$Code,[bool]$Failed){
  [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',($fact|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
 }
 try{
- $display=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'DISPLAY.JSON') -Raw | ConvertFrom-Json
- if($display -notin @('vdd','synthetic')){throw 'display mode'}
- if($display -eq 'synthetic'){
-  # Do not replace a failed/interrupted specialize step with FirstLogon's 10.
-  $step=89
-  $path=Join-Path $env:SystemRoot 'Panther\Unattend\setup-step.json'
-  $item=Get-Item -Force -LiteralPath $path
-  if($item.PSIsContainer -or $item.Length -gt 256 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'specialize status bound or link'}
-  $previous=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-  if($previous.step -isnot [int] -or $previous.step -lt 80 -or $previous.step -gt 88 -or $previous.failed -isnot [bool]){throw 'specialize status'}
-  if($previous.failed -or $previous.step -ne 88){$step=$previous.step;throw 'specialize incomplete'}
- }
+ # Do not replace a failed/interrupted specialize step with FirstLogon's 10.
+ $step=89
+ $path=Join-Path $env:SystemRoot 'Panther\Unattend\setup-step.json'
+ $item=Get-Item -Force -LiteralPath $path
+ if($item.PSIsContainer -or $item.Length -gt 256 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'specialize status bound or link'}
+ $previous=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+ if($previous.step -isnot [int] -or $previous.step -lt 80 -or $previous.step -gt 88 -or $previous.failed -isnot [bool]){throw 'specialize status'}
+ if($previous.failed -or $previous.step -ne 88){$step=$previous.step;throw 'specialize incomplete'}
+
  $step=10
  Write-SetupStep $step $false
 $ErrorActionPreference='Stop'
@@ -37,22 +34,12 @@ New-Item -ItemType Directory -Path $base -Force | Out-Null
 foreach($file in @('appsandbox-agent.exe','appsandbox-input.exe','appsandbox-displays.exe')) {
  Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $base $file) -Force
 }
-if($display -eq 'vdd'){
- New-Item -ItemType Directory -Path $drivers -Force | Out-Null
- foreach($file in @('AppSandboxVDD.dll','AppSandboxVDD.inf','AppSandboxVDD.cat','devcon.exe')) {
-  Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $drivers $file) -Force
- }
-}
+
 foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1','hcs-spike-validate.ps1'),@('HCSSANITIZE.PS1','hcs-spike-sanitize.ps1'),@('HCSLOGON.PS1','hcs-spike-autologon.ps1'),@('HCSCHECK.PS1','hcs-runner-check.ps1'))) {
  $source=Join-Path $PSScriptRoot $entry[0]
  if(Test-Path -LiteralPath $source -PathType Leaf){Copy-Item -LiteralPath $source -Destination (Join-Path $base $entry[1]) -Force}
 }
-$step=30;Write-SetupStep $step $false
-# Install only into this disposable guest. Use fixed argument arrays.
-if($display -eq 'vdd' -and !@(Get-PnpDevice -PresentOnly | Where-Object InstanceId -like 'ROOT\APPSANDBOXVDD\*').Count) {
- & (Join-Path $drivers 'devcon.exe') @('install',(Join-Path $drivers 'AppSandboxVDD.inf'),'Root\AppSandboxVDD') *> $null
-}
-if($display -eq 'synthetic'){
+
  function Get-VDDNodes {
   # No PresentOnly: phantom root nodes must be removed too.
   $nodes=@(Get-PnpDevice | Where-Object InstanceId -like 'ROOT\APPSANDBOXVDD\*')
@@ -91,7 +78,7 @@ if($display -eq 'synthetic'){
  if(@(Get-VDDPackages).Count){throw 'VDD packages remain'}
  $step=38;Write-SetupStep $step $false
  if(Test-Path -LiteralPath $drivers){throw 'driver directory remains'}
-}
+
 $step=40;Write-SetupStep $step $false
 $msi=Join-Path $PSScriptRoot 'OpenSSH.msi'
 if (!(Get-Service sshd -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $msi)) {

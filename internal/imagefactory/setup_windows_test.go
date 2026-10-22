@@ -98,7 +98,7 @@ try{Read-SetupStep $data.root $facts}catch{$valid=$false}
 }
 
 func TestSyntheticVerificationSteps(t *testing.T) {
-	start := strings.Index(guestSetup, "if($display -eq 'synthetic'){\n function Get-VDDNodes")
+	start := strings.Index(guestSetup, " function Get-VDDNodes")
 	end := strings.Index(guestSetup, "$step=40;Write-SetupStep")
 	if start < 0 || end <= start {
 		t.Fatal("verification block missing")
@@ -124,7 +124,7 @@ func TestSyntheticVerificationSteps(t *testing.T) {
 			input, _ := json.Marshal(map[string]any{"root": root, "path": path, "problem": test.problem, "flags": test.flags, "nodes": test.nodes, "packages": test.packages, "drivers": test.drivers, "absent": test.absent})
 			harness := `
 $ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json
-$fixturePath=$data.path;$display='synthetic';$drivers='fixture-drivers';$videoDiagnostics=$null
+$fixturePath=$data.path;$drivers='fixture-drivers';$videoDiagnostics=$null
 function Get-PnpDevice {param($Class,[switch]$PresentOnly)
  if($Class -eq 'Display'){if(!$data.absent){[pscustomobject]@{InstanceId='fixture-video'}}}
  elseif($data.nodes){[pscustomobject]@{InstanceId='ROOT\APPSANDBOXVDD\fixture'}}
@@ -156,23 +156,22 @@ function Start-Sleep {param($Milliseconds)}
 }
 
 func TestSyntheticSpecializeBarrier(t *testing.T) {
-	start := strings.Index(guestSetup, " if($display -eq 'synthetic'){")
+	start := strings.Index(guestSetup, " # Do not replace")
 	end := strings.Index(guestSetup, " $step=10\n Write-SetupStep")
 	if start < 0 || end <= start {
 		t.Fatal("specialize guard missing")
 	}
 	guard := guestSetup[start:end]
 	for _, test := range []struct {
-		name, status, display string
-		step                  uint32
-		failed                bool
+		name, status string
+		step         uint32
+		failed       bool
 	}{
-		{"completed", `{"step":88,"failed":false}`, "synthetic", 10, false},
-		{"failed", `{"step":82,"failed":true}`, "synthetic", 82, true},
-		{"interrupted", `{"step":84,"failed":false}`, "synthetic", 84, true},
-		{"missing", "", "synthetic", 89, true},
-		{"invalid", `{"step":"guest-private-output","failed":false}`, "synthetic", 89, true},
-		{"vdd bypass", "", "vdd", 10, false},
+		{"completed", `{"step":88,"failed":false}`, 10, false},
+		{"failed", `{"step":82,"failed":true}`, 82, true},
+		{"interrupted", `{"step":84,"failed":false}`, 84, true},
+		{"missing", "", 89, true},
+		{"invalid", `{"step":"guest-private-output","failed":false}`, 89, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, path := setupFixture(t)
@@ -181,8 +180,8 @@ func TestSyntheticSpecializeBarrier(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			input, _ := json.Marshal(map[string]string{"path": path, "display": test.display})
-			script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$fixturePath=$data.path;$display=$data.display;$step=10;$videoDiagnostics=$null
+			input, _ := json.Marshal(map[string]string{"path": path})
+			script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$fixturePath=$data.path;$step=10;$videoDiagnostics=$null
 function Join-Path {param($Path,$ChildPath) return $fixturePath}
 ` + fixtureStepWriter(t, guestSetup) + "\ntry {\n" + guard + "\n$step=10;Write-SetupStep $step $false\n}catch{Write-SetupStep $step $true}\n" + `[Console]::Out.Write([IO.File]::ReadAllText($fixturePath))`
 			var status struct {
@@ -201,7 +200,7 @@ func TestSpecializeFailureStep(t *testing.T) {
 	_, path := setupFixture(t)
 	start := strings.Index(guestSpecialize, "function Write-SetupStep")
 	end := strings.Index(guestSpecialize[start:], "\n}\n") + start + 3
-	script := "$display='synthetic'\n$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$fixturePath=$data.path\nfunction Get-Service {throw 'fixture failure'}\n" + guestSpecialize[:start] + fixtureStepWriter(t, guestSpecialize) + guestSpecialize[end:]
+	script := "$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$fixturePath=$data.path\nfunction Get-Service {throw 'fixture failure'}\n" + guestSpecialize[:start] + fixtureStepWriter(t, guestSpecialize) + guestSpecialize[end:]
 	file := filepath.Join(t.TempDir(), "fixture-specialize.ps1")
 	if err := os.WriteFile(file, []byte(script), 0600); err != nil {
 		t.Fatal(err)

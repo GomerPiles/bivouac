@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/GomerPiles/bivouac/internal/winguest"
 )
 
 func prepareMedia(ctx context.Context, c Config, r *record) error {
@@ -19,11 +17,6 @@ func prepareMedia(ctx context.Context, c Config, r *record) error {
 }
 
 func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(string) error, copyFile func(context.Context, string, string, string, int64) (int64, string, error), run func(context.Context, string, any, bool) ([]byte, error)) error {
-	display, err := winguest.ParseDisplayMode(string(c.Display))
-	if err != nil {
-		return err
-	}
-	r.Manifest.Display = display
 	assets := filepath.Join(r.Workspace, "setup-assets")
 	private := filepath.Join(r.Workspace, "setup-private")
 	for _, dir := range []string{assets, private} {
@@ -52,10 +45,6 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 			return err
 		}
 	}
-	// Only the validated fixed vocabulary reaches setup media.
-	if err := os.WriteFile(filepath.Join(assets, "DISPLAY.JSON"), []byte(`"`+string(display)+`"`), 0600); err != nil {
-		return err
-	}
 	var secret [24]byte
 	if _, err := rand.Read(secret[:]); err != nil {
 		return err
@@ -66,12 +55,7 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 	data["assets"] = assets
 	data["destination"] = filepath.Join(private, "setup.iso")
 	data["unattend"] = unattended(r.Name, c.GuestUser, password)
-	// These assignments are fixed script data, never commands built from input.
-	displayAssignment := "$display='vdd'\n"
-	if display == winguest.DisplaySynthetic {
-		displayAssignment = "$display='synthetic'\n"
-	}
-	data["specialize"] = displayAssignment + guestSpecialize + disableFirstLogonAnimation
+	data["specialize"] = guestSpecialize + disableFirstLogonAnimation
 	defer func() { delete(data, "unattend") }()
 	if _, err := run(ctx, makeISO, data, false); err != nil {
 		r.hostError("setup_iso", err)

@@ -16,7 +16,7 @@ import (
 func testConfig() Config {
 	h := strings.Repeat("a", 64)
 	c := Config{Source: `D:\Templates\base\disk.vhdx`, SourceSHA256: h, GuestUser: "imageuser", CPU: 4, MemoryMB: 8192, ImageRoot: `D:\Images`, TimeoutSeconds: 900, RenderProbe: PinnedFile{Source: `D:\Assets\render.exe`, SHA256: h}, Drivers: []string{`C:\Windows\System32\DriverStore\FileRepository\display.inf_amd64_example`}}
-	for _, n := range []string{"appsandbox-agent.exe", "appsandbox-input.exe", "appsandbox-displays.exe", "AppSandboxVDD.dll", "AppSandboxVDD.inf", "AppSandboxVDD.cat", "devcon.exe"} {
+	for _, n := range []string{"appsandbox-agent.exe", "appsandbox-input.exe", "appsandbox-displays.exe"} {
 		c.SetupAssets = append(c.SetupAssets, Asset{Name: n, PinnedFile: PinnedFile{Source: `D:\Assets\` + n, SHA256: h}})
 	}
 	return c
@@ -34,7 +34,7 @@ func TestConfig(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*Config){
-		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets[1] = c.SetupAssets[0] }, "asset missing": func(c *Config) { c.SetupAssets = c.SetupAssets[:6] }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
+		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets[1] = c.SetupAssets[0] }, "asset missing": func(c *Config) { c.SetupAssets = c.SetupAssets[:2] }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := testConfig()

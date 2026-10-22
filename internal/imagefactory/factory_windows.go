@@ -21,7 +21,6 @@ import (
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
-	"github.com/GomerPiles/bivouac/internal/winguest"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/Microsoft/go-winio/vhd"
 	"golang.org/x/sys/windows"
@@ -76,10 +75,6 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 	if err = c.Validate(); err != nil {
 		return Manifest{}, err
 	}
-	c.Display, err = winguest.ParseDisplayMode(string(c.Display))
-	if err != nil {
-		return Manifest{}, err
-	}
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -120,7 +115,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{Display: c.Display, BuildID: id, GuestName: name, GuestUser: c.GuestUser, Source: c.Source, SourceSHA256: strings.ToLower(c.SourceSHA256), Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
+	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{BuildID: id, GuestName: name, GuestUser: c.GuestUser, Source: c.Source, SourceSHA256: strings.ToLower(c.SourceSHA256), Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
 	if err = writeJSON(filepath.Join(workspace, "owner.json"), r); err != nil {
 		// No native or disk operation has occurred, and this invocation created
 		// both entries. Remove only these entries, without recursive traversal.
