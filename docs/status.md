@@ -366,8 +366,9 @@ Open:
   build's cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
-- The synthetic-display image candidate and interactive topology checks exist
-  but have not been validated live.
+- Images built by this branch drop App Sandbox's display driver and have not
+  been validated live. The provider in this branch does not run images built
+  before it; rollback uses the previous binary and image.
 
 ## Windows: Crosvm (Linux GPU guests)
 

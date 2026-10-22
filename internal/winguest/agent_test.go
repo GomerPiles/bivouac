@@ -22,7 +22,7 @@ func agentTest(t *testing.T, script func(net.Conn) error) (Agent, error) {
 	go func() { defer func() { _ = guest.Close() }(); done <- script(guest) }()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	a, err := Initialize(ctx, host, []byte(testKey), DisplayVDD)
+	a, err := Initialize(ctx, host, []byte(testKey))
 	_ = host.Close()
 	if scriptErr := <-done; scriptErr != nil && !errors.Is(scriptErr, io.ErrClosedPipe) {
 		t.Fatal(scriptErr)
@@ -47,7 +47,7 @@ func readInitialization(conn net.Conn) (*bufio.Reader, error) {
 	return r, nil
 }
 
-func TestAgentRequiresDisplayAndAcknowledgedPublicKey(t *testing.T) {
+func TestAgentRequiresVDDAbsenceAndAcknowledgedPublicKey(t *testing.T) {
 	a, err := agentTest(t, func(conn net.Conn) error {
 		r, err := readInitialization(conn)
 		if err != nil {
@@ -59,7 +59,7 @@ func TestAgentRequiresDisplayAndAcknowledgedPublicKey(t *testing.T) {
 		if line, err := r.ReadString('\n'); err != nil || line != "gpu_none\n" {
 			return fmt.Errorf("GPU query not declined: %q: %w", line, err)
 		}
-		if _, err = io.WriteString(conn, "idd_status:ok\n1:ssh_ready\n"); err != nil {
+		if _, err = io.WriteString(conn, "idd_status:not_found\n1:ssh_ready\n"); err != nil {
 			return err
 		}
 		line, err := r.ReadString('\n')
@@ -72,7 +72,7 @@ func TestAgentRequiresDisplayAndAcknowledgedPublicKey(t *testing.T) {
 		_, err = io.WriteString(conn, "ssh_key_deployed\n")
 		return err
 	})
-	if err != nil || !a.Connected || !a.DisplayReady || !a.KeyDeployed {
+	if err != nil || !a.Connected || !a.VDDAbsent || !a.KeyDeployed {
 		t.Fatalf("agent initialization: %+v %v", a, err)
 	}
 }
@@ -109,7 +109,7 @@ func TestAgentCancellationClosesBlockedTransport(t *testing.T) {
 	defer func() { _ = guest.Close() }()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { _, err := Initialize(ctx, host, []byte(testKey), DisplayVDD); done <- err }()
+	go func() { _, err := Initialize(ctx, host, []byte(testKey)); done <- err }()
 	cancel()
 	select {
 	case err := <-done:
@@ -125,7 +125,7 @@ func TestInvalidPublicKeyIsRefusedBeforeIO(t *testing.T) {
 	host, guest := net.Pipe()
 	defer func() { _ = host.Close(); _ = guest.Close() }()
 	for _, key := range []string{"", "ssh-ed25519 a\nssh_deploy_key injected"} {
-		if _, err := Initialize(t.Context(), host, []byte(key), DisplayVDD); err == nil {
+		if _, err := Initialize(t.Context(), host, []byte(key)); err == nil {
 			t.Fatalf("accepted %q", key)
 		}
 	}

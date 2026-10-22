@@ -58,9 +58,7 @@ import (
 var lab = struct {
 	root, flattenDir, results, image, imageSHA256, guestName, guestUser *string
 	probeSHA256, validationSHA256, autologonSHA256, dial, only          *string
-	display                                                             *string
 }{
-	display:          labDisplayFlag(flag.CommandLine),
 	only:             flag.String("lab.only", "", "comma-separated run labels to run; five default runs when empty; failed-start is opt-in"),
 	root:             flag.String("lab.root", "", "new or empty administrator-protected VM host directory"),
 	flattenDir:       flag.String("lab.flatten-dir", "", "new or empty directory for the flattened image"),
@@ -73,10 +71,6 @@ var lab = struct {
 	validationSHA256: flag.String("lab.validation-sha256", "", "prepared image's validation script SHA-256"),
 	autologonSHA256:  flag.String("lab.autologon-sha256", "", "prepared image's autologon helper SHA-256"),
 	dial:             flag.String("lab.dial", "", "internal: unelevated child dial target vmid/service"),
-}
-
-func labDisplayFlag(fs *flag.FlagSet) *string {
-	return fs.String("lab.display", "vdd", "prepared image display: vdd or synthetic")
 }
 
 // The prepared image's own validation script is pinned by hash in the image.
@@ -97,25 +91,24 @@ func encodedPowerShell(s string) string {
 }
 
 type labRun struct {
-	Display       winguest.DisplayMode `json:"display"`
-	Run           string               `json:"run"`
-	Name          string               `json:"name"`
-	CPU           uint32               `json:"cpu"`
-	MemoryMB      uint64               `json:"memory_mb"`
-	LazyMemory    bool                 `json:"lazy_memory"`
-	Flattened     bool                 `json:"flattened"`
-	Passed        bool                 `json:"passed"`
-	Failure       string               `json:"failure,omitempty"`
-	Timings       map[string]int64     `json:"timings_ms"`
-	DialAttempts  int                  `json:"agent_dial_attempts"`
-	DialLongestMS int64                `json:"agent_dial_longest_ms"`
-	HostKeySHA256 string               `json:"ssh_host_key_sha256,omitempty"`
-	Render        *render              `json:"render,omitempty"`
-	Steps         map[string]int64     `json:"validation_steps_ms,omitempty"`
-	Memory        map[string]uint64    `json:"host_memory_mb,omitempty"`
-	Unelevated    map[string]string    `json:"unelevated,omitempty"`
-	Cleaned       bool                 `json:"cleaned"`
-	FailedStart   *failedStart         `json:"failed_start,omitempty"`
+	Run           string            `json:"run"`
+	Name          string            `json:"name"`
+	CPU           uint32            `json:"cpu"`
+	MemoryMB      uint64            `json:"memory_mb"`
+	LazyMemory    bool              `json:"lazy_memory"`
+	Flattened     bool              `json:"flattened"`
+	Passed        bool              `json:"passed"`
+	Failure       string            `json:"failure,omitempty"`
+	Timings       map[string]int64  `json:"timings_ms"`
+	DialAttempts  int               `json:"agent_dial_attempts"`
+	DialLongestMS int64             `json:"agent_dial_longest_ms"`
+	HostKeySHA256 string            `json:"ssh_host_key_sha256,omitempty"`
+	Render        *render           `json:"render,omitempty"`
+	Steps         map[string]int64  `json:"validation_steps_ms,omitempty"`
+	Memory        map[string]uint64 `json:"host_memory_mb,omitempty"`
+	Unelevated    map[string]string `json:"unelevated,omitempty"`
+	Cleaned       bool              `json:"cleaned"`
+	FailedStart   *failedStart      `json:"failed_start,omitempty"`
 }
 
 type failedStart struct {
@@ -235,9 +228,8 @@ type render struct {
 	VirtualProblem    uint32            `json:"virtual_render_problem_code"`
 }
 
-func (r *render) ok(display winguest.DisplayMode) bool {
-	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated && r.Topology.LabOK() &&
-		(display == winguest.DisplayVDD || (display == winguest.DisplaySynthetic && r.Topology.SyntheticOK()))
+func (r *render) ok() bool {
+	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated && r.Topology.LabOK()
 }
 
 type results struct {
@@ -265,10 +257,6 @@ func TestLabBatch(t *testing.T) {
 	if *lab.root == "" {
 		t.Skip("lab flags not provided")
 	}
-	display, err := winguest.ParseDisplayMode(*lab.display)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		t.Fatal("lab batch requires an explicitly elevated launch")
 	}
@@ -278,7 +266,7 @@ func TestLabBatch(t *testing.T) {
 	}
 	out := &results{f: f}
 	defer func() { _ = f.Close() }()
-	status := map[string]any{"event": "start", "at": time.Now().UTC().Format(time.RFC3339), "display": display}
+	status := map[string]any{"event": "start", "at": time.Now().UTC().Format(time.RFC3339)}
 	out.write(t, status)
 	defer func() {
 		out.write(t, map[string]any{"event": "end", "failed": t.Failed(), "at": time.Now().UTC().Format(time.RFC3339)})
@@ -605,19 +593,13 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 	r.Timings["agent_connect"] = ms(time.Since(dialStarted))
 	initStarted := time.Now()
 	initCtx, done := context.WithTimeout(ctx, 2*time.Minute)
-	display, err := winguest.ParseDisplayMode(*lab.display)
-	if err != nil {
-		done()
-		return fail("display mode", err)
-	}
-	r.Display = display
-	a, err := winguest.Initialize(initCtx, agent, identity.PublicKey, display)
+	a, err := winguest.Initialize(initCtx, agent, identity.PublicKey)
 	done()
 	// Keep the agent session for the guest's life, as the image's builder did.
 	defer func() { _ = agent.Close() }()
 	r.Timings["agent_init"] = ms(time.Since(initStarted))
-	if err != nil || !a.DisplayReady || !a.KeyDeployed {
-		return fail("agent init", errors.Join(err, errors.New("display or key not confirmed")))
+	if err != nil || !a.VDDAbsent || !a.KeyDeployed {
+		return fail("agent init", errors.Join(err, errors.New("VDD absence or key not confirmed")))
 	}
 	if unelevated {
 		r.Unelevated = map[string]string{
@@ -649,7 +631,7 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 	if err != nil {
 		return fail("desktop validation", err)
 	}
-	if !report.ok(display) {
+	if !report.ok() {
 		return fail("desktop validation", errors.New("rendering or single-display input checks did not all pass"))
 	}
 	r.Timings["to_validated_desktop"] = ms(time.Since(started))

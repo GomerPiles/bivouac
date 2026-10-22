@@ -207,6 +207,10 @@ run elevated in the foreground (one UAC prompt each), drive HCS directly and
 attach no network adapter, so production CI may keep running. Neither touches
 the VM host service, its journal or CI mode.
 
+Every image drops App Sandbox's display driver and uses HCS synthetic video
+with GPU-PV. This branch's provider and lab require these newly built images.
+Rollback uses the previously deployed binary with its previously built image.
+
 The template is only read. The factory copies it into its own workspace,
 hashing as it copies, and never changes the template's file, directory, ACL
 or owner record. It mounts, grants and boots only files it created.
@@ -220,23 +224,21 @@ or owner record. It mounts, grants and boots only files it created.
      "source_sha256": "<the owner record's SHA256>",
      "expected_template": "<template name>",
      "guest_user": "ciuser",
-     "display": "vdd",
      "image_root": "<protected parent>\\Images",
      "render_probe": {"source": "<path>", "sha256": "<hash>"},
-     "setup_assets": [{"name": "appsandbox-agent.exe", "source": "<path>", "sha256": "<hash>"}],
+     "setup_assets": [
+       {"name": "appsandbox-agent.exe", "source": "<agent path>", "sha256": "<hash>"},
+       {"name": "appsandbox-input.exe", "source": "<input helper path>", "sha256": "<hash>"},
+       {"name": "appsandbox-displays.exe", "source": "<display helper path>", "sha256": "<hash>"}
+     ],
      "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
    }
    ```
 
-   - `display` is optional: `vdd` (default) or `synthetic`. The manifest records
-     the selected mode. Synthetic is an experimental factory/lab candidate;
-     the `hcs` provider continues to require VDD images.
-   - In VDD mode, `setup_assets` must include `appsandbox-agent.exe`,
-     `appsandbox-input.exe`, `appsandbox-displays.exe`, `AppSandboxVDD.dll`,
-     `.inf` and `.cat`, and `devcon.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are
-     optional; a template without a runner needs `RUNNER.ZIP`.
-     Synthetic mode requires the same agent and two helper executables, but
-     refuses all three VDD files and `devcon.exe`. Specialize removes VDD devices
+   - `setup_assets` must include `appsandbox-agent.exe`, `appsandbox-input.exe`
+     and `appsandbox-displays.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are optional;
+     a template without a runner needs `RUNNER.ZIP`. All `AppSandboxVDD.*`
+     files and `devcon.exe` are unsupported. Specialize removes VDD devices
      (including phantom nodes), packages and the agent's `drivers` directory,
      enables synthetic video before Windows setup's following boot, and leaves
      the agent disabled. FirstLogon then verifies these changes before starting
@@ -284,8 +286,8 @@ or owner record. It mounts, grants and boots only files it created.
    asset and image hashes, `guest_name`, `guest_user`, the driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
-   the build's output for VDD images. Synthetic images are lab-only. The
-   manifest also records topology facts; synthetic publication requires one
+   the build's output. The manifest also records topology facts; publication
+   requires one
    active primary display on Hyper-V synthetic video, no VDD nodes and the
    existing render checks. A published directory is never reused.
 6. Build records stay in `<image_root>\.builds`. A failed build terminates its
@@ -315,27 +317,17 @@ Each run checks the guest agent, SSH and desktop rendering. The baseline run
 also checks that an unelevated process reaches only the HvSocket service its
 account was granted.
 
-`-lab.display=vdd` (default) or `-lab.display=synthetic` selects the image's
-agent expectation. Every desktop run records topology in the console user's
+Every desktop run records topology in the console user's
 interactive session and requires exactly one active primary display plus a
 probe window that becomes foreground, fits the primary work area and receives
 SendInput. Windows Security launch/placement facts are recorded without gating
-the run. Synthetic runs additionally require Hyper-V video as the primary
-adapter, no VDD nodes, and Hyper-V video enabled and started. A VDD control with
-multiple displays is expected to fail this gate.
-
-For a control/candidate comparison, prepare two factory configs with separate
-protected `image_root`s (for example `<protected parent>\Control-Images` and
-`<protected parent>\Synthetic-Images`). Set their display modes and asset lists
-as above; inspect/build each through the existing operator procedure. Keep the
-returned manifests and pins paired with their respective disks. Run the lab
-binary twice, sequentially, selecting the matching `-lab.display` and image
-pins. Give each invocation a separate new `-lab.root`, `-lab.flatten-dir` and
-`-lab.results` (for example `Control-Lab`/`Synthetic-Lab`,
-`Control-Flat`/`Synthetic-Flat`, and separate JSONL files). Do not share journals,
-reuse directories or point either invocation at the installed VM host service,
-production images or a controller home. These builds and runs still need the
-operator's explicit live-validation approval; compiling the tools starts none.
+the run. Every run requires Hyper-V video as the primary adapter, no VDD nodes,
+and Hyper-V video enabled and started. Use this factory's image and its matching
+manifest pins, with new `-lab.root`, `-lab.flatten-dir` and `-lab.results` paths
+for each invocation. Do not share journals, reuse directories or point a lab
+invocation at the installed VM host service, production images or a controller
+home. Builds and runs still need the operator's explicit live-validation
+approval; compiling the tools starts none.
 
 `-lab.only=failed-start` explicitly selects an additional run, skipped when
 `-lab.only` is empty. It boots the prepared image with 2 vCPUs and 2048 MiB of
@@ -366,7 +358,6 @@ Start-Process -Verb RunAs -FilePath bin\lab\vmhost-lab.test.exe -ArgumentList @(
   '"-lab.root=<protected parent>\VMHost"', '"-lab.flatten-dir=<protected parent>\VMHost-Images"',
   '"-lab.results=<user path>\lab-results.jsonl"', '"-lab.image=<prepared image>.vhdx"',
   '-lab.image-sha256=<hash>', '-lab.guest-name=<computer name>', '-lab.guest-user=<user>',
-  '-lab.display=vdd',
   '-lab.probe-sha256=<hash>', '-lab.validation-sha256=<hash>', '-lab.autologon-sha256=<hash>')
 ```
 
@@ -416,7 +407,7 @@ offers to allow the test binary through the firewall, choose Cancel.
    go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
    ```
 
-3. Launch it once through UAC. Use the batch 1 image and pins. The lab root
+3. Launch it once through UAC. Use this branch's factory image and pins. The lab root
    must not exist yet; the VM host creates it protected.
    - If the image has no runner, add `-lab.runner-archive` and
      `-lab.runner-sha256` for an official runner ZIP.
