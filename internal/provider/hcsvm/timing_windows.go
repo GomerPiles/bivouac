@@ -13,25 +13,22 @@ import (
 type timingStep string
 
 const (
-	stepSession           timingStep = "session"
-	stepAgentDial         timingStep = "agent_dial"
-	stepAgentInitialize   timingStep = "agent_initialize"
-	stepSSHHandshake      timingStep = "ssh_handshake"
-	stepNetwork           timingStep = "network"
-	stepConfig            timingStep = "config"
-	stepDeliveryPreflight timingStep = "delivery_preflight"
-	stepDeliveryConfig    timingStep = "delivery_config"
-	stepPreflight         timingStep = "preflight"
-	stepConsoleProof      timingStep = "console_proof"
-	stepDeliveryControl   timingStep = "delivery_control"
-	stepDeliveryHelper    timingStep = "delivery_helper"
-	stepDeliveryRunner    timingStep = "delivery_runner_archive"
-	stepPrepare           timingStep = "prepare"
-	stepDesktopProof      timingStep = "desktop_proof"
-	stepClockSync         timingStep = "clock_sync"
-	stepCacheSetup        timingStep = "cache_setup"
-	stepJITDelivery       timingStep = "jit_delivery"
-	stepRunnerStart       timingStep = "runner_start"
+	stepSession        timingStep = "session"
+	stepAgentProof     timingStep = "agent_proof"
+	stepAgentDial      timingStep = "agent_dial"
+	stepNetwork        timingStep = "network"
+	stepConfig         timingStep = "config"
+	stepDeliveryConfig timingStep = "delivery_config"
+	stepPreflight      timingStep = "preflight"
+	stepConsoleProof   timingStep = "console_proof"
+	stepDeliveryHelper timingStep = "delivery_helper"
+	stepDeliveryRunner timingStep = "delivery_runner_archive"
+	stepPrepare        timingStep = "prepare"
+	stepDesktopProof   timingStep = "desktop_proof"
+	stepClockSync      timingStep = "clock_sync"
+	stepCacheSetup     timingStep = "cache_setup"
+	stepJITDelivery    timingStep = "jit_delivery"
+	stepRunnerStart    timingStep = "runner_start"
 )
 
 type instanceTiming struct {
@@ -80,7 +77,7 @@ func (t *timing) end(now time.Time) {
 	if t.step == "" {
 		return
 	}
-	t.report.SpansMS[string(t.step)+"_ms"] = now.Sub(t.stepAt).Milliseconds()
+	t.report.SpansMS[string(t.step)+"_ms"] += now.Sub(t.stepAt).Milliseconds()
 	if !t.origin.IsZero() {
 		t.report.SpansMS[string(t.step)+"_since_create_ms"] = now.Sub(t.origin).Milliseconds()
 	}

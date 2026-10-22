@@ -35,7 +35,19 @@ func listenWindows(open func(*winio.HvsockAddr) (net.Listener, error)) (Listener
 // 500 ms, just like the current HCS App Sandbox agent transport. Callers own
 // the overall context deadline. No input is sent by this dialer.
 func DialHvsock(runtimeID string) Dialer {
-	return dialHvsock(runtimeID, hvsock.Dial, 3*time.Second, 500*time.Millisecond)
+	return DialHvsockObserved(runtimeID, nil)
+}
+
+// DialHvsockObserved is DialHvsock with a numeric-only retry observation. The
+// callback runs synchronously after a failed connection attempt, never a command.
+func DialHvsockObserved(runtimeID string, retry func()) Dialer {
+	return dialHvsock(runtimeID, func(ctx context.Context, addr hvsock.Addr) (net.Conn, error) {
+		conn, err := hvsock.Dial(ctx, addr)
+		if err != nil && retry != nil {
+			retry()
+		}
+		return conn, err
+	}, 3*time.Second, 500*time.Millisecond)
 }
 
 func dialHvsock(runtimeID string, dial func(context.Context, hvsock.Addr) (net.Conn, error), attemptTimeout, pause time.Duration) Dialer {

@@ -28,8 +28,6 @@ func fakeOpenTimings(ctx context.Context) error {
 	t := contextTiming(ctx)
 	t.begin(stepAgentDial)
 	t.report.SpansMS["agent_dial_retries"] = 2
-	t.begin(stepAgentInitialize)
-	t.begin(stepSSHHandshake)
 	return nil
 }
 
@@ -111,7 +109,7 @@ func TestReadinessTimingsSuccess(t *testing.T) {
 	if err != nil || !bytes.Equal(encoded, logged) {
 		t.Fatal("lab payload differs from log")
 	}
-	steps := []string{"vmhost_create", "session", "agent_dial", "agent_initialize", "ssh_handshake", "network", "config", "delivery_preflight", "delivery_config", "preflight", "console_proof", "delivery_control", "delivery_helper", "delivery_runner_archive", "prepare", "desktop_proof", "clock_sync", "wait_ready_total"}
+	steps := []string{"vmhost_create", "session", "agent_dial", "network", "agent_proof", "config", "delivery_config", "delivery_helper", "delivery_runner_archive", "preflight", "console_proof", "prepare", "desktop_proof", "clock_sync", "wait_ready_total"}
 	var previous int64
 	for _, step := range steps {
 		duration, ok := values[step+"_ms"]
@@ -149,7 +147,7 @@ func TestReadinessTimingsFailures(t *testing.T) {
 		setup                 func(*Provider, *fakeTransport)
 		wantError             error
 	}{
-		{"dial", "agent_dial", "agent_initialize_ms", func(_ *Provider, f *fakeTransport) {
+		{"dial", "agent_dial", "agent_proof_ms", func(_ *Provider, f *fakeTransport) {
 			f.openHook = func(ctx context.Context) error {
 				tm := contextTiming(ctx)
 				tm.begin(stepAgentDial)
@@ -158,20 +156,20 @@ func TestReadinessTimingsFailures(t *testing.T) {
 			}
 		}, sentinel},
 		{"preflight", "preflight", "console_proof_ms", func(_ *Provider, f *fakeTransport) { f.fail = sentinel }, sentinel},
-		{"console", "console_proof", "delivery_control_ms", func(_ *Provider, f *fakeTransport) { f.replies["bivouac-preflight.ps1"] = untrusted }, nil},
+		{"console", "console_proof", "prepare_ms", func(_ *Provider, f *fakeTransport) { f.replies["guest windows preflight"] = untrusted }, nil},
 		{"helper", "delivery_helper", "prepare_ms", func(p *Provider, _ *fakeTransport) { p.opts.Helper = filepath.Join(t.TempDir(), "missing.exe") }, nil},
 		{"prepare", "prepare", "desktop_proof_ms", func(_ *Provider, f *fakeTransport) {
 			f.runHook = func(command string, _ []byte) error {
-				if command == control+"prepare" {
+				if command == guestIncomingHelper+" guest windows prepare" {
 					return sentinel
 				}
 				return nil
 			}
 		}, sentinel},
-		{"desktop", "desktop_proof", "clock_sync_ms", func(_ *Provider, f *fakeTransport) { f.replies["-Mode prepare"] = untrusted }, nil},
-		{"clock", "clock_sync", "clock_skew_ms", func(_ *Provider, f *fakeTransport) { f.replies[".ToString('o')\""] = untrusted }, nil},
+		{"desktop", "desktop_proof", "clock_sync_ms", func(_ *Provider, f *fakeTransport) { f.replies["guest windows prepare"] = untrusted }, nil},
+		{"clock", "clock_sync", "clock_skew_ms", func(_ *Provider, f *fakeTransport) { f.replies["guest windows clock"] = untrusted }, nil},
 		{"skew", "clock_sync", "unused_ms", func(_ *Provider, f *fakeTransport) {
-			f.replies[".ToString('o')\""] = hostNow.Add(time.Hour).Format(time.RFC3339Nano)
+			f.replies["guest windows clock"] = hostNow.Add(time.Hour).Format(time.RFC3339Nano)
 		}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,7 +263,7 @@ func TestReadinessTimingsWithoutCreateOrigin(t *testing.T) {
 }
 
 func TestLaunchTimingsFailurePreservesError(t *testing.T) {
-	for _, command := range []string{guestHelper + " guest windows seed-jit", control + "start"} {
+	for _, command := range []string{guestHelper + " guest windows seed-jit", guestHelper + " guest windows start"} {
 		t.Run(command, func(t *testing.T) {
 			p, _, f := fixture(t, true)
 			defer p.Close()
@@ -285,7 +283,7 @@ func TestLaunchTimingsFailurePreservesError(t *testing.T) {
 			}
 			values := numericRecord(t, bytes.TrimSpace(buf.Bytes()), "hcs launch timings")
 			step := "jit_delivery"
-			if command == control+"start" {
+			if command == guestHelper+" guest windows start" {
 				step = "runner_start"
 			}
 			if _, ok := values[step+"_ms"]; !ok || !bytes.Contains(buf.Bytes(), []byte(`"failure_step":"`+step+`"`)) || bytes.Contains(buf.Bytes(), []byte("synthetic-")) {

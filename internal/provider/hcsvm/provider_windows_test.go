@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
-	"golang.org/x/crypto/ssh"
 )
 
 const controller = "ctl-test"
@@ -81,18 +81,18 @@ type call struct {
 }
 
 type fakeTransport struct {
-	mu          sync.Mutex
-	opens       int
-	calls       []call
-	sent        map[string][]byte
-	replies     map[string]string
-	fail        error // next Run fails with this once
-	cacheClient func(context.Context) (*ssh.Client, error)
-	runHook     func(string, []byte) error
-	openHook    func(context.Context) error
+	mu       sync.Mutex
+	opens    int
+	calls    []call
+	sent     map[string][]byte
+	replies  map[string]string
+	fail     error // next Run fails with this once
+	duplex   func(context.Context) (net.Conn, error)
+	runHook  func(string, []byte) error
+	openHook func(context.Context) error
 }
 
-func (f *fakeTransport) Open(ctx context.Context, _, _ string, pin Pin) (Session, error) {
+func (f *fakeTransport) Open(ctx context.Context, _ string) (Session, error) {
 	f.mu.Lock()
 	f.opens++
 	f.mu.Unlock()
@@ -101,16 +101,27 @@ func (f *fakeTransport) Open(ctx context.Context, _, _ string, pin Pin) (Session
 			return nil, err
 		}
 	}
-	fingerprint := strings.Repeat("ab", 32)
-	if err := pin.Check(fingerprint); err != nil {
-		return nil, err
-	}
 	return &fakeSession{f: f}, nil
 }
 
 type fakeSession struct{ f *fakeTransport }
 
-func (s *fakeSession) Run(_ context.Context, command string, stdin []byte, _ int) ([]byte, error) {
+func (s *fakeSession) Run(ctx context.Context, argv []string, input io.Reader, _ int) ([]byte, error) {
+	var stdin []byte
+	if input != nil {
+		stdin, _ = io.ReadAll(input)
+	}
+	defer clear(stdin)
+	command := strings.Join(argv, " ")
+	if len(argv) == 6 && argv[1] == "guest-agent" && argv[2] == "receive" {
+		s.f.sent[argv[3]] = append([]byte(nil), stdin...)
+
+		return nil, nil
+	}
+	if len(argv) == 2 && argv[1] == "version" {
+		contextTiming(ctx).begin(stepAgentProof)
+		return []byte("ok"), nil
+	}
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
 	var recorded []byte
@@ -134,23 +145,12 @@ func (s *fakeSession) Run(_ context.Context, command string, stdin []byte, _ int
 	}
 	return []byte("ok"), nil
 }
-func (s *fakeSession) Send(_ context.Context, name string, data io.Reader, size int64) error {
-	b, err := io.ReadAll(data)
-	if err != nil || int64(len(b)) != size {
-		return errors.New("short send")
-	}
-	s.f.mu.Lock()
-	s.f.sent[name] = b
-	s.f.mu.Unlock()
-	return nil
-}
 func (s *fakeSession) Close() error { return nil }
-
-func (s *fakeSession) CacheClient(ctx context.Context, _ func(net.Conn) net.Conn) (*ssh.Client, error) {
-	if s.f.cacheClient == nil {
-		return nil, errors.New("cache client unavailable")
+func (s *fakeSession) Duplex(ctx context.Context, _ []string) (net.Conn, error) {
+	if s.f.duplex == nil {
+		return nil, errors.New("cache agent unavailable")
 	}
-	return s.f.cacheClient(ctx)
+	return s.f.duplex(ctx)
 }
 
 func fixture(t *testing.T, network bool) (*Provider, *fakeHost, *fakeTransport) {
@@ -161,12 +161,12 @@ func fixture(t *testing.T, network bool) (*Provider, *fakeHost, *fakeTransport) 
 	}
 	h := &fakeHost{guests: map[string]vmhost.GuestInfo{}, network: network}
 	f := &fakeTransport{sent: map[string][]byte{}, replies: map[string]string{
-		"bivouac-preflight.ps1": `{"ready":true,"session":1}`,
-		"-Mode prepare":         `{"ready":true,"session":1,"desktop":"Default"}`,
-		"guest windows status":  `{"State":"listening"}`,
-		".ToString('o')\"":      "2026-10-21T08:38:01.0000000Z\r\n",
+		"guest windows preflight": `{"ready":true,"session":1}`,
+		"guest windows prepare":   `{"ready":true,"session":1,"desktop":"Default"}`,
+		"guest windows status":    `{"State":"listening"}`,
+		"guest windows clock":     "2026-10-21T08:38:01.0000000Z\r\n",
 	}}
-	p, err := New(Options{Name: "windows", ControllerID: controller, Image: "windows", GuestName: "bivouac-image", GuestUser: "ciuser", CPU: 4, MemoryMB: 8192, GPU: true, RunnerDir: `C:\actions-runner`, Helper: helper, StateDir: t.TempDir()}, h, f)
+	p, err := New(Options{Name: "windows", ControllerID: controller, Image: "windows", GuestName: "bivouac-image", GuestUser: "ciuser", CPU: 4, MemoryMB: 8192, GPU: true, RunnerDir: `C:\actions-runner`, Helper: helper}, h, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,10 +185,10 @@ func TestWaitReadySetsTheGuestClockFromTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := f.calls[len(f.calls)-1]
-	if last.command != clockSync || string(last.stdin) != "2026-10-21T08:38:00.0000000Z\n" {
+	if last.command != guestHelper+" guest windows clock" || string(last.stdin) != "2026-10-21T08:38:00.0000000Z\n" {
 		t.Fatal("clock not set from the host over stdin", last.command, string(last.stdin))
 	}
-	f.replies[".ToString('o')\""] = "2026-10-21T09:38:00.0000000Z"
+	f.replies["guest windows clock"] = "2026-10-21T09:38:00.0000000Z"
 	if err := p.WaitReady(t.Context(), "bivouac-windows-0a1b2c3d"); err == nil || !strings.Contains(err.Error(), "1h0m0s off") {
 		t.Fatal("a guest clock left an hour off was accepted", err)
 	}
@@ -214,7 +214,7 @@ func TestCreateRequestsOnlyThisControllersGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := h.creates[0]
-	if r.Image != "windows" || r.CPU != 4 || r.MemoryMB != 8192 || !r.GPU || !r.Network || len(r.Services) != 2 || r.Labels["controller_id"] != controller || r.Labels["instance_id"] != "0a1b2c3d" {
+	if r.Image != "windows" || r.CPU != 4 || r.MemoryMB != 8192 || !r.GPU || !r.Network || len(r.Services) != 1 || r.Services[0] != guestagent.ServiceID || r.Labels["controller_id"] != controller || r.Labels["instance_id"] != "0a1b2c3d" {
 		t.Fatal("create request", r)
 	}
 	if st, err := p.Status(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil || !st.Exists || !st.Running || !st.Owned || st.Meta.InstanceID != "0a1b2c3d" {
@@ -245,10 +245,10 @@ func TestWaitReadyProvesConsoleThenInstallsAdapter(t *testing.T) {
 	if err := p.WaitReady(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(f.calls[0].command, "bivouac-preflight.ps1") || !strings.HasSuffix(f.calls[1].command, "-Mode prepare") {
+	if !strings.HasSuffix(f.calls[0].command, "guest windows preflight") || !strings.HasSuffix(f.calls[1].command, "guest windows prepare") {
 		t.Fatal("readiness order", f.calls)
 	}
-	for _, name := range []string{"bivouac-preflight.ps1", "bivouac-config.json", "bivouac-control.ps1", "bivouac-helper.exe"} {
+	for _, name := range []string{"bivouac-config.json", "bivouac-helper.exe"} {
 		if _, ok := f.sent[name]; !ok {
 			t.Fatal("missing guest file", name)
 		}
@@ -282,7 +282,7 @@ func TestJITTravelsOnlyOnStdin(t *testing.T) {
 			t.Fatal("JIT reached a command line")
 		}
 	}
-	if !bytes.Equal(f.calls[0].stdin, jit) || !strings.HasSuffix(f.calls[0].command, "seed-jit") || !strings.HasSuffix(f.calls[1].command, "-Mode start") {
+	if !bytes.Equal(f.calls[0].stdin, jit) || !strings.HasSuffix(f.calls[0].command, "seed-jit") || !strings.HasSuffix(f.calls[1].command, "guest windows start") {
 		t.Fatal("JIT delivery", f.calls)
 	}
 }
@@ -292,8 +292,8 @@ func TestTransportFailureReconnectsOnTheNextProbe(t *testing.T) {
 	if err := p.Create(t.Context(), spec()); err != nil {
 		t.Fatal(err)
 	}
-	f.fail = provider.SSHClosed
-	if _, err := p.RunnerStatus(t.Context(), "bivouac-windows-0a1b2c3d"); !errors.Is(err, provider.SSHClosed) {
+	f.fail = provider.GuestAgentUnavailable
+	if _, err := p.RunnerStatus(t.Context(), "bivouac-windows-0a1b2c3d"); !errors.Is(err, provider.GuestAgentUnavailable) {
 		t.Fatal("transport failure not reported as retryable", err)
 	}
 	status, err := p.RunnerStatus(t.Context(), "bivouac-windows-0a1b2c3d")
@@ -302,23 +302,7 @@ func TestTransportFailureReconnectsOnTheNextProbe(t *testing.T) {
 	}
 }
 
-func TestHostKeyPinRefusesADifferentKey(t *testing.T) {
-	pin := filePin{path: filepath.Join(t.TempDir(), "0a1b2c3d.hostkey")}
-	if err := pin.Check(strings.Repeat("ab", 32)); err != nil {
-		t.Fatal(err)
-	}
-	if err := pin.Check(strings.Repeat("ab", 32)); err != nil {
-		t.Fatal("same key refused", err)
-	}
-	if err := pin.Check(strings.Repeat("cd", 32)); !errors.Is(err, provider.SSHHostKey) {
-		t.Fatal("different key accepted", err)
-	}
-	if err := pin.Check("not-a-fingerprint"); err == nil {
-		t.Fatal("invalid fingerprint accepted")
-	}
-}
-
-func TestDeleteDestroysAndForgetsThePin(t *testing.T) {
+func TestDeleteDestroysAndForgetsGuest(t *testing.T) {
 	p, h, _ := fixture(t, true)
 	if err := p.Create(t.Context(), spec()); err != nil {
 		t.Fatal(err)
@@ -326,15 +310,8 @@ func TestDeleteDestroysAndForgetsThePin(t *testing.T) {
 	if _, err := p.RunnerStatus(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil {
 		t.Fatal(err)
 	}
-	pin := filepath.Join(p.opts.StateDir, "0a1b2c3d.hostkey")
-	if _, err := os.Stat(pin); err != nil {
-		t.Fatal("host key not pinned")
-	}
 	if err := p.Delete(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil || len(h.destroyed) != 1 {
 		t.Fatal("delete", err)
-	}
-	if _, err := os.Stat(pin); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("pin outlived its guest")
 	}
 	if err := p.Delete(t.Context(), "bivouac-windows-0a1b2c3d"); err != nil {
 		t.Fatal("absent guest delete failed", err)
