@@ -139,11 +139,11 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("setup status writer missing")
 	}
-	// Replace the fixed-path writer and fail at the first service query, before
+	// Replace the fixed-path writer and fail at the first media read, before
 	// any guest service/install command can execute. No host guest paths are used.
 	safeWriter := `function Write-SetupStep([int]$Code,[bool]$Failed){if($Failed){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine((@{guest_setup_step=$Code;guest_setup_failed=$Failed}|ConvertTo-Json -Compress))}}
 `
-	script := "function Get-Service {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
+	script := "function Get-Content {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
 	path := filepath.Join(t.TempDir(), "fake-setup.ps1")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)

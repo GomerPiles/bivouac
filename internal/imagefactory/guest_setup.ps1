@@ -1,17 +1,31 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $step=10
+$videoDiagnostics=$null
 function Write-SetupStep([int]$Code,[bool]$Failed){
- [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',(@{step=$Code;failed=$Failed}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+ $fact=@{step=$Code;failed=$Failed}
+ if($Code -eq 35 -and $Failed -and $null -ne $videoDiagnostics){$fact.video=$videoDiagnostics}
+ [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',($fact|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
 }
 try{
+ $display=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'DISPLAY.JSON') -Raw | ConvertFrom-Json
+ if($display -notin @('vdd','synthetic')){throw 'display mode'}
+ if($display -eq 'synthetic'){
+  # Do not replace a failed/interrupted specialize step with FirstLogon's 10.
+  $step=89
+  $path=Join-Path $env:SystemRoot 'Panther\Unattend\setup-step.json'
+  $item=Get-Item -Force -LiteralPath $path
+  if($item.PSIsContainer -or $item.Length -gt 256 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'specialize status bound or link'}
+  $previous=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+  if($previous.step -isnot [int] -or $previous.step -lt 80 -or $previous.step -gt 88 -or $previous.failed -isnot [bool]){throw 'specialize status'}
+  if($previous.failed -or $previous.step -ne 88){$step=$previous.step;throw 'specialize incomplete'}
+ }
+ $step=10
  Write-SetupStep $step $false
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $base=Join-Path $env:SystemRoot 'AppSandbox'
 $drivers=Join-Path $base 'drivers'
-$display=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'DISPLAY.JSON') -Raw | ConvertFrom-Json
-if($display -notin @('vdd','synthetic')){throw 'display mode'}
 if(Get-Service AppSandboxAgent -ErrorAction SilentlyContinue){
  Stop-Service AppSandboxAgent -Force
  (Get-Service AppSandboxAgent).WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped,[TimeSpan]::FromSeconds(30))
@@ -50,51 +64,33 @@ if($display -eq 'synthetic'){
   if($packages.Count -gt 256){throw 'package bound'}
   return $packages
  }
- $pnp=Join-Path $env:SystemRoot 'System32\pnputil.exe'
- $step=31;Write-SetupStep $step $false
- foreach($node in @(Get-VDDNodes)){
-  $ids=@((Get-PnpDeviceProperty -InstanceId $node.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data)
-  if('ROOT\APPSANDBOXVDD' -notin $ids){throw 'device identity'}
-  & $pnp @('/remove-device',$node.InstanceId) *> $null
-  if($LASTEXITCODE -ne 0){throw 'device removal'}
- }
- $step=32;Write-SetupStep $step $false
- foreach($package in @(Get-VDDPackages)){
-  if($package.Driver -notmatch '^oem[0-9]+\.inf$'){throw 'package identity'}
-  & $pnp @('/delete-driver',$package.Driver,'/uninstall','/force') *> $null
-  if($LASTEXITCODE -ne 0){throw 'package removal'}
- }
- $step=33;Write-SetupStep $step $false
- if(Test-Path -LiteralPath $drivers){
-  $directory=Get-Item -Force -LiteralPath $drivers
-  if($directory.FullName -ine [IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'AppSandbox\drivers')) -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'driver directory identity'}
-  $pending=[Collections.Generic.Queue[string]]::new();$pending.Enqueue($directory.FullName);$count=0
-  while($pending.Count){
-   foreach($entry in @(Get-ChildItem -LiteralPath ($pending.Dequeue()) -Force)){
-    $count++;if($count -gt 4096 -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'driver directory bound or link'}
-    if($entry.PSIsContainer){$pending.Enqueue($entry.FullName)}
-   }
-  }
-  Remove-Item -LiteralPath $drivers -Recurse -Force
- }
- $step=34;Write-SetupStep $step $false
+ $step=35;Write-SetupStep $step $false
  $video=@(Get-PnpDevice -Class Display -PresentOnly | Where-Object {
   @((Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data | Where-Object {$_ -like '*DA0A7802*'}).Count -gt 0
  })
- if(!$video.Count -or $video.Count -gt 32){throw 'synthetic video absent'}
- foreach($node in $video){Enable-PnpDevice -InstanceId $node.InstanceId -Confirm:$false | Out-Null}
- $step=35;Write-SetupStep $step $false
+ if(!$video.Count -or $video.Count -gt 32){throw 'synthetic video absent or bound'}
  $budget=[Diagnostics.Stopwatch]::StartNew()
  do{
-  $started=$true
+  $started=$true;$videoDiagnostics=$null
   foreach($node in $video){
    $problem=(Get-PnpDeviceProperty -InstanceId $node.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
    $status=(Get-PnpDeviceProperty -InstanceId $node.InstanceId -KeyName 'DEVPKEY_Device_DevNodeStatus').Data
-   if($null -eq $problem -or $null -eq $status -or $problem -ne 0 -or !($status -band 8)){$started=$false}
+   if($null -eq $problem -or $null -eq $status -or $problem -ne 0 -or !($status -band 8)){
+    $started=$false
+    if($null -eq $videoDiagnostics -and $null -ne $problem -and $null -ne $status){
+     $videoDiagnostics=@{problem_code=[uint32]$problem;devnode_status=[uint32]$status}
+    }
+   }
   }
   if($started){break};Start-Sleep -Milliseconds 200
  }while($budget.Elapsed.TotalSeconds -lt 30)
- if(!$started -or @(Get-VDDNodes).Count -or @(Get-VDDPackages).Count -or (Test-Path -LiteralPath $drivers)){throw 'synthetic display verification'}
+ if(!$started){throw 'synthetic video not started'}
+ $step=36;Write-SetupStep $step $false
+ if(@(Get-VDDNodes).Count){throw 'VDD nodes remain'}
+ $step=37;Write-SetupStep $step $false
+ if(@(Get-VDDPackages).Count){throw 'VDD packages remain'}
+ $step=38;Write-SetupStep $step $false
+ if(Test-Path -LiteralPath $drivers){throw 'driver directory remains'}
 }
 $step=40;Write-SetupStep $step $false
 $msi=Join-Path $PSScriptRoot 'OpenSSH.msi'

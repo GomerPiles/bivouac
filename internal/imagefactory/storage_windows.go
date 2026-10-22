@@ -26,22 +26,36 @@ import (
 )
 
 type record struct {
-	BuildID          string         `json:"build_id"`
-	Workspace        string         `json:"workspace"`
-	Name             string         `json:"name"`
-	Owner            string         `json:"owner"`
-	RuntimeID        string         `json:"runtime_id,omitempty"`
-	Phase            string         `json:"phase"`
-	Inspection       *Inspection    `json:"inspection,omitempty"`
-	Retained         bool           `json:"retained"`
-	Published        bool           `json:"published"`
-	Manifest         Manifest       `json:"manifest"`
-	HostSteps        map[string]int `json:"host_steps,omitempty"`
-	GuestSetupStep   uint32         `json:"guest_setup_step,omitempty"`
-	GuestSetupFailed bool           `json:"guest_setup_failed,omitempty"`
-	NativeAttempted  bool           `json:"native_attempted"`
-	GuestCompleted   bool           `json:"guest_completed"`
-	SpaceChecks      []SpaceCheck   `json:"space_checks,omitempty"`
+	BuildID          string            `json:"build_id"`
+	Workspace        string            `json:"workspace"`
+	Name             string            `json:"name"`
+	Owner            string            `json:"owner"`
+	RuntimeID        string            `json:"runtime_id,omitempty"`
+	Phase            string            `json:"phase"`
+	Inspection       *Inspection       `json:"inspection,omitempty"`
+	Retained         bool              `json:"retained"`
+	Published        bool              `json:"published"`
+	Manifest         Manifest          `json:"manifest"`
+	HostSteps        map[string]int    `json:"host_steps,omitempty"`
+	GuestSetupStep   uint32            `json:"guest_setup_step,omitempty"`
+	GuestSetupFailed bool              `json:"guest_setup_failed,omitempty"`
+	GuestSetupVideo  *SetupVideoStatus `json:"guest_setup_video,omitempty"`
+	NativeAttempted  bool              `json:"native_attempted"`
+	GuestCompleted   bool              `json:"guest_completed"`
+	SpaceChecks      []SpaceCheck      `json:"space_checks,omitempty"`
+}
+
+func (r *record) setupFailure(facts *Inspection) error {
+	r.GuestSetupStep = facts.GuestSetupStep
+	r.GuestSetupFailed = facts.GuestSetupFailed
+	r.GuestSetupVideo = facts.GuestSetupVideo
+	if !r.GuestSetupFailed {
+		return nil
+	}
+	if r.GuestSetupVideo != nil {
+		return fmt.Errorf("guest setup failed at step %d (video problem_code=%d devnode_status=%d)", r.GuestSetupStep, r.GuestSetupVideo.ProblemCode, r.GuestSetupVideo.DevNodeStatus)
+	}
+	return fmt.Errorf("guest setup failed at step %d", r.GuestSetupStep)
 }
 
 func (r *record) disk() string { return filepath.Join(r.Workspace, "disk.vhdx") }
