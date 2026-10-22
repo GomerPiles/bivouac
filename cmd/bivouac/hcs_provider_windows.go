@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
@@ -30,7 +31,7 @@ func buildHCSProvider(name string, cfg config.HCS, store *state.Store, log *slog
 		Name:    name, ControllerID: store.ControllerID(), Image: cfg.Image, GuestName: cfg.GuestName, GuestUser: cfg.GuestUser,
 		CPU: uint32(cfg.CPU), MemoryMB: uint64(cfg.MemoryGB) * 1024, LazyMemory: cfg.LazyMemory, GPU: cfg.GPU, // #nosec G115 -- config bounds CPU to 1-64 and memory to 1-256 GiB.
 		RunnerDir: cfg.RunnerDir, RunnerArchive: cfg.RunnerArchive, RunnerSHA256: cfg.RunnerSHA256,
-		Helper: helper,
+		Helper: helper, StateDir: filepath.Join(filepath.Dir(store.Path()), "hcs", name),
 	}, vmhost.NewClient(), hcsvm.NewTransport())
 }
 

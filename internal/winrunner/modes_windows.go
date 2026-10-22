@@ -230,7 +230,11 @@ func guestPrepare(ctx context.Context, out io.Writer) error {
 }
 
 func detachedListenerCommand() *exec.Cmd {
-	cmd := exec.Command(filepath.Join(guestBase, "bivouac.exe"), "guest", "windows", "listener")
+	return detachedGuestCommand(filepath.Join(guestBase, "bivouac.exe"), "listener")
+}
+
+func detachedGuestCommand(binary, mode string) *exec.Cmd {
+	cmd := exec.Command(binary, "guest", "windows", mode)
 	cmd.Dir = guestBase
 	// Nil standard streams use independent NUL handles. No agent pipe or job
 	// lifetime is inherited; failure to break away is terminal, never retried.
@@ -252,7 +256,7 @@ func guestStart(ctx context.Context, cfg Config) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := markAndLaunch(root, func() error {
+	if err := startChecked(root, guestagent.CheckBreakaway, func() error {
 		cmd := detachedListenerCommand()
 		if err := cmd.Start(); err != nil {
 			return errors.New("detached listener could not start")

@@ -38,7 +38,7 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 	if _, _, err = copyFile(ctx, self, agent, digest, 128<<20); err != nil {
 		return err
 	}
-	r.Manifest.AgentSHA256, r.Manifest.AgentVersion = digest, guestagent.Version
+	r.Manifest.AgentSHA256, r.Manifest.WindowsContract = digest, guestagent.WindowsContract
 	var total int64
 	for _, a := range c.SetupAssets {
 		limit := int64(64 << 20)

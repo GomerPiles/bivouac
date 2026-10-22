@@ -69,9 +69,18 @@ foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1
  $step=38;Write-SetupStep $step $false
  if(Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox')){throw 'removed component directory remains'}
 
+# The inbox client and ssh-agent belong to Windows servicing and remain intact.
+$step=39;Write-SetupStep $step $false
+$capability=Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
+if($capability.State -eq 'Installed'){
+ $result=Remove-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
+ if($result.RestartNeeded){throw 'server capability requires another boot'}
+}
+if((Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0').State -ne 'NotPresent'){throw 'server capability remains'}
 $step=40;Write-SetupStep $step $false
-foreach($name in @('AppSandboxAgent','sshd','ssh-agent')){if(Get-Service -Name $name -ErrorAction SilentlyContinue){throw 'removed service remains'}}
-foreach($path in @('C:\ProgramData\ssh','C:\Program Files\OpenSSH','C:\Program Files\OpenSSH-Win64','C:\Windows\System32\OpenSSH')){if(Test-Path -LiteralPath $path){throw 'removed directory remains'}}
+foreach($name in @('AppSandboxAgent','sshd')){if(Get-Service -Name $name -ErrorAction SilentlyContinue){throw 'removed service remains'}}
+foreach($path in @('C:\ProgramData\ssh','C:\Program Files\OpenSSH','C:\Program Files\OpenSSH-Win64')){if(Test-Path -LiteralPath $path){throw 'removed directory remains'}}
+foreach($path in @('C:\Windows\System32\OpenSSH\sshd.exe','C:\Program Files\OpenSSH\sshd.exe','C:\Program Files\OpenSSH-Win64\sshd.exe')){if(Test-Path -LiteralPath $path){throw 'server executable remains'}}
 if(Get-ScheduledTask -TaskName 'bivouac-hcs-ssh-hostkeys' -ErrorAction SilentlyContinue){throw 'removed task remains'}
 foreach($registry in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')){
  if(!(Test-Path -LiteralPath $registry)){continue}
@@ -101,9 +110,10 @@ if(!(Test-Path -LiteralPath $agent -PathType Leaf) -or ((Get-Item -LiteralPath $
 $user=$env:USERNAME
 if($user -notmatch '^[A-Za-z0-9_-]{1,20}$'){throw 'agent account'}
 $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+# Task Scheduler stores arguments as one string; the account above is a validated identifier.
 $action=New-ScheduledTaskAction -Execute $agent -Argument ('guest-agent --user '+$user)
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user
-$settings=New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings=New-ScheduledTaskSettingsSet -Priority 4 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 if(Get-ScheduledTask -TaskName 'bivouac-guest-agent' -ErrorAction SilentlyContinue){throw 'agent task already exists'}
 Register-ScheduledTask -TaskName 'bivouac-guest-agent' -Principal $principal -Action $action -Trigger $trigger -Settings $settings | Out-Null
 $step=60;Write-SetupStep $step $false
@@ -138,7 +148,7 @@ Set-Content -LiteralPath (Join-Path $base 'hcs-spike-setup-complete.json') -Valu
 exit 0
 }catch{
  try{Write-SetupStep $step $true}catch{}
- # No agent may exist yet. Power off so the host observes failure promptly.
+ # Setup may fail before agent startup. Power off so the host observes failure promptly.
  try{& (Join-Path $env:SystemRoot 'System32\shutdown.exe') @('/s','/t','0') *> $null}catch{}
  exit $step
 }

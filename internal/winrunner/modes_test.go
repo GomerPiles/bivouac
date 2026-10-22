@@ -284,6 +284,24 @@ func TestStartMarkerBeforeLaunchAndNoReplay(t *testing.T) {
 	}
 }
 
+func TestBreakawayRefusalPrecedesLaunchConsumption(t *testing.T) {
+	root := guestTestRoot(t)
+	if err := root.WriteFile("jit", []byte("synthetic input"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	err := startChecked(root, func() error { return errors.New("native details") }, func() error { called = true; return nil })
+	if err == nil || err.Error() != "detached listener breakaway unavailable" || called {
+		t.Fatal("breakaway refusal did not prevent dispatch")
+	}
+	if exists, err := guestFileExists(root, "launched"); err != nil || exists {
+		t.Fatal("breakaway refusal consumed launch marker")
+	}
+	if data, err := root.ReadFile("jit"); err != nil || string(data) != "synthetic input" {
+		t.Fatal("breakaway refusal consumed input")
+	}
+}
+
 func TestStartSingleUseAndJITRefusals(t *testing.T) {
 	for _, marker := range []string{"launched", "launch-once", "listener.json", "runner.exit", "missing-jit", "empty-jit", "oversize-jit", "success"} {
 		t.Run(marker, func(t *testing.T) {

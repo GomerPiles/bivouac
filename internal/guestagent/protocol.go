@@ -31,6 +31,11 @@ const ServiceID = "54f2299e-45e4-4605-b3ed-03d3d5fbea6a"
 // image factory. Delivered adapters use a separate disposable-guest path.
 const WindowsPath = `C:\Program Files\Bivouac\bivouac.exe`
 
+// WindowsContract pins the Windows agent CLI, receiver and runner adapter modes.
+// Change it whenever a host relies on different Windows command semantics;
+// Version independently describes only the shared framing protocol.
+const WindowsContract = 1
+
 // Version is the request format; the agent refuses any other and names its
 // own in the failure frame, so a host fails fast on an outdated baseline.
 const Version = 1

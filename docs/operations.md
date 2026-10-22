@@ -233,8 +233,23 @@ the guest's runtime ID over HvSocket. It requires no host-key file or per-guest
 secret. Status uses one agent command per existing poll; JIT and start are never
 replayed after an uncertain outcome. A protocol-version refusal is terminal.
 This provider requires a matching bivouac-agent image; old images are unsupported.
-Rollback is the previous binary and image. The factory and vmhost lab batch below
+Rollback is the previous manager binary, VM host service binary and image. The factory and vmhost lab batch below
 use the same agent protocol; this branch has not been validated live.
+
+### Coordinated HCS cutover and rollback
+
+A matching image is required: the VM host reports each adjacent protected
+manifest's `windows_contract`, and doctor/activation refuse missing or different
+contracts with a fixed message. The manager does not read protected image files.
+Change the Windows contract when the agent CLI, receiver or adapter modes change;
+the shared framing Version has a separate purpose.
+
+Drain with CI Off (`bivouac off --wait`) and confirm no HCS guests or reservations
+remain before replacing anything. Stop the empty VM host service. Switch the
+bivouac manager binary, VM host service binary and newly built image together,
+then check doctor/activation before enabling CI. Do not replace a running binary
+or erase ownership journals. Rollback requires the previous trio together.
+This procedure does not authorize a cutover or a live validation run.
 
 ## Direct HCS image factory
 
@@ -246,9 +261,9 @@ attach no network adapter, so production CI may keep running. Neither touches
 the VM host service, its journal or CI mode.
 
 Images contain bivouac's guest agent and use HCS synthetic video with GPU-PV.
-Specialize removes the legacy guest components and OpenSSH before FirstLogon.
+Specialize removes legacy components and MSI server installations; FirstLogon removes the Windows OpenSSH server capability through servicing. The inbox client and ssh-agent remain intact.
 The template is still an App Sandbox template; template creation is out of scope.
-Rollback uses the previously deployed binary with its previously built image.
+Rollback uses the previous manager binary, VM host service binary and image together.
 
 The template is only read. The factory copies it into its own workspace,
 hashing as it copies, and never changes the template's file, directory, ACL
@@ -276,18 +291,23 @@ or owner record. It mounts, grants and boots only files it created.
    - Offline staging copies this factory executable to
      `C:\Program Files\Bivouac\bivouac.exe`, protected for SYSTEM,
      Administrators and TrustedInstaller, with Users read/execute. The manifest
-     records its hash and protocol version. FirstLogon creates and starts the
+     records its hash and Windows contract. FirstLogon creates and starts the
      `bivouac-guest-agent` logon task for the configured interactive user with
-     Highest, three one-minute restarts and no execution time limit. Its action
-     runs the binary directly. Build files use `C:\ProgramData\Bivouac\Image`.
-   - Specialize stop/deletes the legacy agent and both OpenSSH services,
+     Highest, priority 4 (normal), three one-minute restarts and no execution
+     time limit. Its action runs the binary directly. Build files use
+     `C:\ProgramData\Bivouac\Image`.
+   - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
      removes VDD nodes/packages and the entire legacy component directory,
-     uninstalls registered OpenSSH MSI products and deletes remaining program
+     uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
      directories, server state, authorization files and the host-key boot task.
      Traversal is bounded and refuses links. FirstLogon verifies removal and
-     synthetic video, preserving incomplete specialize diagnostics. Steps 81–87
+     synthetic video, preserving incomplete specialize diagnostics. Steps 81–86
      and 90–94 identify removals; 88 means specialize complete, 89 means its
-     status could not be verified. Video checks retain steps 35–38.
+     status could not be verified. Video checks retain steps 35–38. FirstLogon
+     step 39 removes OpenSSH.Server through Windows servicing; it preserves the
+     inbox client and ssh-agent. A required reboot refuses publication for
+     operator review. Verification requires no sshd service/executable, server
+     state or authorization files.
    - `drivers` names one to eight host FileRepository directories. A bounded
      staged snapshot is installed offline under guest HostDriverStore,
      preserving nesting and empty directories. Source and destination hashes
@@ -325,7 +345,7 @@ or owner record. It mounts, grants and boots only files it created.
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the agent hash/protocol, driver versions and
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication
@@ -358,6 +378,17 @@ these cold boots in order:
 Each run proves bivouac's agent and runs the image's pinned desktop validation
 through it. The baseline's unelevated child must be refused the ungranted agent
 service; the lazy-memory run grants the manager account and requires connection.
+The lab also requires a guest-loopback HvSocket refusal, fixed facts proving the
+actual task principal/Highest/Interactive/action/priority 4 and installed owner/ACL.
+It starts a harmless long-lived probe through start's breakaway/marker/detached
+launch path, verifies it is outside all jobs, and requires that same recorded
+probe to survive both `schtasks /End` + `/Run` and a proven agent process kill.
+Detached controllers perform these fixed task operations; results require both
+controller completion and a different agent PID/creation identity. Probe cleanup
+checks recorded identity on the opened process handle. No runner or credentials
+are required. These destructive-in-guest checks run only in the explicit lab;
+ordinary unit checks simulate their command/report sequence. Recovery and timing
+on real Task Scheduler jobs remain unverified until the live run passes.
 Only the agent service is exposed. `agent_reachable` records create-to-agent
 proof alongside existing connection/desktop spans and bounded numeric step markers.
 

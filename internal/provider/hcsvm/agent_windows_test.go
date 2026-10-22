@@ -40,6 +40,20 @@ type pipeAgent struct {
 	dialBound time.Duration
 }
 
+func TestRealAgentFailuresReachSessionDropClassification(t *testing.T) {
+	err := agentError(t.Context(), guestagent.ErrUnavailable)
+	var transport provider.TransportFailure
+	if !errors.As(err, &transport) || transport != provider.GuestAgentUnavailable {
+		t.Fatal("real unavailable error no longer reaches drop classification")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = agentError(ctx, context.Canceled)
+	if !errors.As(err, &transport) || transport != provider.GuestAgentTimeout {
+		t.Fatal("real timeout error no longer reaches drop classification")
+	}
+}
+
 func (a *pipeAgent) Open(context.Context, string) (Session, error) {
 	return &agentSession{dial: a.dial}, nil
 }

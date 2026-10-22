@@ -177,7 +177,7 @@ $drivers='fixture-drivers';$videoDiagnostics=@{}
 
 func TestSyntheticVerificationAndRetry(t *testing.T) {
 	start := strings.Index(guestSetup, " function Get-VDDNodes")
-	end := strings.Index(guestSetup, "$step=40;Write-SetupStep")
+	end := strings.Index(guestSetup, "# The inbox client")
 	if start < 0 || end <= start {
 		t.Fatal("verification missing")
 	}

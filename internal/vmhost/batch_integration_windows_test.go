@@ -91,6 +91,7 @@ func encodedPowerShell(s string) string {
 }
 
 type labRun struct {
+	AgentLive     *agentLiveFacts  `json:"agent_live,omitempty"`
 	Run           string           `json:"run"`
 	Name          string           `json:"name"`
 	CPU           uint32           `json:"cpu"`
@@ -601,6 +602,13 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 		return fail("desktop validation", errors.New("rendering or single-display input checks did not all pass"))
 	}
 	r.Timings["to_validated_desktop"] = ms(time.Since(started))
+	liveStarted := time.Now()
+	facts, err := agentLiveChecks(ctx, observed)
+	r.AgentLive = &facts
+	r.Timings["agent_live_gates"] = ms(time.Since(liveStarted))
+	if err != nil {
+		return fail("agent live gates", err)
+	}
 	sampleMemory(r.Memory, "after_validation")
 	r.Passed = authorizationOK(r.Unelevated)
 	if !r.Passed {

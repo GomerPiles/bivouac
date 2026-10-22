@@ -322,7 +322,7 @@ func encodeDriverPlan(drivers []Driver) ([]byte, error) {
 type Manifest struct {
 	Topology         *windesktop.Topology `json:"topology,omitempty"`
 	AgentSHA256      string               `json:"agent_sha256"`
-	AgentVersion     int                  `json:"agent_version"`
+	WindowsContract  int                  `json:"windows_contract"`
 	BuildID          string               `json:"build_id"`
 	GuestName        string               `json:"guest_name"`
 	GuestUser        string               `json:"guest_user"`
