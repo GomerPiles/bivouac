@@ -10,7 +10,7 @@ package hcsvm
 // it needs the integration tag, an explicitly elevated launch and lab flags.
 //
 // Run it only with Windows CI drained. The guest's switch adds a host
-// vEthernet adapter, which trips the App Sandbox broker's interface guard.
+// vEthernet adapter, so reserve host resources independently of production.
 //
 // Each run is a fresh production-sized cold boot:
 //   - Create records the VM host's timings and which protect path ran.

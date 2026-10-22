@@ -21,9 +21,9 @@ These whole-system, sampled readings do not measure individual steps or disk IO.
 Updating the binary requires the ordinary idle/drain deployment procedure;
 existing clones keep their original bootstrap until replaced normally.
 
-Windows host experiments have separate operator procedures:
-[`windows.md`](windows.md) for the elevated App Sandbox broker and protected
-storage, and [`crosvm.md`](crosvm.md) for the ordinary-user Linux GPU supervisor.
+Windows host providers have separate operator procedures:
+the direct HCS VM host section below, [`windows.md`](windows.md) for shared
+cache and login setup, and [`crosvm.md`](crosvm.md) for Linux GPU guests.
 Keep production controllers and labels unchanged until the operator approves
 cutover after the relevant live validation. Remaining isolation gates still apply.
 
@@ -33,7 +33,7 @@ Windows providers remain experimental; do not point them at existing production
 VMs. Use a separate checkout and `BIVOUAC_HOME` for disposable validation.
 `version` and native foundation tests need no GitHub credentials or VM launch.
 The optional Windows login task runs only the ordinary manager; native engine
-and broker prerequisites are still operator-managed. Foreground operation needs
+prerequisites are still operator-managed. Foreground operation needs
 no login installation, service, or PATH modification.
 
 For explicit portable operation, copy [`Control.ps1`](../tools/windows/Control.ps1)
@@ -57,126 +57,7 @@ the limited login task. An existing manager can still receive control commands
 from that terminal. Restarting a development app must not be used to stop CI:
 use Off and wait for owned-guest cleanup. After an unexpected controller loss,
 status snapshots are historical; check native inventory before assuming guests
-have stopped, and restore missing broker prerequisites before manager recovery.
-Without an `engine_startup` entry, an unavailable broker remains an explicit
-operator prerequisite. An optional `engine_startup` manifest entry can name
-[`Start-VMEnginePrompt.ps1`](../tools/windows/Start-VMEnginePrompt.ps1) within the
-same home. The protected engine directory is fixed at
-`%ProgramFiles%\bivouac\engines`: the user-writable manifest cannot move it,
-and `Control.ps1` refuses an `engine_directory` entry naming another path.
-Explicit CI On then requests Administrator consent through Explorer only when
-doctor reports an unavailable Windows broker. The prompt launches only the protected helper; approve it only
-if the consent dialog's details name that helper's path. CI On waits for typed
-startup progress from the engine directory, preserves failed-check details and
-starts the manager as the ordinary user. No login startup, service, PATH or
-host trust installation occurs. Shortcut installation and production routing
-are separate, operator-authorized actions; preserve previous targets for rollback.
-
-**Protected engine directory.** The elevated [`Start-VMEngines.ps1`](../tools/windows/Start-VMEngines.ps1) and
-everything it trusts live in one engine directory, never in `BIVOUAC_HOME`:
-
-| File | Contents |
-| --- | --- |
-| `Start-VMEngines.ps1` | the elevated helper |
-| `engines.json` | `Home` (absolute `BIVOUAC_HOME`), `Controller`, `OwnerId`, `OwnerFile`, `Credential`, `Daemon` and `DaemonSHA256`, `Broker` (file name here) and `BrokerSHA256` |
-| `broker-options.json` | the broker bounds in [`windows.md`](windows.md) |
-| the `Broker` executable | validated `bivouac` CLI, used for `appsandbox inspect` and the broker |
-
-The helper writes only here: `engine-startup.json`, `daemon-launch.json`,
-`broker-launch.json` and `logs\`. The directory and its files must be owned by
-Administrators, SYSTEM or TrustedInstaller, grant nobody else write, delete or
-permission rights, contain no reparse points, and have ancestors that cannot
-rename them; a folder created elevated under Program Files inherits suitable
-rights. Before trusting any input, the helper checks this, PowerShell, and each
-executable and its folder. It hashes each executable through a handle that
-denies writers until the process has started. It also checks the App Sandbox
-data folder before starting anything, and the discovery file and `vms.cfg`
-once the daemon is ready; the broker re-checks its options and both files.
-
-The home's manager state, the storage owner marker and Linux records only
-gate refusal. The helper starts only absent native prerequisites. Owned journals
-predating the current host boot are allowed after exact
-controller/instance/native-record checks; they are left for normal manager
-reconciliation. Active or unmatched instances refuse startup without stopping
-anything; a marker-only Linux `.creating-<id>` staging directory is left for
-the backend to sweep. The read-only mode (no `-Execute`) reports the intended recovery.
-Same-account consent is not a boundary against code already running as that
-user, which can raise its own prompt or influence the elevated environment;
-approve only a prompt you requested.
-
-**App Sandbox prerequisites.** Both App Sandbox locations must meet the same
-protection rules, and a typical installation meets neither:
-
-- *Installation folder.* `Daemon` is pinned like the broker: the executable,
-  its folder and every ancestor must be protected, and the folder must not
-  admit new files, because the daemon loads the DLLs beside it. A folder made
-  on a data drive usually inherits the drive root's Authenticated Users Modify
-  right, which includes Delete, so any user can rename an ancestor and the
-  helper refuses it. Move the complete installation folder (executable, DLLs
-  and every subfolder, such as `drivers`, `resources`, `web` and
-  `headless-api`) unchanged into a folder created elevated under
-  `%ProgramFiles%`, and set `Daemon` to the new executable. The bytes are
-  unchanged, so `DaemonSHA256` stays. Do not broadly harden a shared CI folder
-  to make the old location pass; other controllers may rely on its rights.
-  On the reference host no service, startup entry or App Sandbox data file
-  named the installation folder, and its drivers live in the driver store.
-  The daemon writes its log beside its executable, which under Program Files
-  only the elevated daemon can do. Keep the old folder until the relocated
-  daemon has served a fresh guest.
-- *Data folder.* The broker reads `%ProgramData%\AppSandbox\host.json` and
-  `vms.cfg`. If App Sandbox first ran unelevated, that folder is owned by the
-  ordinary account, which also holds Full control through the inherited
-  CREATOR OWNER entry, while both files themselves pass. With the daemon
-  stopped, correct only that folder from an elevated PowerShell, naming the
-  ordinary account; this leaves its subfolders and files, and the create rights
-  ProgramData gives Users, unchanged:
-
-  ```powershell
-  $data = Join-Path $env:ProgramData 'AppSandbox'
-  icacls $data /setowner '*S-1-5-32-544'
-  icacls $data /inheritance:d
-  icacls $data /remove:g '<ordinary-account>'
-  ```
-
-The read-only mode checks both before it reports anything. While either is
-unmet it refuses with a message starting `App Sandbox installation` or
-`App Sandbox data folder`.
-
-To migrate a home-based layout:
-
-1. Turn CI Off and wait until the manager has exited and `bivouac status` lists
-   no instance. The helper refuses instances created since the current boot.
-2. Confirm `bivouac appsandbox inspect` shows no running or building VM. Then,
-   from an elevated shell, stop the broker and then the App Sandbox daemon,
-   identified by the PID and start time in the home's `broker-launch.json` and
-   `daemon-launch.json`, never by process name alone.
-3. Meet the App Sandbox prerequisites above.
-4. Copy every home file the following steps change, for rollback. From an
-   elevated shell, create `%ProgramFiles%\bivouac\engines`. Move
-   `Start-VMEngines.ps1` (replaced by this version), `engines.json` and
-   `broker-options.json` from the home into it. The options are unchanged, so
-   the storage root's `broker.json` binding still matches.
-5. Copy in the broker's `bivouac` executable. Broker and manager change
-   together: use the build named by the manager's `portable.json` and deploy
-   that manager build in the same window. A new build needs a new
-   `BrokerSHA256`; keep the old pin only for identical bytes.
-6. In `engines.json`, add `Home` (the absolute `BIVOUAC_HOME`) and set `Broker`
-   to the bare file name of the copied executable. A path such as `bin\…` is
-   refused. Update `Daemon` if App Sandbox moved.
-7. Replace `Start-VMEnginePrompt.ps1` and `Control.ps1` in the home with this
-   version, and remove any `engine_directory` entry from `portable.json`.
-   Shortcuts to those scripts keep working.
-8. From an ordinary shell, run the read-only mode,
-   `pwsh -NoProfile -File "$env:ProgramFiles\bivouac\engines\Start-VMEngines.ps1"`;
-   it must report the intended action without refusing.
-9. CI On. Approve the consent prompt only if it names the helper in the engine
-   directory.
-10. Archive the home's old progress, launch records and broker logs; they are
-    no longer read.
-
-To roll back, with CI Off, stop the new broker and daemon the same way, restore
-the copied home files and the previous manager build, and start App Sandbox
-from its previous folder. The data folder correction can stay.
+have stopped, and restore missing runtime prerequisites before manager recovery.
 
 Windows daemon liveness uses its kernel lock; stale or reused PIDs after shutdown
 do not identify a running manager. The launcher archives a matching stale PID
@@ -190,16 +71,8 @@ one idle runner per provider. Existing workflow label arrays can keep routing
 normally by adding their labels to each provider alongside its `bivouac-` label.
 Disable the previous lifecycle controllers before promotion. Finish with
 confirmed empty controller/native journals before changing labels, demand mode
-or controller ownership. Never have two homes concurrently use the same broker
+or controller ownership. Never have two homes concurrently use the same
 controller/root. Mac and ARM64 routing need not change.
-
-`bivouac appsandbox inspect` reads `%ProgramData%\AppSandbox\host.json`, checks
-the live daemon identity, and prints typed version/capacity/storage and foreign
-VM/template inventory. Storage paths are diagnostic metadata, never ownership
-authority by themselves. `--discovery <file>` overrides the path for an isolated daemon (and
-is required on other host platforms). No configuration, GitHub credentials,
-state directory, window opening, adoption, or lifecycle action is involved.
-Do not paste the discovery file into logs: it contains a per-run bearer token.
 
 `secret set/check/delete` uses the current Windows user's Credential Manager.
 Values enter through the existing file/stdin interface; generic items use the
@@ -208,80 +81,6 @@ rejected. Run an optional login item under this same user. Native credential tes
 are opt-in: `BIVOUAC_WINDOWS_CREDENTIAL_TEST=1 go test ./internal/secret` writes,
 updates, reads, and removes a randomly named synthetic fixture. It never
 enumerates or reads existing items; normal tests use a fake backend.
-
-If App Sandbox discovery points to an unreachable daemon, report the failed
-connection and stop live validation. Do not automatically launch an elevated
-daemon, stop another controller, infer liveness from old status files, or
-reuse production instances. No administrator prompt is needed for the tests
-or a read-only inspection of an already accessible daemon. The operator must
-arrange API availability and
-isolated baseline/instance ownership. Validate actual GPU/session behavior and
-host/LAN denial separately; NAT or Slirp connectivity alone is insufficient.
-
-For operator-approved template provisioning, use a separate storage parent,
-persist intent before the request, and never precreate the native VM child.
-App Sandbox 0.1.9 requires a nonempty guest password even for templates; generate
-it without recording it in diagnostics/state. Creation is asynchronous and
-auto-starts. A successful HTTP response or image progress of 100% does not prove
-the guest completed setup/Sysprep or entered template inventory. After an
-uncertain request, retain intent/storage and inspect; do not retry blindly.
-Keep network/GPU disabled during baseline creation and do not register runners.
-
-For BCDBoot failures, capture verbose child output on an independently owned
-test disk before changing arguments or production tools. Exit 183 was observed
-here at an offline BCD hive load (`0xc0000035`); drive letters and `/offline`
-did not fix it. Compare host BCD/firmware enumeration digests and remove only
-the test disk's temporary access paths. Do not unload, rename, delete, or relax
-permissions on the active host BCD hive as a provisioning workaround. A copied
-BCD file is not proof of a valid store or successful guest boot.
-
-The GUI and headless API share the Windows conversion path. If GUI creation
-works while an automated attempt fails, compare the launch context before
-changing guest registry metadata. In isolated testing, helpers inherited a
-process job from the development application; the same elevated disk operation
-launched through Explorer and normal UAC consent had no job membership and
-succeeded. A breakaway flag alone did not reproduce that context. Keep this an
-operator-approved provisioning step; do not introduce implicit privileged
-launching, loosen host permissions, or assume any scheduled-task/service context
-is equivalent without validation. Successful BCDBoot still does not prove guest
-setup/Sysprep, template inventory, or desktop readiness.
-
-The same Explorer launch context has now completed isolated template creation:
-conversion, preparation boot, automatic shutdown, and native registration.
-Verify the registered template's native VHDX path against the prior intent and
-storage marker; template inventory alone omits that path. Inspect a stopped
-template only through a read-only attachment and remove its access path/detach
-in cleanup. Record Sysprep errors alongside successful generalization/shutdown;
-the validated creation here retained firmware-export errors (`c000000d`). A
-disposable clone boot remains necessary before claiming the baseline reusable.
-When retiring a daemon started for validation, match its recorded PID/start
-time and live API identity, recheck all guests/controllers, and use native
-`POST /v1/shutdown` with `force=false`. Never force shutdown to finish validation.
-
-Disposable Windows clones should auto-start with native networking disabled;
-attach any isolated network only after recording its ownership and policy.
-SSH forwarding uses the native loopback/HvSocket path independently of the NIC.
-Deliver bounded probe files over that transport and run desktop tests through
-an interactive guest logon task; a service-session graphics probe is insufficient.
-Verify fresh-state sentinels before copying probe files, and baseline hashes
-after discarding the clone. Network-policy readback must be accompanied by
-real denial probes and reachable positive controls. In current testing,
-Hyper-V firewall settings reported loopback disabled while native VFP rules
-still allowed host addresses before explicit blocks. A host-interface firewall
-rule alone also failed to block the host's LAN address. Neither is an approved
-isolation recipe. Keep experimental switch/port policies owned and disposable;
-never alter a shared Default Switch to make validation pass.
-An independently owned stateless VFP layer subsequently passed host TCP/UDP
-denial for IPv4/IPv6 with reachable controls, public connectivity, and changed
-guest source addresses. It is a validation prototype: runtime integration,
-private-peer denial, and crash/reboot policy recovery remain prerequisites.
-Preserve the Windows service-owned layer. Verify actual native policy after
-each mutation; `vfpctrl` does not produce consistently structured JSON for
-mutations, and an empty enumeration can report `ERROR_NO_MORE_ITEMS`.
-During owned policy cleanup, resetting the last boolean overrides to
-`NotConfigured` can remove the VM setting automatically. Query remaining
-persistent policy before issuing another remove, and confirm its absence;
-do not infer complete cleanup from a successful default-action removal.
 
 ## Direct HCS VM host
 
@@ -378,17 +177,8 @@ runner_dir = 'C:\actions-runner'
 limits, and warns when the installed service is merely stopped. The provider
 asks for an isolated network on every guest.
 
-To switch an existing App Sandbox provider to `hcs`, turn CI Off and wait for
-the drain. Back up `config.toml` and `portable.json`, stage the new binary
-under a new file name and point `portable.json` at it. Then change
-`[providers.windows]` `type` to `hcs` and replace its `appsandbox` table
-with the `hcs` table above, keeping `scaleset`, its labels and the size.
-Run `doctor`, then CI On. Roll back by restoring both files with CI Off.
-The App Sandbox broker may have closed admission after HCS guests' adapters
-appeared; restart it if it has.
-
-The host cache works as for App Sandbox, including the optional release proxy
-and upload storage. With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
+The host cache supports the optional release proxy and upload storage.
+With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
 and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
 defaults). A separate authenticated SSH client over HvSocket carries the cache;
 no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
@@ -397,8 +187,7 @@ without reattachment. Archive and release caching passed live on HCS guests;
 upload storage has not, so leave it off on Windows hosts. Use the isolated cache validation fixture
 below for archive/release cold and warm hits, outage fallback and uploads.
 
-To validate it end to end, turn production Windows CI Off first: each
-guest's network adapter trips the App Sandbox broker's interface guard. Use a
+For separately authorized end-to-end validation, reserve host resources and use a
 separate `BIVOUAC_HOME` with REST JIT demand, one isolated `bivouac-` label,
 `idle_pool = 1` and `max_instances = 1`, as in "REST JIT fallback" below. Run
 `bivouac on --wait` and wait for `runner listening`. Route a throwaway
@@ -517,7 +306,7 @@ retention status, and journal-empty/native-absent cleanup checks. An unexpected
 successful start is destroyed and fails the run.
 
 The batch attaches no network adapter, so it changes no host networking, and it
-never touches another compute system, the App Sandbox broker or production
+never touches another compute system or production
 state. Production CI may keep running. Before each boot, the batch waits for
 the guest's memory plus 10 GiB of available memory and plus 8 GiB of commit
 headroom. During a run, it cancels only that run if available memory drops
@@ -567,9 +356,8 @@ is a production-sized cold boot (4 CPU, 8 GiB, GPU) with an isolated network:
 4. The guest must still be running after two guard intervals.
 5. Delete must leave no guest, no reservation and no switch adapter.
 
-**Windows CI must be drained first.** Each guest's switch adds a host vEthernet
-adapter. The App Sandbox broker's interface guard then quarantines its guests
-and closes admission until the broker restarts.
+**Windows CI must be drained first.** Reserve host resources independently of
+production; each guest adds a dedicated switch and host vEthernet adapter.
 
 Without a layer-removed control, a host listener's refusal could also come
 from the host firewall. The gateway's DNS proxy is the stronger denial check,
@@ -577,7 +365,7 @@ because connection sharing normally opens it on the shared switch. If Windows
 offers to allow the test binary through the firewall, choose Cancel.
 
 1. Turn Windows CI Off (`Control.ps1 -Action Off`, or `bivouac off --wait`)
-   and wait until no App Sandbox guest remains.
+   and wait until no Windows guest remains.
 2. Build unelevated. The helper is sent into each guest as its adapter:
 
    ```powershell
@@ -606,10 +394,7 @@ offers to allow the test binary through the firewall, choose Cancel.
    The VM host's log is written beside them. Probe outcomes use a fixed
    vocabulary; no addresses or guest text are recorded.
 5. Turn CI On from its desktop shortcut; the launcher refuses an agent
-   terminal. A broker that recovers admission by itself and had no guest
-   during the batch needs no restart. Otherwise restart it the way this host
-   normally starts it (see `docs/windows.md`). Watch the first Windows guest
-   become ready.
+   terminal. Watch the first Windows guest become ready.
 
 If a run retains a guest, the batch stops. Relaunch with
 `-lab.recover-root=<that root>` and a new `-lab.root`: it settles the old root
@@ -888,9 +673,8 @@ Do not configure workflows to depend on the proxy for network availability.
 
 Opaque bytes live in `~/Library/Caches/bivouac` on macOS. The portable core
 uses `%LOCALAPPDATA%\bivouac\cache` on Windows and the XDG cache directory
-on Linux. App Sandbox Windows and Crosvm Linux guest adapters are implemented
-and validated for downloads; direct HCS Windows guests have unit coverage with
-live cache validation pending. Upload validation remains as described above.
+on Linux. HCS Windows and Crosvm Linux guest adapters are implemented
+and validated for archive and release downloads. Upload validation remains as described above.
 `BIVOUAC_HOME` isolates a cache under that test home.
 
 To revert, finish work with `bivouac off --wait`, set `cache.enabled = false`,
@@ -968,7 +752,7 @@ positive `idle_pool` and an isolated label array, and use that same array in
 
 Use a separate validation `BIVOUAC_HOME` on each host; a Windows validation
 home may contain both Windows and Linux providers. Never use the normal home
-or production labels, or run two homes against one native broker at once.
+or production labels, or run two homes with the same controller/root at once.
 Keep the provider-specific cache transport settings and enable the following
 for `save`, `restore`, `mixed`, `outage` and `interrupt`:
 

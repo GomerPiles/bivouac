@@ -23,7 +23,7 @@ func spikeDocument(withMedia bool) ComputeSystem {
 	}
 	if withMedia {
 		devices.Scsi["Primary"].Attachments["1"] = Attachment{Type: AttachmentISO, Path: `C:\HCS\guest\setup-private\setup.iso`}
-		devices.Plan9 = &Plan9{Shares: []Plan9Share{{Name: "AppSandbox.Drv.0", AccessName: "AppSandbox.Drv.0", Path: `C:\HCS\guest\drivers\0`, Port: 50001, Flags: Plan9ShareReadOnly}}}
+		devices.Plan9 = &Plan9{Shares: []Plan9Share{{Name: "Bivouac.Drv.0", AccessName: "Bivouac.Drv.0", Path: `C:\HCS\guest\drivers\0`, Port: 50001, Flags: Plan9ShareReadOnly}}}
 	}
 	return ComputeSystem{
 		Owner:                       "owner",
@@ -58,7 +58,7 @@ func TestDocumentMatchesLiveValidatedShape(t *testing.T) {
 	}{
 		{false, fmt.Sprintf(base, "", "")},
 		{true, fmt.Sprintf(base, `,"1":{"Type":"Iso","Path":"C:\\HCS\\guest\\setup-private\\setup.iso"}`,
-			`,"Plan9":{"Shares":[{"Name":"AppSandbox.Drv.0","AccessName":"AppSandbox.Drv.0","Path":"C:\\HCS\\guest\\drivers\\0","Port":50001,"Flags":1}]}`)},
+			`,"Plan9":{"Shares":[{"Name":"Bivouac.Drv.0","AccessName":"Bivouac.Drv.0","Path":"C:\\HCS\\guest\\drivers\\0","Port":50001,"Flags":1}]}`)},
 	} {
 		got, err := json.Marshal(spikeDocument(tc.media))
 		if err != nil {

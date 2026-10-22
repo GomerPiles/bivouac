@@ -78,34 +78,6 @@ if (!$live) {
     $check=@(& $binary doctor --github 2>&1)
     $code=$LASTEXITCODE
     $check | Write-Output
-    if ($code -and $manifest.engine_startup -and @($check | Where-Object {"$_" -match '^FAIL appsandbox .*privileged broker unavailable'}).Count) {
-        $startup=[IO.Path]::GetFullPath((Join-Path $HomeDirectory $manifest.engine_startup))
-        if (!$startup.StartsWith($HomeDirectory+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Engine startup helper must be inside this home' }
-        # The elevated helper and its progress record live in the protected
-        # engine directory, never in this user-writable home. It is fixed: a
-        # manifest in the home must not choose what runs elevated.
-        $engineDirectory=[IO.Path]::Combine([Environment]::GetFolderPath('ProgramFiles'),'bivouac','engines')
-        if ($manifest.engine_directory -and ![string]::Equals([IO.Path]::GetFullPath([string]$manifest.engine_directory),$engineDirectory,[StringComparison]::OrdinalIgnoreCase)) {
-            throw ('engine_directory must be '+$engineDirectory+'; remove it from portable.json')
-        }
-        $requested=[DateTime]::UtcNow
-        & $startup -EngineDirectory $engineDirectory
-        $progressPath=Join-Path $engineDirectory 'engine-startup.json'
-        for ($attempt=0; $attempt -lt 30; $attempt++) {
-            Start-Sleep -Seconds 3
-            $check=@(& $binary doctor 2>&1)
-            $code=$LASTEXITCODE
-            if (!$code) { break }
-            if (Test-Path -LiteralPath $progressPath) {
-                $progress=Get-Content -LiteralPath $progressPath -Raw | ConvertFrom-Json -DateKind String
-                # Ignore a record left by an earlier attempt.
-                $fresh=$progress.AtUTC -and [DateTime]::Parse($progress.AtUTC).ToUniversalTime() -ge $requested
-                if ($fresh -and $progress.Stage -eq 'failed') { throw ('VM engine startup failed: '+$progress.Error) }
-            }
-        }
-        if (!$code) { $check=@(& $binary doctor --github 2>&1); $code=$LASTEXITCODE }
-        $check | Write-Output
-    }
     if ($code) {
         $failures=@($check | Where-Object {"$_" -match '^FAIL '}) -join '; '
         throw ('CI prerequisites failed: '+$failures+'. See the FAIL lines above; existing VM journals are preserved.')

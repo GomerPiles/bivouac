@@ -1,7 +1,7 @@
 # Linux GPU guests on Windows
 
 The experimental `crosvm` provider runs Linux/amd64 with WHPX and gfxstream
-while preserving the separate App Sandbox Windows provider. It needs no
+alongside the HCS Windows provider. It needs no
 administrator token once Windows Hypervisor Platform and the GPU driver are
 installed. The operator approved normal trusted-job cutover after isolated
 validation. Remaining hostile-network tests still require operator review;

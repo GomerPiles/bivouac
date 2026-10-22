@@ -1,16 +1,18 @@
 # Status
 
 Bivouac runs real CI for a downstream project on a macOS host and a
-Windows host (App Sandbox Windows guests and Crosvm Linux GPU guests). This
+Windows host (HCS Windows guests and Crosvm Linux GPU guests). This
 page records what is validated live, what only tests cover, and the open
 gates. No provider is ready for untrusted (for example fork) pull requests.
 The latest review fixes are covered by tests only, not yet validated live.
 
 ## Checks
 
-`gofmt`, `go vet`, `golangci-lint`, `go test -race ./...`, and cgo-disabled
-builds for macOS arm64/amd64, Windows amd64, and Linux amd64 pass locally and
-in the hosted Linux/macOS/Windows workflow.
+Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
+`go build ./...`, `go test -race ./...`, cgo-disabled builds for macOS
+arm64/amd64, Windows amd64 and Linux amd64, and PowerShell 5.1/7 parsing.
+The hosted Linux/macOS/Windows workflow has not yet checked the host-provider
+removal. Unit tests and cross-builds do not establish live provider behavior.
 
 ## macOS
 
@@ -78,22 +80,7 @@ Open:
   remain unverified on a real host; the guest agent's runner process lifetime
   was checked separately above.
 
-## Windows: App Sandbox (Windows guests)
-
-Validated live:
-
-- A protected elevated broker and journal. An owned VFP layer on each VM port
-  denies host, gateway, LAN, and IPv6 traffic while public DNS and HTTPS
-  work. Denial was checked against reachable positive controls, including
-  after broker loss and adoption.
-- GPU-PV guests on the interactive desktop: hardware D3D11 rendering,
-  presentation, pixel readback, focus, and keyboard/mouse input.
-- Real jobs, including windowed rendering tests. Fresh-guest reset verified;
-  a controller crash mid-job was adopted; off and stop mid-job clean up.
-- A host interface change during a guest's life quarantines it and keeps
-  its port blocked. Interrupted native deletion recovers.
-- Recovery after a host reboot with idle guests and CI still on.
-- The optional limited login task registers and runs on demand.
+## Windows host controls
 
 Native process tests reproduce a hidden portable-launch child being killed
 when its enclosing Windows job closes. The portable launcher now refuses a new
@@ -101,35 +88,11 @@ manager from such a job before mutating mode or control records; its context
 guard is exercised in an isolated job using stock Windows PowerShell. This
 launcher change is not deployed to the installed controller.
 
-Open:
+The limited login task registered and ran on demand in live validation.
+Real-logon and reboot behavior remain unverified. Native credential-store
+round trips are opt-in and are not part of ordinary local tests.
 
-- Private-peer and source-MAC filtering are inconclusive in the tested
-  topology. The interface guard is periodic, not atomic, and stops after
-  broker loss.
-- Automatic broker admission recovery after interface changes is covered by
-  fake-backed tests: quarantine stays closed through stopped/absent VMs and
-  partial network cleanup, then a successful guard pass admits fresh guests with
-  current host policy without broker restart. Addition/removal, repeated changes,
-  canceled passes and retained-record recovery across restart are covered. This
-  change is not deployed to the installed controller or validated with live NIC
-  changes.
-- The administrator-only native fault-injection test is compiled but has
-  not run. Recovery of a guest retained across reboot, reboot mid-job, and
-  a cleanup soak are untested.
-- Login-task behaviour at real logon and reboot, and status-transport
-  failures injected during live jobs (tests only).
-- Engine prerequisites start manually through an elevated helper;
-  packaging is not done. The operator migration to the protected engine
-  directory is not done. Read-only checks against the new protection rules
-  passed `$PSHOME`, Program Files and the storage root, but found the App
-  Sandbox installation under a user-renamable data-drive folder and its data
-  folder owned by the ordinary account. Both are documented prerequisites,
-  not yet applied.
-- The PowerShell helpers parse under PowerShell 7 and 5.1 but have not run.
-  Windows-only tests pass on a Windows host without elevation; the native
-  credential round trip is opt-in and was not run.
-
-## Windows: direct HCS (in progress)
+## Windows: direct HCS (Windows guests)
 
 The pieces built so far:
 
@@ -211,8 +174,7 @@ guest before the layer is verified.
 An earlier attempt passed the same network checks but could not delete the
 network: hostnet waited for the stopped guest's port to vanish, which it does
 not do until its endpoint is deleted. After the fix, Recover settled that
-leftover in 0.85 s. The App Sandbox broker had no guest during the batch and
-was not restarted.
+leftover in 0.85 s.
 
 A failed start is cleaned up (lab batch `failed-start`, no network or GPU).
 A second disk whose file does not exist made HCS refuse start with HRESULT
@@ -302,8 +264,7 @@ Production Windows CI now runs on the `hcs` provider: the same scale set,
 labels and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. CI On
 started the VM host service. The first real Windows job ran beside a Linux
 job and succeeded: listening 46 s after create (clone 7 s, boot 21 s, JIT
-registration 7 s), teardown 1.8 s, runner deregistered. App Sandbox stays
-installed for rollback.
+registration 7 s), teardown 1.8 s, runner deregistered.
 
 Open:
 
@@ -356,8 +317,9 @@ breakaway and log-cap retirement are untested on Windows.
 ## Caching
 
 Actions v2 archive restores and public GitHub release downloads are
-validated live on macOS, App Sandbox Windows and Crosvm Linux guests: cold and warm hits, and direct
-fallback after cache loss. Windows and Linux guests reach the cache over
+validated live on macOS, HCS Windows and Crosvm Linux guests: cold and warm
+hits. Direct fallback after cache loss is validated on macOS and Crosvm;
+HCS loss fallback remains open. Windows and Linux guests reach the cache over
 SSH on guest loopback. Not covered: container images, npm/Cargo/rustup,
 private releases, and GHES; tools with their own trust stores need setup.
 
@@ -365,7 +327,7 @@ Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
 
-Open parity item, including App Sandbox and HCS: cache admission rejects private
+Open parity item across providers: cache admission rejects private
 and special addresses but does not use the host's dynamic interface prefixes.
 A publicly addressed host or LAN prefix is therefore not refused through the
 proxy. Native guest NIC denial does not cover those host-side proxy connections.

@@ -182,13 +182,6 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 				return nil, err
 			}
 			out[name] = hp
-		case "appsandbox":
-			wp, err := buildWindowsProvider(ctx, name, *p.AppSandbox, store)
-			if err != nil {
-				closeProviders(out)
-				return nil, err
-			}
-			out[name] = wp
 		case "vz":
 			tp, err := vz.New(name, *p.VZ, store.ControllerID(), vms, nil, log)
 			if err != nil {

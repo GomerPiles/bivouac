@@ -15,9 +15,9 @@ func TestWindowsReservationSurvivesResourceConfigChanges(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) {
 		c.Budget.ReserveCPU = 2
 		p := c.Providers["macos"]
-		p.Type = "appsandbox"
+		p.Type = "hcs"
 		p.VZ = nil
-		p.AppSandbox = &config.AppSandbox{Experimental: true, BrokerSecret: "fixture-broker", Baseline: "ci-template", CPU: 4, MemoryGB: 8, DiskGB: 80, RunnerDir: `C:\actions-runner`}
+		p.HCS = &config.HCS{Image: "ci-template", CPU: 4, MemoryGB: 8}
 		c.Providers["macos"] = p
 	})
 	h.m.o.Host.CPUs = 6
@@ -26,8 +26,8 @@ func TestWindowsReservationSurvivesResourceConfigChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := h.m.o.Config.Providers["macos"]
-	p.AppSandbox.CPU = 1
-	p.AppSandbox.MemoryGB = 1
+	p.HCS.CPU = 1
+	p.HCS.MemoryGB = 1
 	h.m.o.Config.Providers["macos"] = p
 	if n, _ := h.m.rawCapacity(context.Background(), "macos"); n != 0 {
 		t.Fatal("live Windows resources were recomputed from new config")
@@ -44,17 +44,17 @@ func TestWindowsReservationSurvivesResourceConfigChanges(t *testing.T) {
 	}
 }
 
-// App Sandbox and Crosvm list a record they cannot prove as a running
+// Crosvm lists a record it cannot prove as a running
 // prefixed foreign guest. Its record already holds the slot: capacity counts
 // it once, and status does not also report it as unmanaged.
 func TestUnprovableRecordCountsOnce(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) {
 		c.Budget.MaxInstances = 4
 		p := c.Providers["macos"]
-		p.Type = "appsandbox"
+		p.Type = "crosvm"
 		p.MaxInstances = 4
 		p.VZ = nil
-		p.AppSandbox = &config.AppSandbox{Experimental: true, BrokerSecret: "fixture-broker", Baseline: "ci-template", CPU: 4, MemoryGB: 8, DiskGB: 80, RunnerDir: `C:\actions-runner`}
+		p.Crosvm = &config.Crosvm{BaselineName: "ci-template", CPU: 4, MemoryGB: 8}
 		c.Providers["macos"] = p
 	})
 	h.m.o.Host = hostinfo.Info{CPUs: 32, MemoryBytes: 64 << 30}

@@ -136,7 +136,7 @@ func TestUnownedGuestDoesNotBlockOff(t *testing.T) {
 	}
 }
 
-// notOwnedStatus models App Sandbox and Crosvm, whose Status reports an
+// notOwnedStatus models Crosvm, whose Status reports an
 // unprovable guest as ErrNotOwned rather than Exists && !Owned.
 type notOwnedStatus struct {
 	provider.Provider
@@ -219,7 +219,7 @@ func TestFailureTextIsRedactedAndBounded(t *testing.T) {
 }
 
 // slowEngine advertises a per-call bound longer than the manager's default
-// and needs part of it, like the App Sandbox broker.
+// and needs part of it, like the HCS VM host.
 type slowEngine struct {
 	provider.Provider
 	delay time.Duration

@@ -29,7 +29,7 @@ import (
 
 const maxNativeResponse = 1 << 20
 
-// subnetPool is reserved for the VM host. App Sandbox's broker uses 10.250.0.0/16.
+// subnetPool is reserved for the VM host.
 func subnetPool() netip.Prefix { return netip.MustParsePrefix("10.251.0.0/16") }
 
 // ErrForeign reports native network state that does not match its plan.

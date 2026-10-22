@@ -89,7 +89,7 @@ type Budget struct {
 // Provider is one guest type on one virtualization engine. Each provider has
 // exactly one scale set (or JIT label set).
 type Provider struct {
-	// Type is the engine: "vz" (macOS Virtualization.framework), experimental "appsandbox", "crosvm" or "hcs".
+	// Type is the engine: "vz" (macOS Virtualization.framework), "crosvm" or "hcs" (Windows).
 	Type string `toml:"type"`
 	// ScaleSet is the scale set name, which is always one of its labels.
 	ScaleSet string `toml:"scaleset"`
@@ -103,10 +103,9 @@ type Provider struct {
 	// IdlePool is the JIT-mode number of registered runners kept waiting.
 	IdlePool int `toml:"idle_pool"`
 	// VZ holds engine-specific settings when Type is "vz".
-	VZ         *VZ         `toml:"vz"`
-	AppSandbox *AppSandbox `toml:"appsandbox"`
-	Crosvm     *Crosvm     `toml:"crosvm"`
-	HCS        *HCS        `toml:"hcs"`
+	VZ     *VZ     `toml:"vz"`
+	Crosvm *Crosvm `toml:"crosvm"`
+	HCS    *HCS    `toml:"hcs"`
 }
 
 // HCS runs Windows guests through bivouac's own VM host. Image names one of
@@ -144,23 +143,6 @@ type Crosvm struct {
 	CPU          int    `toml:"cpu"`
 	MemoryGB     int    `toml:"memory_gb"`
 	GPU          bool   `toml:"gpu"`
-}
-
-// AppSandbox selects an explicitly experimental Windows broker and guest
-// transport. Native storage/network settings are pinned by the operator's
-// protected broker configuration, never supplied by an Actions job.
-type AppSandbox struct {
-	Experimental  bool   `toml:"experimental"`
-	BrokerSecret  string `toml:"broker_secret"`
-	Baseline      string `toml:"baseline"`
-	CPU           int    `toml:"cpu"`
-	MemoryGB      int    `toml:"memory_gb"`
-	DiskGB        int    `toml:"disk_gb"`
-	GPU           bool   `toml:"gpu"`
-	RunnerDir     string `toml:"runner_dir"`
-	RunnerArchive string `toml:"runner_archive"`
-	RunnerSHA256  string `toml:"runner_sha256"`
-	SSHKey        string `toml:"ssh_key"`
 }
 
 // VZ configures the macOS provider. Guests are clones of a baseline in
@@ -286,7 +268,7 @@ func Parse(data []byte) (*Config, error) {
 func (c *Config) applyDefaults() {
 	isWindowsHostCache := false
 	for _, p := range c.Providers {
-		if p.Type == "appsandbox" || p.Type == "crosvm" || p.Type == "hcs" {
+		if p.Type == "crosvm" || p.Type == "hcs" {
 			isWindowsHostCache = true
 		}
 	}
@@ -448,7 +430,7 @@ func (c *Config) Validate() error {
 		}
 		switch p.Type {
 		case "crosvm":
-			if p.Crosvm == nil || p.VZ != nil || p.AppSandbox != nil || p.HCS != nil {
+			if p.Crosvm == nil || p.VZ != nil || p.HCS != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only crosvm settings are required", name))
 				continue
 			}
@@ -473,7 +455,7 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
 		case "hcs":
-			if p.HCS == nil || p.VZ != nil || p.Crosvm != nil || p.AppSandbox != nil {
+			if p.HCS == nil || p.VZ != nil || p.Crosvm != nil {
 				errs = append(errs, fmt.Errorf("provider %q: only [providers.%s.hcs] is required", name, name))
 				continue
 			}
@@ -496,36 +478,9 @@ func (c *Config) Validate() error {
 			if c.Cache.Enabled && !c.Cache.loopback() {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
-		case "appsandbox":
-			if p.AppSandbox == nil || p.VZ != nil || p.Crosvm != nil || p.HCS != nil {
-				errs = append(errs, fmt.Errorf("provider %q: only [providers.%s.appsandbox] is required", name, name))
-				continue
-			}
-			a := p.AppSandbox
-			if !a.Experimental {
-				errs = append(errs, fmt.Errorf("provider %q: appsandbox requires experimental = true until live validation is complete", name))
-			}
-			if a.BrokerSecret == "" || a.Baseline == "" || len(a.Baseline) > 15 || !nameRE.MatchString(a.Baseline) {
-				errs = append(errs, fmt.Errorf("provider %q: broker_secret and a native baseline name are required", name))
-			}
-			if a.CPU < 1 || a.CPU > 1024 || a.MemoryGB < 1 || a.MemoryGB > 1024 || a.DiskGB < 16 || a.DiskGB > 2048 {
-				errs = append(errs, fmt.Errorf("provider %q: appsandbox requires bounded explicit CPU, memory, and disk", name))
-			}
-			if !windowsPath(a.RunnerDir) || (a.SSHKey != "" && !windowsPath(a.SSHKey)) || (a.RunnerArchive != "" && !windowsPath(a.RunnerArchive)) {
-				errs = append(errs, fmt.Errorf("provider %q: appsandbox paths must be absolute local Windows paths", name))
-			}
-			if (a.RunnerArchive == "") != (a.RunnerSHA256 == "") || (a.RunnerSHA256 != "" && (len(a.RunnerSHA256) != 64 || strings.Trim(a.RunnerSHA256, "0123456789abcdefABCDEF") != "")) {
-				errs = append(errs, fmt.Errorf("provider %q: runner_archive requires its SHA-256", name))
-			}
-			if c.Cache.Enabled && !c.Cache.loopback() {
-				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
-			}
 		case "vz":
 			if p.Crosvm != nil {
 				errs = append(errs, fmt.Errorf("provider %q: crosvm settings do not belong to vz", name))
-			}
-			if p.AppSandbox != nil {
-				errs = append(errs, fmt.Errorf("provider %q: appsandbox settings do not belong to vz", name))
 			}
 			if p.HCS != nil {
 				errs = append(errs, fmt.Errorf("provider %q: hcs settings do not belong to vz", name))

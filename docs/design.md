@@ -10,7 +10,7 @@ security model, and durable decisions. Keep it aligned with the code.
 ```
 cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
-internal/provider    provider contract; vz/ (macOS), appsandbox/, crosvm/ and hcsvm/ (Windows host experiments), fake/
+internal/provider    provider contract; vz/ (macOS), crosvm/ and hcsvm/ (Windows hosts), fake/
 internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
@@ -94,14 +94,14 @@ A durable ownership record and the native definition must agree before update,
 start or removal; updates record both old and pending definitions for recovery.
 The action carries the installation's `BIVOUAC_HOME` explicitly, because scheduler
 environment inheritance differs from a shell. The login entry refuses an elevated
-manager. Removing it does not stop an active manager or VM. Privileged App Sandbox
-and its broker remain explicit operator prerequisites; this task never installs
-or launches an elevated engine, service, or broker.
+manager. Removing it does not stop an active manager or VM. The VM host service
+is installed separately by an administrator; the login task never installs or
+launches an elevated engine or service.
 
 The portable Windows `Control.ps1` launcher checks native process-job membership
 before starting an absent manager. A hidden window is not an independent
 lifetime: a manager inherits its launcher's Windows job, and a development app
-can close that job while native App Sandbox guests survive. A contained or
+can close that job while native guests survive. A contained or
 unverifiable launch is refused before prerequisite checks, stale-PID archival,
 or mode changes. Use the ordinary desktop shortcut or the explicitly installed
 login task. Mode commands to an already running manager remain available from
@@ -222,7 +222,7 @@ report cancellation. The worker itself can spend 7.5 s on SIGINT and
 allows its result to reach GitHub. Guest deletion proceeds even if that grace expires.
 Failed deletion or deregistration keeps the record and retries every 5 s,
 including after restart. A recorded name whose guest lacks our metadata
-(macOS `Exists && !Owned`, or `ErrNotOwned` from App Sandbox and Crosvm)
+(macOS `Exists && !Owned`, or `ErrNotOwned` from HCS and Crosvm)
 retries with backoff up to 5 min and does not hold drain, stop, or off;
 its record stays for a later start. After the provider confirms VM absence, persist
 `deregistering` and `guest_deleted_at` before releasing VM, CPU, and memory
@@ -372,8 +372,8 @@ minus running unowned guests in bivouac's VM store, or `foreign_slots`,
 whichever is larger, and minus every guest of ours on any vz provider (vz
 providers must agree on both settings). Other tools' guests are invisible to
 bivouac, so `foreign_slots` reserves their slots; CPU and memory left after `reserve_*` and the guests already
-running. A foreign guest named like an active record (an unprovable App
-Sandbox or Crosvm record) counts once, through its record, and is not
+running. A foreign guest named like an active record (an unprovable
+Crosvm record) counts once, through its record, and is not
 reported as unmanaged. New provisioning pauses at `budget.max_pending_cleanup` deleted
 guests awaiting deregistration (default 2). Total tracked records are also
 bounded by `max_instances + max_pending_cleanup - 1`; concurrent losses
@@ -403,8 +403,8 @@ running; the next start adopts or cleans them.
 
 ## Provider contract
 
-`provider.Provider` is designed against the macOS VM runtime and the App Sandbox
-headless API. Launch options are argument arrays or structured fields,
+`provider.Provider` is implemented by the macOS VM runtime and the Windows HCS
+and Crosvm runtimes. Launch options are argument arrays or structured fields,
 never shell strings. Capabilities are explicit: GPU mode, desktop session,
 display transport, engine host limit.
 
@@ -552,7 +552,7 @@ is supplied at provider construction. Existing manager clone/boot/registration
 totals retain their meaning, and adoption repeats neither helper delivery nor
 registration. See [operations](operations.md) for stage definitions.
 
-### Windows foundation and App Sandbox (experimental integration)
+### Windows host foundation
 
 The Windows host foundation uses a nonblocking `LockFileEx` byte-range lock,
 released by the kernel on process exit. It does not unlink stale lock files
@@ -580,168 +580,9 @@ limited to the documented 2,560 bytes. Oversized keys fail rather than being
 truncated, split, or written to disk. Cancellation is checked before synchronous
 native dispatch; installation must use the same user as the credential owner.
 
-`internal/provider/appsandbox` implements read-only v1 inspection against
-the bundled App Sandbox 0.1.9 SDK contract. Discovery must name literal
-`http://127.0.0.1:<port>` and a bounded nonempty bearer token; no DNS, ambient
-HTTP proxy, or redirect is used. The live product identity is checked on open.
-Responses are bounded; errors omit response bodies, redirect URLs, and token
-values. Inspection exposes version, host capacity/storage, VM storage/status,
-templates, snapshot trees, SSH forwarding, and the agent's passive display
-readiness. Every inspected VM and template is foreign. SSH forwarding readiness
-requires the native key-enabled state and literal loopback; it proves neither
-ownership nor desktop readiness. An unreachable
-endpoint produces an error and never triggers daemon or guest startup.
+### Windows guests through HCS
 
-Windows runtime integration is now implemented behind
-`appsandbox.experimental = true`. Credential-free live validation has passed
-hardware desktop/GPU, controlled host-denial/broker-loss checks, fresh-image reset
-and trusted Actions lifecycle/crash validation. Optional ordinary-user login
-installation is implemented; privileged startup packaging, recovery of guests
-retained across reboot and broader isolation gates remain pending. No service installation is required by default.
-NAT or Slirp networking is not evidence of host/private-LAN isolation. The
-experimental configuration must use a separate test label until those gates pass.
-
-The normal-user manager holds GitHub credentials and resource reservations.
-An operator-started elevated localhost broker holds a separate, protected
-ownership journal and owns clone creation, HCN networking, VFP policy, and
-deletion. Its per-run capability lives in the same user's Credential Manager.
-The authenticated API permits only fixed lifecycle operations; there is no
-arbitrary administrator command, filesystem, template, or route API.
-Creation records intent and markers before the native API, uses an isolated
-storage parent and `networkMode=0`, and never retries an ambiguous mutation.
-Before requesting any network attachment, the manager uses authenticated
-HvSocket SSH for a fixed guest console preflight. It waits for unattended setup
-to finish and for the intended user's console session and Explorer to be ready.
-Native agent/SSH availability can precede OOBE completion; attaching a NIC during
-that interval can leave its VFP layer vulnerable to a setup port reset. This
-preflight changes no network and carries no runner credentials. The later
-interactive task still proves the default input desktop before JIT admission.
-The protected broker enforces its own instance/resource bounds independently
-of the manager. All retained disk/network reservations must disappear before
-the journal is released. The baseline is pinned by native registry binding,
-SHA-256, file identity, size, and modification time.
-
-An administrator-protected engine directory (default
-`%ProgramFiles%\bivouac\engines`) holds the elevated helper, `engines.json`
-and `broker-options.json`; the helper reads every privileged input from there,
-never from `BIVOUAC_HOME`. Protected means owned by Administrators, SYSTEM or
-TrustedInstaller, no reparse point, and no other principal with write, delete
-or permission rights, with ancestors that cannot rename it. The broker refuses
-to start unless its `--config`, the App Sandbox discovery file and `vms.cfg`,
-and their ancestors, are protected. The helper refuses earlier, before starting
-anything, when the App Sandbox data folder or the pinned daemon's installation
-folder breaks the same rules, and re-checks both files before launching the
-broker. Each broker lifecycle sequence runs under
-`WithoutCancel`, bounded to 150 s, so a dropped client cannot cut it short; the
-client's 3-minute response header timeout outlasts it rather than reporting an
-unknown outcome. The provider advertises a 3.5-minute `OperationTimeout`, which
-the manager uses for Status, Stop and Delete instead of its 2-minute default. `List` reports a record the broker cannot prove as a prefixed
-foreign guest that holds a slot, instead of failing the inventory. A record whose
-marker or parent is gone mid-cleanup is finished only after native and child
-absence are confirmed.
-
-Open decision: the elevated helper starts from the user's desktop session
-through UAC consent, so code already running as that user can influence its
-environment (for example `DOTNET_STARTUP_HOOKS`, or `PSModulePath` through
-`HKCU\Environment`) or raise its own consent prompt. Same-account UAC is not a
-security boundary. A complete fix is an administrator-registered task or
-service with a clean environment.
-
-The broker verifies its dedicated switch/endpoint/VM-port identity and exact
-stateless VFP denial rules before allowing public IPv4. IPv6 is denied.
-The normal manager verifies again before guest setup, JIT delivery, and runner
-status. An independent ten-second broker guard quarantines policy failures,
-blocks the owned port, and stops the owned VM if blocking fails. It verifies
-and blocks journalled ports even when App Sandbox is unavailable, but stops
-only a VM whose identity it proved. An incomplete pass blocks admission until
-the next fully successful pass. Quarantined guests and retained network-cleanup
-records keep admission blocked, including after their VM has stopped or vanished.
-Once normal owned cleanup removes those records, a successful guard pass restores
-admission automatically in the same broker. Fresh guests build and verify the
-current host-interface policy; failed guests are never repaired or resumed.
-Canceled or unreadable guard passes cannot clear the admission gate.
-Interface-change handling is polled rather than atomic: dynamic-interface,
-private-peer, MAC-change and host-reboot behavior are still live validation gates. Existing manual prototype results
-do not establish that the new Go adapter passes those gates.
-
-System OpenSSH connects only through the native owned VM's loopback HvSocket
-forward. A per-instance known-host file accepts the first key only after
-native ownership proof and pins subsequent connections. No host folder is
-mounted. Fixed bootstrap code and JSON settings are transferred separately;
-JIT bytes arrive over authenticated SSH stdin and enter a private guest file,
-never host files or command arguments.
-The official runner starts once through an interactive guest scheduled task,
-with rebuilt machine/user PATH and a default-input-desktop probe. A fixed Go
-guest adapter records listener PID, executable and process creation time;
-cancellation rechecks that identity before signaling its console.
-Stop causes official runner shutdown, which reports a failed job even when it
-cancels the running step. It does not invoke GitHub's workflow cancellation API
-or expand shared App permissions. Off instead lets accepted work finish normally.
-Diagnostics arrive over a bounded base64 stream and ZIP extraction rejects
-unsafe paths/expansion before redacting every host sink.
-The generic baseline may contain an unconfigured runner, or each clone may
-receive a hash-pinned official runner ZIP. It contains no project setup.
-PowerShell 7, Git and compiler installation belong to generic image preparation,
-not a project workflow. See `docs/windows.md` for the operator setup and gates.
-
-The operator-selected Windows CI image policy disables Defender scanning and
-Windows Search indexing inside disposable guests. Provision it in a clean,
-unenrolled preparation guest with the explicit guest-only policy tool; verify
-actual settings after reboot, generalization and a fresh clone before promotion.
-Tamper Protection remains an operator Windows Security UI prerequisite. Neither
-the manager nor baseline promotion implicitly changes host security. The policy
-does not relax native isolation, disk durability or credential-free image rules.
-Retain the old immutable image for rollback. A new baseline requires privileged
-broker restart with a new pinned template/path/hash and an explicit update to
-the empty storage root's binding, not an in-place image edit or implicit
-elevation. Immediate disposable-guest validation does not establish that this
-image promotion has occurred.
-
-The 0.1.9 API is HTTP/JSON over an elevated single-owner daemon, rather than
-JSON on a per-job CLI process. `create` auto-starts; snapshots require a stopped
-VM; writable branches are created when starting an existing snapshot. Those
-branches are not independent clones. Windows create-from-template is supported;
-arbitrary VM/snapshot cloning and arbitrary ownership metadata are not exposed.
-The pinned 0.1.9 source accepts an explicit `diskDirectory` at creation and
-reports that parent directory in native VM status; the child is `<parent>/<name>`.
-It rejects an existing child, so the provider persists intent before
-creation and bind its child marker to the recorded parent and native metadata.
-Template inventory has no storage field and cannot establish ownership alone.
-Template creation forces networking and GPU off; subsequent clones can select
-GPU mode. Windows native names are limited to 15 characters, requiring a durable
-mapping to the longer logical runner name. `NativeName` encodes the entire
-four-byte instance ID as seven base32 characters after `bivouac-`; the logical
-runner name is separate. `PlanClone` validates immutable creation intent and
-derives a dedicated storage parent per instance. `CheckClone` requires the
-controller's durable intent, identical parent/child markers, and matching fresh
-native metadata. These helpers perform no native mutations. The storage root
-and marker reads are protected by the privileged adapter; matching
-paths alone are insufficient. A native `networkMode=0` is only the creation
-setting, and cannot prove the absence of an externally attached NIC.
-The new lifecycle methods must repeat the independent-instance, network and
-desktop/GPU checks through their own adapter before production use. Native
-auto-start stays offline; policy is verified before admitting a job.
-The existing production registry is not a validation environment.
-
-Native NAT uses shared App Sandbox networks and does not apply a guest egress
-ACL. The current API exposes no dedicated network/policy selector. Do not modify
-shared networks used by foreign guests; a provider needs isolation before the
-auto-start path, through a validated native integration or controlled transport.
-
-An isolated Windows prototype creates a dedicated HCN ICS switch and endpoint,
-then places its own stateless VFP layer on that VM's port. IPv4 remote-address
-denials and an IPv6 blanket denial passed host TCP/UDP tests with positive
-controls and guest source-address changes, while retaining public DNS/HTTPS.
-Keep this layer separate from Windows' service-owned firewall layer: observed
-automatic host loopback rules took precedence over its explicit block rules
-even with loopback reported disabled. The broker now applies this recipe as
-described above. Private-peer and lifecycle tests remain necessary; no
-production isolation guarantee is inferred from the prototype.
-
-### Windows guests through HCS (in progress)
-
-This replaces the App Sandbox provider. Bivouac drives the Host Compute
-Service (`internal/hcs`) itself, so no App Sandbox application or daemon runs.
+Bivouac drives the Host Compute Service (`internal/hcs`) directly.
 The first increment changes only the host: guests still boot an image that
 contains App Sandbox's guest agent and display driver. A later increment
 replaces them with a bivouac guest agent over HvSocket, along with OpenSSH and
@@ -830,13 +671,23 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   absence revokes the grant, and provider Close closes its cache transports.
   Transport loss uses upstream fallback without reattachment.
 
+The official runner starts once through an interactive scheduled task, with
+rebuilt machine/user PATH and a default-input-desktop probe. The guest adapter
+records listener PID, executable and process creation time; cancellation
+rechecks that identity before signaling its console. Stop requests official
+runner shutdown, which reports a failed job without calling GitHub's workflow
+cancellation API. Off lets accepted work finish normally. A baseline may contain
+an unconfigured runner, or each clone receives a hash-pinned official runner ZIP.
+Diagnostics use bounded base64 and ZIP extraction that rejects unsafe paths and
+expansion before redacting host sinks. No host directory is mounted.
+
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
 service implicitly. An administrator installs it explicitly, which needs no
 reboot. Installation grants the configured accounts start and stop rights on
 that one service, so mode changes never need elevation. The service starts from
-the service manager with a clean environment. That closes the same-account UAC
-concern above.
+the service manager with a clean environment. It does not inherit the ordinary
+manager's environment.
 
 The HCS provider implements `Activator`. It checks the serving host's image
 and CPU/memory limits using the same observational check as doctor. If the
@@ -882,18 +733,21 @@ guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
 skewed clock. The clock is set through local time, so in the guest's
 fall-back hour it can land an hour off; the check then refuses the guest
-rather than accept it. Likewise, the Windows runner launcher, shared with App
-Sandbox guests, gives the runner a process-scope `RemoteSigned` execution
+rather than accept it. Likewise, the Windows runner launcher gives the runner
+a process-scope `RemoteSigned` execution
 policy when neither the CurrentUser nor the LocalMachine scope sets one that
 allows local scripts and none is inherited, because the runner dot-sources a
 script file for its hooks and every `powershell` step. A Group Policy setting
 outranks it and is left as it is.
 
-Guest networking (`internal/hostnet`) reuses the App Sandbox broker's recipe
-above. Each guest gets its own HCN ICS switch and an endpoint on a dedicated
+Guest networking (`internal/hostnet`) gives each guest its own HCN ICS switch
+and an endpoint on a dedicated
 /28 from 10.251.0.0/16, with a MAC derived from its name. An owned stateless
 VFP layer on its port denies the host's interface prefixes and all IPv6, and
-allows public IPv4.
+allows public IPv4. This layer stays separate from Windows' service-owned
+firewall layer: automatic host loopback rules in that layer took precedence
+over explicit block rules even with loopback reported disabled. Native NAT
+alone does not establish host or private-network isolation.
 
 - **Plan:** fresh native IDs, the subnet and a snapshot of the host's
   effective denial are journalled with the intent, before any native
@@ -953,8 +807,8 @@ Prepared images are built once by the image factory (`internal/imagefactory`,
 single standalone VHDX. At runtime they are pinned by file identity, protected
 ACL and deny-write handles, not hashed per job.
 
-- **Template safety:** production App Sandbox CI boots the same templates, so
-  the factory only reads one. It copies the template into its own protected
+- **Template safety:** the source template is immutable; the factory only reads
+  it. It copies the template into its own protected
   workspace, hashing as it copies, and builds on a differencing child of the
   copy. Mounts, VM access grants and the boot touch only files the build
   created.
@@ -1104,7 +958,7 @@ exception. Public guest DNS avoids Slirp's private resolver; the clone's active
 NetworkManager profile ignores DHCP DNS so systemd-resolved cannot restore it.
 The host network snapshot is the canonical set of effective IPv4 deny prefixes,
 not raw interface identities; prefixes covered by broader denial are dropped
-before hashing and launch, so private App Sandbox NIC churn does not change
+before hashing and launch, so private VM NIC churn does not change
 admission. Every supervisor checks it once per second and retires on a change,
 including broader masks and public prefixes; dynamic public-interface
 transitions remain a non-atomic live validation gate.
