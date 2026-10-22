@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"syscall"
 
@@ -119,10 +120,10 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		return imageCmd(ctx, args, os.Stdout)
 	}
 	if cmd == "guest-agent" {
-		if len(args) != 0 {
+		if runtime.GOOS != "windows" && len(args) != 0 {
 			return errUsage
 		}
-		return guestagent.RunAgent(ctx)
+		return guestagent.RunCLI(ctx, args, os.Stdin)
 	}
 	if cmd == "vm" {
 		if len(args) >= 2 && args[0] == "network" {

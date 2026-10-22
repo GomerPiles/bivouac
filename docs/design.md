@@ -778,6 +778,30 @@ driver. HCS synthetic video supplies the sole desktop display, alongside GPU-PV
 for hardware rendering. A later increment replaces the guest agent with
 bivouac's own agent over HvSocket.
 
+The Windows `guest-agent --user <account>` transport is implemented separately
+from that provider switch. It uses protocol version 1 on service
+`54f2299e-45e4-4605-b3ed-03d3d5fbea6a`, with a parent-only HvSocket listener
+and no IP listener. At startup and each connection it requires the configured
+account's SID, the active nonzero console session, and an elevated full or
+unsplit token. The image's protected logon task must pin that account; commands
+inherit the agent's token, session, desktop and environment. Each command starts
+atomically in a hidden kill-on-close job. Ordinary descendants die with it;
+the runner adapter may explicitly use `CREATE_BREAKAWAY_FROM_JOB` with independent
+standard streams to survive a request. Guest-local logs contain fixed categories
+and numbers only, capped at 1 MiB plus one rotation.
+
+Its `guest-agent receive <name> <size> <sha256>` mode accepts only the helper,
+configuration and runner archive names in the protected guest directory.
+It verifies up to 1 GiB before atomic publication, refuses links/alternate
+streams and the `launched` marker, and uses delete-on-close temporary files.
+The adapter must hold the same exclusive `.receive.lock` while writing that
+marker. The host dialer uses cancellable 3-second attempts and 500 ms pauses.
+When the provider switches, its existing per-service connect descriptor remains
+the authorization boundary, equivalent to the macOS 0600 agent socket: any
+process of an admitted host account can already deploy an SSH key and execute
+as the guest administrator; the new transport executes as that same user
+directly. Provider admission and image registration are later phases.
+
 HCS and Windows networking refuse ordinary tokens, so the work splits in two:
 
 - The manager stays unprivileged. It holds GitHub credentials and budgets, and
