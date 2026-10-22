@@ -23,6 +23,10 @@ import (
 // Port is the guest agent's vsock port.
 const Port uint32 = 7473
 
+// ServiceID is the fixed Windows HvSocket service for this protocol. Listener
+// and host dialer share it; registration/admission belongs to the VM host.
+const ServiceID = "54f2299e-45e4-4605-b3ed-03d3d5fbea6a"
+
 // Version is the request format; the agent refuses any other and names its
 // own in the failure frame, so a host fails fast on an outdated baseline.
 const Version = 1
