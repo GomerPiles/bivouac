@@ -846,6 +846,16 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   adapter directly, without PowerShell, because status runs every few
   seconds.
 - **JIT** bytes travel only on SSH stdin.
+- **Startup measurements:** each readiness call emits one Info record with
+  fixed numeric millisecond spans and a fixed failure stage when applicable.
+  Host-monotonic create-relative milestones exist only when this provider
+  observed Create; they are not persisted or reconstructed after adoption.
+  The network lab retains the same report, including partial failures. Launch
+  separately measures cache setup, JIT delivery and process start; the first
+  existing status poll observing listening or running records JIT-to-listening
+  once. Observations contain no guest text, identity or credential material
+  and add no guest commands, retries or timeout changes. See
+  [operations](operations.md#direct-hcs-vm-host) for field semantics.
 - **Network:** every create asks for an isolated endpoint. The lease (address,
   gateway, prefix and MAC) goes to the guest in its runner configuration.
   WaitReady still refuses a guest without a lease, because its runner could

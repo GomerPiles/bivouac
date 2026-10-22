@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -66,6 +67,8 @@ type Pin interface {
 }
 
 type Options struct {
+	// Logger receives numeric startup observations; nil uses slog.Default().
+	Logger *slog.Logger
 	// Service is optional; nil leaves an operator-owned foreground host alone.
 	Service      Service
 	Name         string
@@ -107,9 +110,11 @@ type Provider struct {
 	host      Host
 	transport Transport
 	now       func() time.Time // the host clock guests are set from
+	logger    *slog.Logger
 
 	mu       sync.Mutex
 	sessions map[string]Session
+	timings  map[string]instanceTiming // monotonic observations, never durable
 
 	// cacheMu serializes attachment and revocation with provider shutdown.
 	// The service owns the clients; this provider owns their per-guest grants.
@@ -135,7 +140,11 @@ func New(opts Options, host Host, transport Transport) (*Provider, error) {
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, sessions: map[string]Session{}, cacheGuests: map[string]struct{}{}}, nil
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, logger: logger, sessions: map[string]Session{}, timings: map[string]instanceTiming{}, cacheGuests: map[string]struct{}{}}, nil
 }
 
 func (p *Provider) Name() string { return p.opts.Name }
@@ -181,10 +190,17 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if spec.Meta.CreatedAt != "" {
 		labels["created_at"] = spec.Meta.CreatedAt
 	}
+	started := time.Now()
 	_, err := p.host.Create(ctx, vmhost.CreateRequest{
 		Name: spec.Name, Image: p.opts.Image, CPU: p.opts.CPU, MemoryMB: p.opts.MemoryMB, LazyMemory: p.opts.LazyMemory, GPU: p.opts.GPU, Network: true,
 		Services: []string{winguest.AgentService, winguest.SSHService}, Labels: labels,
 	})
+	if err == nil {
+		returned := time.Now()
+		p.mu.Lock()
+		p.timings[spec.Name] = instanceTiming{createStarted: started, createReturned: returned}
+		p.mu.Unlock()
+	}
 	return err
 }
 
@@ -284,13 +300,42 @@ func (p *Provider) config(g vmhost.GuestInfo) ([]byte, error) {
 // WaitReady waits for the agent and SSH, proves the intended console session,
 // then installs the fixed adapter and prepares the runner and its tasks.
 func (p *Provider) WaitReady(ctx context.Context, name string) error {
+	_, err := p.waitReady(ctx, name)
+	return err
+}
+
+// waitReady returns exactly the numeric report emitted to the daemon log, so
+// lab results include partial observations even when readiness fails.
+func (p *Provider) waitReady(ctx context.Context, name string) (report timingReport, err error) {
+	p.mu.Lock()
+	created := p.timings[name]
+	p.mu.Unlock()
+	t := newTiming(created.createStarted)
+	if !created.createReturned.IsZero() {
+		ms := created.createReturned.Sub(created.createStarted).Milliseconds()
+		t.report.SpansMS["vmhost_create_ms"] = ms
+		t.report.SpansMS["vmhost_create_since_create_ms"] = ms
+	}
+	ctx = context.WithValue(ctx, timingContextKey{}, t)
+	defer func() {
+		report = t.finish("wait_ready_total", err)
+		p.emitTiming(ctx, "hcs readiness timings", report)
+	}()
+	err = p.ready(ctx, name, t)
+	return report, err
+}
+
+func (p *Provider) ready(ctx context.Context, name string, t *timing) error {
+	t.begin(stepSession)
 	s, g, err := p.session(ctx, name)
 	if err != nil {
 		return err
 	}
+	t.begin(stepNetwork)
 	if g.Network == nil {
 		return errors.New("the VM host attached no network; the runner cannot reach GitHub")
 	}
+	t.begin(stepConfig)
 	config, err := p.config(g)
 	if err != nil {
 		return err
@@ -298,15 +343,19 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	for _, f := range []struct {
 		name string
 		data []byte
-	}{{"bivouac-preflight.ps1", []byte(winrunner.PreflightScript)}, {"bivouac-config.json", config}} {
+		step timingStep
+	}{{"bivouac-preflight.ps1", []byte(winrunner.PreflightScript), stepDeliveryPreflight}, {"bivouac-config.json", config, stepDeliveryConfig}} {
+		t.begin(f.step)
 		if err = s.Send(ctx, f.name, strings.NewReader(string(f.data)), int64(len(f.data))); err != nil {
 			return err
 		}
 	}
+	t.begin(stepPreflight)
 	out, err := s.Run(ctx, preflight, nil, 4096)
 	if err != nil {
 		return err
 	}
+	t.begin(stepConsoleProof)
 	var console struct {
 		Ready   bool   `json:"ready"`
 		Session uint32 `json:"session"`
@@ -314,21 +363,26 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if json.Unmarshal(out, &console) != nil || !console.Ready || console.Session == 0 || console.Session == ^uint32(0) {
 		return errors.New("guest console readiness was not proven")
 	}
+	t.begin(stepDeliveryControl)
 	if err = s.Send(ctx, "bivouac-control.ps1", strings.NewReader(winrunner.ControlScript), int64(len(winrunner.ControlScript))); err != nil {
 		return err
 	}
+	t.begin(stepDeliveryHelper)
 	if err = sendFile(ctx, s, p.opts.Helper, "bivouac-helper.exe", ""); err != nil {
 		return err
 	}
 	if p.opts.RunnerArchive != "" {
+		t.begin(stepDeliveryRunner)
 		if err = sendFile(ctx, s, p.opts.RunnerArchive, "bivouac-runner.zip", p.opts.RunnerSHA256); err != nil {
 			return err
 		}
 	}
+	t.begin(stepPrepare)
 	out, err = s.Run(ctx, control+"prepare", nil, 4096)
 	if err != nil {
 		return err
 	}
+	t.begin(stepDesktopProof)
 	var desktop struct {
 		Ready   bool   `json:"ready"`
 		Session uint32 `json:"session"`
@@ -337,6 +391,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if json.Unmarshal(out, &desktop) != nil || !desktop.Ready || desktop.Session == 0 || desktop.Desktop != "Default" {
 		return errors.New("guest interactive desktop readiness was not proven")
 	}
+	t.begin(stepClockSync)
 	return p.syncClock(ctx, s)
 }
 
@@ -354,7 +409,11 @@ func (p *Provider) syncClock(ctx context.Context, s Session) error {
 	if err != nil {
 		return errors.New("guest clock was not reported")
 	}
-	if skew := guest.Sub(p.now()); skew > maxClockSkew || skew < -maxClockSkew {
+	skew := guest.Sub(p.now())
+	if t := contextTiming(ctx); t != nil {
+		t.report.SpansMS["clock_skew_ms"] = skew.Milliseconds()
+	}
+	if skew > maxClockSkew || skew < -maxClockSkew {
 		return fmt.Errorf("guest clock is %s off the host's after correction", skew.Round(time.Second))
 	}
 	return nil
@@ -378,17 +437,35 @@ func sendFile(ctx context.Context, s Session, path, name, sha256 string) error {
 	return s.Send(ctx, name, f, info.Size())
 }
 
-func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) error {
+func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) (err error) {
 	if len(jit) == 0 || len(jit) > 128<<10 {
 		return errors.New("invalid bounded runner JIT configuration")
 	}
+	p.mu.Lock()
+	created := p.timings[name]
+	p.mu.Unlock()
+	t := newTiming(created.createStarted)
+	defer func() {
+		p.emitTiming(ctx, "hcs launch timings", t.finish("launch_total", err))
+	}()
+	t.begin(stepCacheSetup)
 	if err := p.prepareCache(ctx, name); err != nil {
 		return err
 	}
+	t.begin(stepJITDelivery)
+	jitStarted := time.Now()
 	if _, err := p.run(ctx, name, guestHelper+" guest windows seed-jit", jit, 4096); err != nil {
 		return err
 	}
-	_, err := p.run(ctx, name, control+"start", nil, 4096)
+	t.begin(stepRunnerStart)
+	_, err = p.run(ctx, name, control+"start", nil, 4096)
+	if err == nil {
+		p.mu.Lock()
+		observed := p.timings[name]
+		observed.jitStarted = jitStarted
+		p.timings[name] = observed
+		p.mu.Unlock()
+	}
 	return err
 }
 
@@ -465,6 +542,9 @@ func (p *Provider) RunnerStatus(ctx context.Context, name string) (provider.Runn
 	}
 	switch status.State {
 	case provider.RunnerAbsent, provider.RunnerStarting, provider.RunnerListening, provider.RunnerRunning, provider.RunnerExited:
+		if status.State == provider.RunnerListening || status.State == provider.RunnerRunning {
+			p.observeListening(ctx, name)
+		}
 		return status, nil
 	}
 	return provider.RunnerStatus{}, errors.New("unknown guest runner status")
@@ -515,11 +595,15 @@ func (p *Provider) Delete(ctx context.Context, name string) error {
 	}
 	p.revokeCache(name)
 	_ = os.Remove(p.pinPath(g))
+	p.mu.Lock()
+	delete(p.timings, name)
+	p.mu.Unlock()
 	return nil
 }
 
 func (p *Provider) forget(name string) {
 	p.mu.Lock()
+	delete(p.timings, name)
 	s := p.sessions[name]
 	delete(p.sessions, name)
 	p.mu.Unlock()
@@ -582,6 +666,7 @@ func (p *Provider) Close() {
 	p.mu.Lock()
 	sessions := p.sessions
 	p.sessions = map[string]Session{}
+	p.timings = map[string]instanceTiming{}
 	p.mu.Unlock()
 	for _, s := range sessions {
 		_ = s.Close()
