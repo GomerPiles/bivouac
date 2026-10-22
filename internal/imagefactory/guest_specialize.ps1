@@ -1,8 +1,9 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $step=80
+$videoDiagnostics=@{}
 function Write-SetupStep([int]$Code,[bool]$Failed){
- [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',(@{step=$Code;failed=$Failed}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+ [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',(@{step=$Code;failed=$Failed;video=$videoDiagnostics}|ConvertTo-Json -Compress -Depth 8),[Text.UTF8Encoding]::new($false))
 }
 try {
  Write-SetupStep $step $false
@@ -58,11 +59,15 @@ try {
   Remove-Item -LiteralPath $drivers -Recurse -Force
  }
  $step=85;Write-SetupStep $step $false
- $video=@(Get-PnpDevice -Class Display -PresentOnly | Where-Object {
-  @((Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data | Where-Object {$_ -like '*DA0A7802*'}).Count -gt 0
- })
- if(!$video.Count -or $video.Count -gt 32){throw 'synthetic video absent'}
- foreach($node in $video){Enable-PnpDevice -InstanceId $node.InstanceId -Confirm:$false | Out-Null}
+ $videoDiagnostics.specialize_before=Get-VideoSnapshot
+ Write-SetupStep $step $false
+ if(!$videoDiagnostics.specialize_before.node_count){throw 'synthetic video absent'}
+ try{Enable-VideoNodes $videoDiagnostics.specialize_before $false}finally{
+  $videoDiagnostics.specialize_enable=$script:videoEnableResult
+  $videoDiagnostics.specialize_after=Get-VideoSnapshot
+  Write-SetupStep $step $false
+ }
+ if(!$videoDiagnostics.specialize_enable.returned){throw 'synthetic video enable failed'}
  # Windows setup's following boot settles PnP changes; do not reboot here.
  $step=88;Write-SetupStep $step $false
 

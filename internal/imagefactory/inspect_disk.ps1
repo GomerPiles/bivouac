@@ -104,5 +104,5 @@ public static class FactoryInspection {
  $null=Remove-Item -LiteralPath $mount
 }catch{$code=$step;$facts.failure_step=$step}
 [Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
-[Console]::Out.WriteLine(($facts|ConvertTo-Json -Compress -Depth 5))
+[Console]::Out.WriteLine(($facts|ConvertTo-Json -Compress -Depth 8))
 exit $code

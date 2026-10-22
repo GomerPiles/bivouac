@@ -53,7 +53,11 @@ func (r *record) setupFailure(facts *Inspection) error {
 		return nil
 	}
 	if r.GuestSetupVideo != nil {
-		return fmt.Errorf("guest setup failed at step %d (video problem_code=%d devnode_status=%d)", r.GuestSetupStep, r.GuestSetupVideo.ProblemCode, r.GuestSetupVideo.DevNodeStatus)
+		// Marshaling the typed facts emits fixed field names and numbers only.
+		b, err := json.Marshal(r.GuestSetupVideo)
+		if err == nil {
+			return fmt.Errorf("guest setup failed at step %d (video %s)", r.GuestSetupStep, b)
+		}
 	}
 	return fmt.Errorf("guest setup failed at step %d", r.GuestSetupStep)
 }

@@ -55,7 +55,7 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 	data["assets"] = assets
 	data["destination"] = filepath.Join(private, "setup.iso")
 	data["unattend"] = unattended(r.Name, c.GuestUser, password)
-	data["specialize"] = guestSpecialize + disableFirstLogonAnimation
+	data["specialize"] = guestVideo + guestSpecialize + disableFirstLogonAnimation
 	defer func() { delete(data, "unattend") }()
 	if _, err := run(ctx, makeISO, data, false); err != nil {
 		r.hostError("setup_iso", err)

@@ -990,12 +990,20 @@ ACL and deny-write handles, not hashed per job.
   package matched by original INF name, deletes its adjacent `drivers`
   directory (including devcon), and enables the Hyper-V synthetic video device
   before Windows setup's following boot.
-  FirstLogon verifies absence and the video's enabled/started state before
-  restarting the agent; it preserves a failed or incomplete specialize status.
+  For every matching video node (including phantom nodes), specialize clears
+  only CONFIGFLAG_DISABLED in existing global/config-specific flags, then uses
+  pnputil enable with an Enable-PnpDevice fallback. Device registry components
+  are opened without following links and hardware identity is checked before
+  writes. FirstLogon retries once for problem 22 and verifies absence and the
+  video's enabled/started state before restarting the agent; it preserves a
+  failed or incomplete specialize status.
   Numbered status facts distinguish video startup (35), remaining VDD nodes
-  (36), packages (37) and driver directory (38); a video failure records only
-  the failing device's numeric problem code and DevNodeStatus flags, carried
-  through offline inspection into the build record/error. Setup assets include
+  (36), packages (37) and driver directory (38). Bounded numeric snapshots before
+  and after specialize enable, and at FirstLogon, record node presence, problem
+  code, DevNodeStatus, global/config-specific flags and enable outcomes, carried
+  through offline inspection into the build record/error. FirstLogon failure
+  writes its status and powers off; an exit watcher cancels guest preparation,
+  retaining the same owned cleanup and offline inspection. Setup assets include
   the agent and two helpers, with optional OpenSSH/runner archives; all VDD/devcon
   assets are unsupported. Template VDD inspection facts remain informational.
   Without devcon the reference agent cannot repair VDD

@@ -89,7 +89,7 @@ function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessP
 function Dismount-DiskImage {param($ImagePath) [pscustomobject]@{noise='dismount'}}
 `
 	path := filepath.Join(workspace, "fake-host.ps1")
-	if err := os.WriteFile(path, []byte(mocks+runnerCheck+offlineFiles+inspectDisk), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(mocks+runnerCheck+(videoFacts+offlineFiles)+inspectDisk), 0600); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "mode": "setup"})
@@ -143,7 +143,8 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	// any guest service/install command can execute. No host guest paths are used.
 	safeWriter := `function Write-SetupStep([int]$Code,[bool]$Failed){if($Failed){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine((@{guest_setup_step=$Code;guest_setup_failed=$Failed}|ConvertTo-Json -Compress))}}
 `
-	script := "function Get-Item {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
+	safeSetup := strings.ReplaceAll(guestSetup, "& (Join-Path $env:SystemRoot 'System32\\shutdown.exe')", "Invoke-FixtureShutdown")
+	script := "function Invoke-FixtureShutdown {param($Arguments)}\nfunction Get-Item {throw 'fixture failure'}\n" + safeSetup[:start] + safeWriter + safeSetup[end:]
 	path := filepath.Join(t.TempDir(), "fake-setup.ps1")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
@@ -206,7 +207,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			script := runnerCheck + "\n" + offlineFiles + `;try{$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-FactoryFiles $d.root $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))}catch{[Console]::Out.Write(('{"test_failure_line":'+$_.InvocationInfo.ScriptLineNumber+'}'))}`
+			script := runnerCheck + "\n" + (videoFacts + offlineFiles) + `;try{$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-FactoryFiles $d.root $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))}catch{[Console]::Out.Write(('{"test_failure_line":'+$_.InvocationInfo.ScriptLineNumber+'}'))}`
 			data, _ := json.Marshal(map[string]string{"root": root})
 			b := runTestPS(t, script, data)
 			var facts Inspection
@@ -239,7 +240,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 		t.Fatal("sanitation rejects image policy state")
 	}
 	data := []byte(`{"value":"C:\\Program Files\\OpenSSH\\sshd.exe --opaque public-argument.exe"}`)
-	result := runTestPS(t, offlineFiles+`; $d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{image_path='';image_path_redacted=$false};Set-PublicImagePath $d.value $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress))`, data)
+	result := runTestPS(t, (videoFacts+offlineFiles)+`; $d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{image_path='';image_path_redacted=$false};Set-PublicImagePath $d.value $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress))`, data)
 	var service ServiceFact
 	if json.Unmarshal([]byte(result), &service) != nil || service.ImagePath != `C:\Program Files\OpenSSH\sshd.exe` || !service.ImagePathRedacted {
 		t.Fatal("unrecognized service arguments escaped public-path filter")

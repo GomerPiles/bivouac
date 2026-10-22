@@ -108,8 +108,8 @@ func TestSetupMediaGeneration(t *testing.T) {
 // of their mount, service, guest or HCS operations.
 func TestPowerShellSyntax(t *testing.T) {
 	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($text in $data){$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){exit 1};$strings=$ast.FindAll({param($node)$node -is [Management.Automation.Language.StringConstantExpressionAst]},$true);foreach($s in $strings){if($s.Value.Contains('Set-Service sshd')){$nestedTokens=$null;$nestedErrors=$null;[void][Management.Automation.Language.Parser]::ParseInput($s.Value,[ref]$nestedTokens,[ref]$nestedErrors);if($nestedErrors.Count){exit 2}}}};[Console]::Out.Write('parsed')`
-	texts := []string{makeISO, runnerExtract, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, guestBootstrap}
-	texts = append(texts, guestSpecialize+disableFirstLogonAnimation)
+	texts := []string{makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, guestBootstrap}
+	texts = append(texts, guestVideo+guestSpecialize+disableFirstLogonAnimation)
 	b, _ := json.Marshal(texts)
 	if got := runTestPS(t, script, b); got != "parsed" {
 		t.Fatal("scripts did not parse")
