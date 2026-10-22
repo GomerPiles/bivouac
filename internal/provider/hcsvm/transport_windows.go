@@ -25,6 +25,7 @@ type hvTransport struct{ user string }
 func NewTransport(user string) Transport { return hvTransport{user: user} }
 
 func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) (Session, error) {
+	timing := contextTiming(ctx)
 	vmID, err := hvsock.ParseGUID(runtimeID)
 	if err != nil {
 		return nil, errors.New("invalid guest runtime identity")
@@ -32,6 +33,10 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 	agentID, _ := hvsock.ParseGUID(winguest.AgentService)
 	sshID, _ := hvsock.ParseGUID(winguest.SSHService)
 	var agent net.Conn
+	timing.begin(stepAgentDial)
+	if timing != nil {
+		timing.report.SpansMS["agent_dial_retries"] = 0
+	}
 	for agent == nil {
 		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
 		agent, err = hvsock.Dial(attempt, hvsock.Addr{VMID: vmID, ServiceID: agentID})
@@ -39,12 +44,16 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 		if agent != nil {
 			break
 		}
+		if timing != nil {
+			timing.report.SpansMS["agent_dial_retries"]++
+		}
 		select {
 		case <-ctx.Done():
 			return nil, errors.Join(provider.GuestAgentTimeout, err)
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	timing.begin(stepAgentInitialize)
 	id, err := winguest.NewIdentity()
 	if err != nil {
 		_ = agent.Close()
@@ -62,6 +71,7 @@ func (t hvTransport) Open(ctx context.Context, name, runtimeID string, pin Pin) 
 	if !a.VDDAbsent || !a.KeyDeployed {
 		return fail(errors.New("guest agent did not confirm VDD absence and the SSH key"))
 	}
+	timing.begin(stepSSHHandshake)
 	client, err := s.connect(ctx, nil)
 	if err != nil {
 		return fail(err)

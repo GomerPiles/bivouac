@@ -89,12 +89,18 @@ type fakeTransport struct {
 	fail        error // next Run fails with this once
 	cacheClient func(context.Context) (*ssh.Client, error)
 	runHook     func(string, []byte) error
+	openHook    func(context.Context) error
 }
 
-func (f *fakeTransport) Open(_ context.Context, _, _ string, pin Pin) (Session, error) {
+func (f *fakeTransport) Open(ctx context.Context, _, _ string, pin Pin) (Session, error) {
 	f.mu.Lock()
 	f.opens++
 	f.mu.Unlock()
+	if f.openHook != nil {
+		if err := f.openHook(ctx); err != nil {
+			return nil, err
+		}
+	}
 	fingerprint := strings.Repeat("ab", 32)
 	if err := pin.Check(fingerprint); err != nil {
 		return nil, err

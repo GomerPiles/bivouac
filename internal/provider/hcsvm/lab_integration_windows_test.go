@@ -141,6 +141,7 @@ type networkRun struct {
 	Passed               bool                      `json:"passed"`
 	Failure              string                    `json:"failure,omitempty"`
 	Timings              map[string]int64          `json:"timings_ms"`
+	Readiness            timingReport              `json:"readiness"`
 	ProtectedBeforeStart bool                      `json:"protected_before_start"`
 	Probes               map[string]string         `json:"probes,omitempty"`
 	Listeners            map[string]listenerResult `json:"listeners,omitempty"`
@@ -382,7 +383,8 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 		return fail("lease", err)
 	}
 	readyStarted := time.Now()
-	if err = p.WaitReady(ctx, spec.Name); err != nil {
+	r.Readiness, err = p.waitReady(ctx, spec.Name)
+	if err != nil {
 		return fail("wait ready", err)
 	}
 	r.Timings["wait_ready"] = ms(time.Since(readyStarted))

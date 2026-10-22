@@ -198,6 +198,34 @@ and check that the second job runs on a fresh guest. Then run
 service. Delete the branch and its workflow runs, and confirm no guest switch
 adapter remains before turning production CI On.
 
+HCS startup measurements appear at Info in the daemon log as one
+`hcs readiness timings` record per WaitReady call, including failed calls.
+`*_ms` fields are host-monotonic step durations; `*_since_create_ms` fields
+are completion milestones from this provider's Create call. Create milestones
+are omitted after adoption because a monotonic origin cannot survive restart.
+Absent fields mean a step was skipped or not reached, not a zero duration.
+The stages cover VM host create return, agent dial and initialization, SSH,
+each file delivery, preflight/console proof, prepare/desktop proof and clock
+sync. Proof durations cover reply validation; the guest's proof work is inside
+preflight or prepare. `wait_ready_total_ms` includes the whole readiness call.
+`agent_dial_retries` counts failed dial attempts, and signed `clock_skew_ms`
+is guest UTC minus host UTC after correction. `failure_step` is a fixed stage
+name; all measurement values are numbers, with no guest text or identities.
+
+`hcs launch timings` separately records cache setup (including any fallback),
+JIT delivery, listener process start and launch total. A disabled cache has a
+near-zero setup duration. `hcs listening timings` records `jit_to_listening_ms`
+once, at the first existing status poll observing listening or running, measured
+from the start of JIT delivery, after cache setup. This includes poll latency;
+process start alone does not prove listening. It is absent if listening is never
+observed or the manager restarts. No additional guest commands or polls run.
+Durations and milestones overlap: do not add milestones or totals to step
+durations. The network lab's per-run `readiness.spans_ms` and optional
+`readiness.failure_step` contain the identical readiness report, alongside its
+existing `timings_ms` VM host/batch measurements, even on readiness failure.
+Compare interleaved cold boots at equal resources and quiet host load using
+the separately authorized lab procedure below.
+
 ## Direct HCS image factory
 
 `bivouac image build` prepares an image for the `hcs` provider from a

@@ -178,7 +178,7 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 			}
 			out[name] = lp
 		case "hcs":
-			hp, err := buildHCSProvider(name, *p.HCS, store)
+			hp, err := buildHCSProvider(name, *p.HCS, store, log)
 			if err != nil {
 				closeProviders(out)
 				return nil, err

@@ -145,6 +145,11 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
+Startup timing records and the network lab's matching per-run readiness report
+have fake-host/transport unit coverage, including partial failures, numeric-only
+spans, clock skew and first-observed listening. They have not been collected
+from live guests; interleaved baseline distributions remain an operator gate.
+
 The pieces built so far:
 
 - The typed HCS binding.
