@@ -234,20 +234,20 @@ secret. Status uses one agent command per existing poll; JIT and start are never
 replayed after an uncertain outcome. A protocol-version refusal is terminal.
 This provider requires a matching bivouac-agent image; old images are unsupported.
 Rollback is the previous binary and image. The factory and vmhost lab batch below
-remain on App Sandbox/SSH until phase 5 and do not yet build that matching image.
+use the same agent protocol; this branch has not been validated live.
 
 ## Direct HCS image factory
 
-`bivouac image build` currently prepares an image for the previous `hcs` binary from a
+`bivouac image build` prepares an agent image for the `hcs` provider from a
 generalized App Sandbox template. `bivouac image inspect` runs the same copy
 and offline checks without booting, so a template can be checked first. Both
 run elevated in the foreground (one UAC prompt each), drive HCS directly and
 attach no network adapter, so production CI may keep running. Neither touches
 the VM host service, its journal or CI mode.
 
-Every image drops App Sandbox's display driver and uses HCS synthetic video
-with GPU-PV. The transitional vmhost lab requires these newly built images;
-the runtime provider additionally requires the phase-5 bivouac-agent installation.
+Images contain bivouac's guest agent and use HCS synthetic video with GPU-PV.
+Specialize removes the legacy guest components and OpenSSH before FirstLogon.
+The template is still an App Sandbox template; template creation is out of scope.
 Rollback uses the previously deployed binary with its previously built image.
 
 The template is only read. The factory copies it into its own workspace,
@@ -265,44 +265,40 @@ or owner record. It mounts, grants and boots only files it created.
      "guest_user": "ciuser",
      "image_root": "<protected parent>\\Images",
      "render_probe": {"source": "<path>", "sha256": "<hash>"},
-     "setup_assets": [
-       {"name": "appsandbox-agent.exe", "source": "<agent path>", "sha256": "<hash>"},
-       {"name": "appsandbox-input.exe", "source": "<input helper path>", "sha256": "<hash>"},
-       {"name": "appsandbox-displays.exe", "source": "<display helper path>", "sha256": "<hash>"}
-     ],
+     "setup_assets": [],
      "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
    }
    ```
 
-   - `setup_assets` must include `appsandbox-agent.exe`, `appsandbox-input.exe`
-     and `appsandbox-displays.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are optional;
-     a template without a runner needs `RUNNER.ZIP`. All `AppSandboxVDD.*`
-     files and `devcon.exe` are unsupported. Specialize removes VDD devices
-     (including phantom nodes), packages and the agent's `drivers` directory,
-     enables synthetic video before Windows setup's following boot, and leaves
-     the agent disabled. For each matching node, it clears only the disabled
-     bit in existing ConfigFlags/CSConfigFlags values and tries pnputil enable,
-     falling back to Enable-PnpDevice. FirstLogon retries once for problem 22,
-     then verifies these changes before starting the agent. Specialize failures
-     use steps 80–85; 88 marks completion and
-     89 means FirstLogon could not confirm completion. Verification failures
-     distinguish video startup (35), VDD nodes (36), packages (37) and the
-     drivers directory (38). Numeric diagnostics include up to 32 matching
-     nodes (present or phantom), before/after specialize and at FirstLogon:
-     presence, problem code/DevNodeStatus, ConfigFlags, CSConfigFlags existence
-     and value, plus enable return/exit codes. These survive in the offline
-     facts, build record and error without device identifiers. FirstLogon
-     failure records its status and shuts down; the factory observes early
-     exit and inspects the owned disk rather than waiting for an absent agent.
-     The synchronous specialize command does not
-     explicitly request a reboot; confirm the template's setup-to-OOBE reboot
-     boundary and specialize-pass PnP availability during live validation.
-   - `drivers` names the host's GPU driver directories. The build copies
-     them into the image, so an image matches the host driver it was built
-     with.
+   - `RUNNER.ZIP` is the only accepted setup asset and is required only for a
+     template without a runner. The render probe remains required. Legacy guest
+     agents, helpers, VDD/devcon files and OpenSSH installers are unsupported.
+   - Offline staging copies this factory executable to
+     `C:\Program Files\Bivouac\bivouac.exe`, protected for SYSTEM,
+     Administrators and TrustedInstaller, with Users read/execute. The manifest
+     records its hash and protocol version. FirstLogon creates and starts the
+     `bivouac-guest-agent` logon task for the configured interactive user with
+     Highest, three one-minute restarts and no execution time limit. Its action
+     runs the binary directly. Build files use `C:\ProgramData\Bivouac\Image`.
+   - Specialize stop/deletes the legacy agent and both OpenSSH services,
+     removes VDD nodes/packages and the entire legacy component directory,
+     uninstalls registered OpenSSH MSI products and deletes remaining program
+     directories, server state, authorization files and the host-key boot task.
+     Traversal is bounded and refuses links. FirstLogon verifies removal and
+     synthetic video, preserving incomplete specialize diagnostics. Steps 81–87
+     and 90–94 identify removals; 88 means specialize complete, 89 means its
+     status could not be verified. Video checks retain steps 35–38.
+   - `drivers` names one to eight host FileRepository directories. A bounded
+     staged snapshot is installed offline under guest HostDriverStore,
+     preserving nesting and empty directories. Source and destination hashes
+     must match the exact inventory; a temporary sibling is renamed only when
+     complete, with guest-parent ownership and inherited ACLs. Existing target
+     trees refuse the build. FirstLogon restarts only `vrd.inf` devices at
+     error 43. D3D11/present/readback is the gate; GL/Vulkan/NVIDIA runtime
+     provisioning and other APIs are not covered. Rebuild after host driver changes.
    - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
      `timeout_seconds` (default 900) bounds the guest's run, not the copy.
-   - Keep `image_root` outside App Sandbox's template and instance trees. Its
+   - Keep `image_root` outside the template and instance trees. Its
      volume needs about 2.2 times the template's size plus 10 GiB free.
 2. Inspect, then build, from an elevated shell:
 
@@ -316,13 +312,12 @@ or owner record. It mounts, grants and boots only files it created.
 3. The offline inspection gates the build. The template must be generalized
    to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
    A configured runner (`.runner`, `.credentials`), anything under its `_work`,
-   or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
+   an installed bivouac agent/logon task, or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
    runner's `_diag` by template preparation are allowed and are deleted during
-   setup. The record lists only public facts: component hashes, service
-   paths, runner state and residue names, never file contents or
+   setup. The record lists only public facts: agent presence/hash/task, runner state and residue names, never file contents or
    answer-file values.
 4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
-   components, checks hardware rendering with the probe, removes setup files,
+   agent, checks hardware rendering with the probe, removes setup files and agent logs,
    rotates the console password into the autologon secret, shuts down
    cleanly and flattens the result. A build takes about 3 minutes plus the
    copy. Admission waits for the guest's memory plus 10 GiB available and
@@ -330,7 +325,7 @@ or owner record. It mounts, grants and boots only files it created.
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the driver versions and
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/protocol, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication
@@ -360,9 +355,11 @@ these cold boots in order:
 3. A guest whose parent is a flattened copy of the image.
 4. Two production-sized guests (4 CPU, 8 GiB).
 
-Each run checks the guest agent, SSH and desktop rendering. The baseline run
-also checks that an unelevated process reaches only the HvSocket service its
-account was granted.
+Each run proves bivouac's agent and runs the image's pinned desktop validation
+through it. The baseline's unelevated child must be refused the ungranted agent
+service; the lazy-memory run grants the manager account and requires connection.
+Only the agent service is exposed. `agent_reachable` records create-to-agent
+proof alongside existing connection/desktop spans and bounded numeric step markers.
 
 Every desktop run records topology in the console user's
 interactive session and requires exactly one active primary display plus a
@@ -454,8 +451,7 @@ offers to allow the test binary through the firewall, choose Cancel.
    go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
    ```
 
-3. Launch it once through UAC. Use a matching bivouac-agent image and pins after
-   phase 5; today's factory image cannot serve this provider. The lab root
+3. Launch it once through UAC. Use a matching bivouac-agent image and pins from this factory. The lab root
    must not exist yet; the VM host creates it protected.
    - If the image has no runner, add `-lab.runner-archive` and
      `-lab.runner-sha256` for an official runner ZIP.

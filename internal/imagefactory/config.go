@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GomerPiles/bivouac/internal/winguest"
+	"github.com/GomerPiles/bivouac/internal/windesktop"
 )
 
 type PinnedFile struct {
@@ -111,24 +111,16 @@ func (c Config) Validate() error {
 		return errors.New("image build requires 1-4 CPU, 1024-8192 MiB and a 300-3600 second timeout")
 	}
 	validFile := func(f PinnedFile) bool { return localPath(f.Source) && !within(c.ImageRoot, f.Source) && pin(f.SHA256) }
-	if !validFile(c.RenderProbe) || len(c.SetupAssets) < 3 || len(c.SetupAssets) > 5 {
+	if !validFile(c.RenderProbe) || len(c.SetupAssets) > 1 {
 		return errors.New("pinned render probe and bounded setup assets are required")
 	}
-	required := map[string]bool{"APPSANDBOX-AGENT.EXE": false, "APPSANDBOX-INPUT.EXE": false, "APPSANDBOX-DISPLAYS.EXE": false}
 	seen := map[string]bool{}
 	for _, a := range c.SetupAssets {
 		n := strings.ToUpper(a.Name)
-		_, known := required[n]
-		if (!known && n != "OPENSSH.MSI" && n != "RUNNER.ZIP") || seen[n] || !validFile(a.PinnedFile) {
+		if n != "RUNNER.ZIP" || seen[n] || !validFile(a.PinnedFile) {
 			return errors.New("unsupported, duplicate or unpinned setup asset")
 		}
 		seen[n] = true
-		required[n] = true
-	}
-	for _, ok := range required {
-		if !ok {
-			return errors.New("agent and display/input helpers are required")
-		}
 	}
 	if len(c.Drivers) < 1 || len(c.Drivers) > 8 {
 		return errors.New("one to eight GPU driver directories are required")
@@ -172,11 +164,10 @@ type Inspection struct {
 	AnswerDirectoryEmpty  bool                     `json:"answer_directory_empty"`
 	PantherAnswerPresent  bool                     `json:"panther_answer_present"`
 	PantherAnswer         *AnswerFacts             `json:"panther_answer,omitempty"`
-	AgentService          *ServiceFact             `json:"agent_service,omitempty"`
-	SSHService            *ServiceFact             `json:"sshd_service,omitempty"`
-	Executables           map[string]string        `json:"executables"`
+	AgentPresent          bool                     `json:"agent_present"`
+	AgentSHA256           string                   `json:"agent_sha256,omitempty"`
+	AgentTaskPresent      bool                     `json:"agent_task_present"`
 	VDDPresent            *bool                    `json:"vdd_present,omitempty"`
-	VDDPackagePresent     *bool                    `json:"vdd_package_present,omitempty"`
 	RunnerState           string                   `json:"runner_state"`
 	RunnerResidue         map[string]RunnerResidue `json:"runner_residue"`
 	RunnerVersion         string                   `json:"runner_version,omitempty"`
@@ -249,12 +240,6 @@ type RunnerEntry struct {
 	Directory bool   `json:"directory"`
 }
 
-type ServiceFact struct {
-	Present           bool   `json:"present"`
-	ImagePath         string `json:"image_path"`
-	ImagePathRedacted bool   `json:"image_path_redacted"`
-}
-
 type InspectionReport struct {
 	BuildID string      `json:"build_id"`
 	Facts   *Inspection `json:"inspection"`
@@ -276,7 +261,7 @@ func (i Inspection) Generalized() bool {
 }
 
 func (i Inspection) Eligible() bool {
-	return i.Generalized() && !i.GuestStatePresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
+	return i.Generalized() && !i.GuestStatePresent && !i.AgentPresent && !i.AgentTaskPresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
 }
 
 // diagLogsOnly admits residue that is only regular files in _diag, such as
@@ -315,30 +300,48 @@ func (i Inspection) RunnerInput(c Config) error {
 type Driver struct {
 	Name        string            `json:"name"`
 	INFVersions map[string]string `json:"inf_versions"`
+	// Build-local inventory stays outside bounded durable records.
+	Files       map[string]string `json:"-"`
+	Directories []string          `json:"-"`
+}
+
+func encodeDriverPlan(drivers []Driver) ([]byte, error) {
+	type tree struct {
+		Name        string            `json:"name"`
+		Files       map[string]string `json:"files"`
+		Directories []string          `json:"directories"`
+	}
+	plan := make([]tree, 0, len(drivers))
+	for _, driver := range drivers {
+		plan = append(plan, tree{driver.Name, driver.Files, driver.Directories})
+	}
+	return json.Marshal(plan)
 }
 
 // Manifest deliberately has no credential or private setup fields.
 type Manifest struct {
-	Topology         *winguest.Topology `json:"topology,omitempty"`
-	BuildID          string             `json:"build_id"`
-	GuestName        string             `json:"guest_name"`
-	GuestUser        string             `json:"guest_user"`
-	Source           string             `json:"source"`
-	SourceSHA256     string             `json:"source_sha256"`
-	Template         string             `json:"template,omitempty"`
-	Output           string             `json:"output"`
-	Size             int64              `json:"size"`
-	SHA256           string             `json:"sha256"`
-	ProbeSHA256      string             `json:"probe_sha256"`
-	ValidationSHA256 string             `json:"validation_sha256"`
-	AutologonSHA256  string             `json:"autologon_sha256"`
-	Assets           map[string]string  `json:"assets"`
-	RunnerVersion    string             `json:"runner_version,omitempty"`
-	Drivers          []Driver           `json:"drivers"`
-	Revision         string             `json:"vcs_revision"`
-	Started          time.Time          `json:"started"`
-	Ended            time.Time          `json:"ended"`
-	PhaseMS          map[string]int64   `json:"phase_ms"`
+	Topology         *windesktop.Topology `json:"topology,omitempty"`
+	AgentSHA256      string               `json:"agent_sha256"`
+	AgentVersion     int                  `json:"agent_version"`
+	BuildID          string               `json:"build_id"`
+	GuestName        string               `json:"guest_name"`
+	GuestUser        string               `json:"guest_user"`
+	Source           string               `json:"source"`
+	SourceSHA256     string               `json:"source_sha256"`
+	Template         string               `json:"template,omitempty"`
+	Output           string               `json:"output"`
+	Size             int64                `json:"size"`
+	SHA256           string               `json:"sha256"`
+	ProbeSHA256      string               `json:"probe_sha256"`
+	ValidationSHA256 string               `json:"validation_sha256"`
+	AutologonSHA256  string               `json:"autologon_sha256"`
+	Assets           map[string]string    `json:"assets"`
+	RunnerVersion    string               `json:"runner_version,omitempty"`
+	Drivers          []Driver             `json:"drivers"`
+	Revision         string               `json:"vcs_revision"`
+	Started          time.Time            `json:"started"`
+	Ended            time.Time            `json:"ended"`
+	PhaseMS          map[string]int64     `json:"phase_ms"`
 }
 
 // cleanupOwned makes absence the barrier before detaching or removing storage.

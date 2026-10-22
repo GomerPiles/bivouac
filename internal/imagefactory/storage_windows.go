@@ -345,6 +345,7 @@ func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byt
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+	cmd.Env = hostPowerShellEnvironment(system)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 	cmd.Stdin = bytes.NewReader(b)
 	cmd.Stderr = io.Discard
@@ -368,6 +369,18 @@ func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byt
 	}
 	payload, frameErr := framedResult(result.data)
 	return payload, errors.Join(errResult, frameErr)
+}
+
+// Do not inherit PowerShell 7's incompatible module path when launching 5.1,
+// or load a user-writable module into the elevated image factory.
+func hostPowerShellEnvironment(system string) []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "PSMODULEPATH=") {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "PSModulePath="+filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"))
 }
 
 type boundedOutput struct{ data []byte }
@@ -421,7 +434,7 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 		if err != nil {
 			return nil, err
 		}
-		driver := Driver{Name: filepath.Base(source), INFVersions: map[string]string{}}
+		driver := Driver{Name: filepath.Base(source), INFVersions: map[string]string{}, Files: map[string]string{}, Directories: []string{}}
 		err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return errors.New("cannot read GPU driver tree")
@@ -437,6 +450,9 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 			}
 			target := filepath.Join(r.Workspace, "drivers", fmt.Sprint(i), filepath.FromSlash(path))
 			if entry.IsDir() {
+				if path != "." {
+					driver.Directories = append(driver.Directories, filepath.FromSlash(path))
+				}
 				return os.MkdirAll(target, 0700)
 			}
 			if driverRuntimeLog(path) {
@@ -468,6 +484,11 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 			if n != info.Size() {
 				return errors.New("GPU driver changed during copy")
 			}
+			_, digest, err := hashFile(ctx, target)
+			if err != nil {
+				return err
+			}
+			driver.Files[filepath.FromSlash(path)] = digest
 			if strings.EqualFold(filepath.Ext(path), ".inf") {
 				infCount++
 				if infCount > 32 {

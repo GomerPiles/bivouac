@@ -170,7 +170,7 @@ function Enable-PnpDevice {param($InstanceId,[switch]$Confirm)
  $script:fallbackCalls++;if($data.fallback_fail){throw 'fixture fallback'}
 }
 function Get-WindowsDriver {param([switch]$Online,[switch]$All) if($data.packages){[pscustomobject]@{OriginalFileName='D:\Fixture\AppSandboxVDD.inf'}}}
-function Test-Path {param($LiteralPath) if($LiteralPath -ne 'fixture-drivers'){throw 'unexpected path'};return $data.drivers}
+function Test-Path {param($LiteralPath) return $data.drivers}
 function Start-Sleep {param($Milliseconds)}
 $drivers='fixture-drivers';$videoDiagnostics=@{}
 `

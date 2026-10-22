@@ -3,17 +3,13 @@
 package imagefactory
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -125,10 +121,10 @@ func TestInspectionPreservesPartialFailure(t *testing.T) {
 		if !output || !strings.Contains(script, "Read-FactoryFiles") || data.(map[string]string)["guest_user"] != "imageuser" {
 			t.Fatal("wrong inspection path")
 		}
-		return []byte(`{"failure_step":70,"image_state_kind":"generalized_to_oobe","executables":{"agent.exe":"public-hash"}}`), &HostScriptError{Step: 70}
+		return []byte(`{"failure_step":70,"image_state_kind":"generalized_to_oobe","agent_present":true,"agent_sha256":"public-hash"}`), &HostScriptError{Step: 70}
 	}
 	facts, err := inspectOwned(context.Background(), testConfig(), r, false, run)
-	if facts == nil || facts.FailureStep != 70 || facts.Executables["agent.exe"] != "public-hash" || err == nil {
+	if facts == nil || facts.FailureStep != 70 || facts.AgentSHA256 != "public-hash" || err == nil {
 		t.Fatal("partial inspection facts discarded")
 	}
 }
@@ -161,12 +157,12 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 	for _, state := range []string{"absent", "unconfigured", "configured", "residue", "incomplete", "invalid", "guest state"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
-			for _, dir := range []string{"Windows/AppSandbox", "ProgramData/Bivouac/ImagePolicy"} {
+			for _, dir := range []string{"Program Files/Bivouac", "ProgramData/Bivouac/ImagePolicy"} {
 				if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := os.WriteFile(filepath.Join(root, "Windows/AppSandbox/agent.exe"), []byte("public-component"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "Program Files/Bivouac/bivouac.exe"), []byte("public-component"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if state != "absent" {
@@ -225,7 +221,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 			if state == "guest state" {
 				want = "unconfigured"
 			}
-			if facts.RunnerState != want || facts.GuestStatePresent != (state == "guest state") || !facts.BivouacPresent || facts.Executables["agent.exe"] != hashBytes([]byte("public-component")) {
+			if facts.RunnerState != want || facts.GuestStatePresent != (state == "guest state") || !facts.BivouacPresent || facts.AgentSHA256 != hashBytes([]byte("public-component")) {
 				t.Fatal("incorrect offline facts")
 			}
 			if state == "residue" {
@@ -239,12 +235,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 	if !strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac\Guest'`) || strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac',`) {
 		t.Fatal("sanitation rejects image policy state")
 	}
-	data := []byte(`{"value":"C:\\Program Files\\OpenSSH\\sshd.exe --opaque public-argument.exe"}`)
-	result := runTestPS(t, (videoFacts+offlineFiles)+`; $d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{image_path='';image_path_redacted=$false};Set-PublicImagePath $d.value $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress))`, data)
-	var service ServiceFact
-	if json.Unmarshal([]byte(result), &service) != nil || service.ImagePath != `C:\Program Files\OpenSSH\sshd.exe` || !service.ImagePathRedacted {
-		t.Fatal("unrecognized service arguments escaped public-path filter")
-	}
+
 }
 
 func TestOfflineEligibility(t *testing.T) {
@@ -264,7 +255,7 @@ func TestOfflineEligibility(t *testing.T) {
 	good.GuestUserExists = nil
 	present := true
 	good.VDDPresent = &present
-	good.VDDPackagePresent = &present
+
 	if !good.Eligible() {
 		t.Fatal("informational SAM/VDD facts blocked template eligibility")
 	}
@@ -345,47 +336,5 @@ func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
 	}
 	if _, err = missingOwner(""); err != nil {
 		t.Fatal("optional owner record required")
-	}
-}
-
-func TestAgentZeroCopies(t *testing.T) {
-	host, guest := net.Pipe()
-	defer func() { _ = host.Close(); _ = guest.Close() }()
-	done := make(chan error, 1)
-	go func() {
-		if _, err := io.WriteString(guest, "hello\n"); err != nil {
-			done <- err
-			return
-		}
-		r := bufio.NewReader(guest)
-		for range 3 {
-			if _, err := r.ReadString('\n'); err != nil {
-				done <- err
-				return
-			}
-		}
-		if _, err := io.WriteString(guest, "gpu_copy_done:0\nidd_status:not_found\nssh_ready\n"); err != nil {
-			done <- err
-			return
-		}
-		key, err := r.ReadString('\n')
-		if err != nil {
-			done <- err
-			return
-		}
-		if key != "ssh_deploy_key public-key\n" {
-			done <- errors.New("unexpected public-key frame")
-			return
-		}
-		_, err = io.WriteString(guest, "ssh_key_deployed\n")
-		done <- err
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key")); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
 	}
 }

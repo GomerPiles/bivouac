@@ -3,145 +3,44 @@
 package imagefactory
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/GomerPiles/bivouac/internal/hcs"
-	"github.com/GomerPiles/bivouac/internal/hvsock"
-	"github.com/GomerPiles/bivouac/internal/winguest"
-	"golang.org/x/crypto/ssh"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
+	"github.com/GomerPiles/bivouac/internal/windesktop"
 )
 
-// initializeDrivers ports the spike protocol; production Initialize deliberately
-// declines these copies. Keep the connection alive through guest preparation.
-func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key []byte) error {
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	reader := bufio.NewReaderSize(conn, 4096)
-	read := func() (string, error) {
-		d := time.Now().Add(30 * time.Second)
-		if end, ok := ctx.Deadline(); ok && end.Before(d) {
-			d = end
-		}
-		if conn.SetReadDeadline(d) != nil {
-			return "", errors.New("agent deadline unavailable")
-		}
-		b, err := reader.ReadSlice('\n')
-		if err != nil {
-			return "", errors.New("bounded guest agent line unavailable")
-		}
-		return strings.TrimSpace(string(b)), nil
+type boundedGuestOutput struct{ data []byte }
+
+func (b *boundedGuestOutput) Write(p []byte) (int, error) {
+	if len(b.data)+len(p) > 8192 {
+		return 0, errors.New("guest output exceeds bound")
 	}
-	write := func(s string) error {
-		if conn.SetWriteDeadline(time.Now().Add(10*time.Second)) != nil {
-			return errors.New("agent write deadline unavailable")
-		}
-		_, err := io.WriteString(conn, s)
-		if err != nil {
-			return errors.New("agent request failed")
-		}
-		return nil
-	}
-	gpu := func() error {
-		var b strings.Builder
-		fmt.Fprintf(&b, "gpu_query_response:%d\n", len(drivers))
-		for i, d := range drivers {
-			fmt.Fprintf(&b, "AppSandbox.Drv.%d|C:\\Windows\\System32\\HostDriverStore\\FileRepository\\%s|\n", i, filepath.Base(d))
-		}
-		return write(b.String())
-	}
-	hello, err := read()
-	if err != nil || hello != "hello" {
-		return errors.New("guest agent greeting unavailable")
-	}
-	if err = gpu(); err != nil {
-		return err
-	}
-	if err = write("1:ssh_enable\n"); err != nil {
-		return err
-	}
-	keySent, keyReady, vddAbsent, gpuReady := false, false, false, false
-	for readBytes, lines := 0, 0; readBytes < 1<<20 && lines < 4096; lines++ {
-		line, err := read()
-		if err != nil {
-			return err
-		}
-		readBytes += len(line) + 1
-		switch line {
-		case "gpu_query":
-			if err = gpu(); err != nil {
-				return err
-			}
-		case "ssh_ready", "1:ssh_ready":
-			if !keySent {
-				if err = write("ssh_deploy_key " + string(key) + "\n"); err != nil {
-					return err
-				}
-				keySent = true
-			}
-		case "ssh_key_deployed":
-			if !keySent {
-				return errors.New("unsolicited key acknowledgement")
-			}
-			keyReady = true
-		case "ssh_failed", "1:ssh_failed", "ssh_key_failed", "service_stopping", "os_shutdown":
-			return errors.New("guest agent initialization failed")
-		}
-		if strings.HasPrefix(line, "idd_status:") {
-			if line != "idd_status:not_found" {
-				return errors.New("guest agent did not confirm VDD absence")
-			}
-			vddAbsent = true
-		}
-		if line == "hyperv_video:disabled" {
-			return errors.New("guest agent disabled synthetic video")
-		}
-		if strings.HasPrefix(line, "gpu_copy_error:") || strings.HasPrefix(line, "gpu_device_failed:") {
-			return errors.New("guest GPU driver copy failed")
-		}
-		if count, ok := strings.CutPrefix(line, "gpu_copy_done:"); ok {
-			n, e := strconv.ParseUint(count, 10, 32)
-			if e != nil || n > 8192 {
-				return errors.New("invalid GPU copy count")
-			}
-			gpuReady = true
-		}
-		if keyReady && vddAbsent && gpuReady {
-			return nil
-		}
-	}
-	return errors.New("guest agent transcript exceeds bound")
+	b.data = append(b.data, p...)
+	return len(p), nil
 }
 
-func dialGuest(ctx context.Context, runtimeID, service string) (net.Conn, error) {
-	vm, err := hvsock.ParseGUID(runtimeID)
-	if err != nil {
-		return nil, err
-	}
-	svc, err := hvsock.ParseGUID(service)
-	if err != nil {
-		return nil, err
-	}
+func waitAgent(ctx context.Context, dial guestagent.Dialer) error {
 	for {
-		attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn, e := hvsock.Dial(attempt, hvsock.Addr{VMID: vm, ServiceID: svc})
+		attempt, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := guestagent.Run(attempt, dial, []string{guestagent.WindowsPath, "version"}, nil, io.Discard)
 		cancel()
-		if e == nil {
-			return conn, nil
+		if err == nil {
+			return nil
+		}
+		var version *guestagent.VersionError
+		if errors.As(err, &version) {
+			return errors.New("image agent protocol mismatch")
 		}
 		select {
 		case <-ctx.Done():
-			return nil, errors.New("guest service connection timed out")
-		case <-time.After(time.Second):
+			return errors.New("image agent unavailable")
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 }
@@ -171,47 +70,21 @@ func prepareUntilExit(ctx context.Context, wait, prepare func(context.Context) e
 	return errors.Join(err, context.Cause(work))
 }
 
-func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error {
-	identity, err := winguest.NewIdentity()
-	if err != nil {
+func prepareGuest(ctx context.Context, c Config, r *record) error {
+	dial := guestagent.DialHvsock(r.RuntimeID)
+	return prepareGuestWithDial(ctx, c, r, dial)
+}
+
+func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestagent.Dialer) error {
+	if err := waitAgent(ctx, dial); err != nil {
 		return err
 	}
-	defer identity.Clear()
-	conn, err := dialGuest(ctx, r.RuntimeID, winguest.AgentService)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	if err = initializeDrivers(ctx, conn, c.Drivers, identity.PublicKey); err != nil {
-		return err
-	}
-	transport, err := dialGuest(ctx, r.RuntimeID, winguest.SSHService)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = transport.Close() }()
-	client, _, err := winguest.Connect(ctx, transport, c.GuestUser, identity, func(string) error {
-		s, e := api.Open(ctx, r.Name)
-		if e != nil {
-			return errors.New("build guest identity unavailable")
-		}
-		defer s.Close()
-		p, e := s.Properties(ctx)
-		if e != nil {
-			return e
-		}
-		return prove(r, p, true)
-	})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
 	data := map[string]any{"name": r.Name, "user": c.GuestUser, "sha256": r.Manifest.ProbeSHA256, "script_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "require_setup": true, "prepared": false}
-	b, err := guestRun(ctx, client, validateEntry, data)
+	b, err := guestRun(ctx, dial, validateEntry, data)
 	if err != nil {
 		return errors.Join(errors.New("guest desktop validation failed"), err)
 	}
-	var topology winguest.Topology
+	var topology windesktop.Topology
 	if json.Unmarshal(b, &topology) != nil {
 		return errors.New("invalid topology report")
 	}
@@ -220,7 +93,7 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 		return err
 	}
 	// VersionInfo reads no runner credentials and does not start the listener.
-	b, err = guestRun(ctx, client, `param($data);$helper='C:\Windows\AppSandbox\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
+	b, err = guestRun(ctx, dial, `param($data);$helper='C:\ProgramData\Bivouac\Image\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
 	if err != nil {
 		return errors.New("runner verification failed")
 	}
@@ -236,34 +109,35 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 		r.Manifest.RunnerVersion = string(b)
 	}
 	data = map[string]any{"name": r.Name, "user": c.GuestUser, "probe_sha256": r.Manifest.ProbeSHA256, "validation_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "sanitize_sha256": hashBytes([]byte(imageSanitize))}
-	b, err = guestRun(ctx, client, sanitizeEntry, data)
+	b, err = guestRun(ctx, dial, sanitizeEntry, data)
 	if err != nil || string(b) != "sanitized-shutdown-scheduled" {
 		return errors.New("guest sanitation and shutdown acknowledgement failed")
 	}
 	return nil
 }
 
-func guestRun(ctx context.Context, client *ssh.Client, script string, data any) ([]byte, error) {
+func guestRun(ctx context.Context, dial guestagent.Dialer, script string, data any) ([]byte, error) {
 	b, err := guestInput(script, data)
 	if err != nil {
 		return nil, err
 	}
-	out, err := winguest.Run(ctx, client, "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encodedPowerShell(guestBootstrap), b, 8192)
+	var out boundedGuestOutput
+	err = guestagent.Run(ctx, dial, []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(guestBootstrap)}, bytes.NewReader(b), &out)
 	if err != nil {
-		var exit *ssh.ExitError
-		if errors.As(err, &exit) && exit.ExitStatus() > 0 && exit.ExitStatus() <= 255 {
-			return nil, fmt.Errorf("fixed guest operation exited at step %d", exit.ExitStatus())
+		var exit *guestagent.ExitError
+		if errors.As(err, &exit) && exit.Code > 0 && exit.Code <= 255 {
+			return nil, fmt.Errorf("fixed guest operation exited at step %d", exit.Code)
 		}
 		return nil, errors.New("fixed guest operation failed")
 	}
-	return out, nil
+	return out.data, nil
 }
 
 func factoryDisplayReportOK(b []byte) error {
 	if !renderOK(b) {
 		return errors.New("guest desktop rendering checks did not all pass")
 	}
-	var topology winguest.Topology
+	var topology windesktop.Topology
 	if json.Unmarshal(b, &topology) != nil {
 		return errors.New("invalid topology report")
 	}

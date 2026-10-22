@@ -31,7 +31,6 @@ internal/winhost     Windows host checks: protected storage, private staging, sy
 internal/hcs         typed Host Compute Service binding for direct Windows guests
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
 internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
-internal/winguest    transitional App Sandbox/SSH client for the image factory and vmhost lab only
 internal/winrunner   Windows guest runner adapter (`guest windows`), fixed Go modes
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
@@ -776,8 +775,7 @@ The runtime provider reaches guests only through bivouac's guest agent over
 HvSocket. It requests only `guestagent.ServiceID`; there is no SSH, App Sandbox
 protocol, PowerShell readiness path or host-key pin. Old images are unsupported;
 rollback uses the previous binary and image. The image factory and vmhost lab
-batch still use App Sandbox's agent and SSH through transitional `winguest`
-until phase 5. They do not yet produce the image this provider requires.
+batch use the same bivouac agent and service ID.
 HCS synthetic video supplies the desktop display alongside GPU-PV rendering.
 
 The Windows `guest-agent --user <account>` transport uses protocol version 1 on service
@@ -804,7 +802,7 @@ already deploy an SSH key and execute
 as the guest administrator; the new transport executes as that same user
 directly. No key deployment, host-key pins or per-guest secrets remain. The
 image installs the matching agent at `guestagent.WindowsPath`
-(`C:\Program Files\Bivouac\bivouac.exe`); phase 5 owns factory registration.
+(`C:\Program Files\Bivouac\bivouac.exe`); the factory registers its logon task.
 
 The provider delivers its matching Windows adapter and uses its Go `preflight`,
 `prepare`, `start`, `stop`, `clock` and `cache-listen` modes. The receiver
@@ -1092,48 +1090,62 @@ ACL and deny-write handles, not hashed per job.
   child must show a template generalized to OOBE with no answer-file pointer,
   no configured runner and no bivouac job state. Its facts are public and
   recorded; answer-file values and file contents are never read into them.
-- **Build:** one elevated foreground process boots the child with GPU-PV and
-  no NIC. Windows setup runs from a generated answer file and setup media
-  with pinned App Sandbox components. The guest agent copies the host's GPU
-  driver into the image, so runtime guests decline driver copies. The build
-  checks hardware rendering, sanitizes (no registration, setup files or
-  authorized keys; a fresh random console password held only as the LSA
-  autologon secret; fresh SSH host keys on each guest's boot) and requires a
-  graceful exit. It then flattens child and copy into the output and writes
-  the manifest last.
-- **Manifest:** source, asset and output hashes, the guest identity the
-  provider needs, the host GPU driver versions the image was built with, and
-  the lab batch's probe, validation and autologon pins. It also records the
-  image's fixed numeric/boolean topology observations.
-- **Guest display:** every image keeps the agent, input/display helpers and
-  GPU-PV driver copy, but disables/stops the agent during specialize, removes
-  every AppSandboxVDD root device (including phantom nodes) and driver-store
-  package matched by original INF name, deletes its adjacent `drivers`
-  directory (including devcon), and enables the Hyper-V synthetic video device
-  before Windows setup's following boot.
-  For every matching video node (including phantom nodes), specialize clears
-  only CONFIGFLAG_DISABLED in existing global/config-specific flags, then uses
-  pnputil enable with an Enable-PnpDevice fallback. Device registry components
-  are opened without following links and hardware identity is checked before
-  writes. FirstLogon retries once for problem 22 and verifies absence and the
-  video's enabled/started state before restarting the agent; it preserves a
-  failed or incomplete specialize status.
-  Numbered status facts distinguish video startup (35), remaining VDD nodes
-  (36), packages (37) and driver directory (38). Bounded numeric snapshots before
-  and after specialize enable, and at FirstLogon, record node presence, problem
-  code, DevNodeStatus, global/config-specific flags and enable outcomes, carried
-  through offline inspection into the build record/error. FirstLogon failure
-  writes its status and powers off; an exit watcher cancels guest preparation,
-  retaining the same owned cleanup and offline inspection. Setup assets include
-  the agent and two helpers, with optional OpenSSH/runner archives; all VDD/devcon
-  assets are unsupported. Template VDD inspection facts remain informational.
-  Without devcon the reference agent cannot repair VDD
-  or disable synthetic video; the pinned binary's behavior remains a live
-  validation gate. Initialization requires `idd_status:not_found`
-  and acknowledged key deployment, and rejects any other IDD status or
-  `hyperv_video:disabled`. The provider accepts only this factory's prepared
-  images. Rollback uses the previously deployed binary and previously built
-  image together; this branch has no path for earlier images.
+- **Offline staging:** the factory installs its own executable at
+  `guestagent.WindowsPath`, recording SHA-256 and `guestagent.Version` in the
+  manifest. The installation grants SYSTEM, Administrators and TrustedInstaller
+  full control and Users read/execute, without inherited user write access.
+  A bounded, protected snapshot of each configured GPU driver tree is copied
+  into `Windows\System32\HostDriverStore\FileRepository\<directory name>`.
+  Exact file/directory inventories and SHA-256 checks refuse links, incomplete
+  or changed snapshots. A temporary sibling is renamed only after verification;
+  ownership and inherited ACLs come from the guest repository, never the host.
+  Existing destination trees are refused. The template remains read-only.
+- **Build:** one elevated foreground process boots the child with GPU-PV,
+  no NIC or Plan9 shares, and only `guestagent.ServiceID` with the base
+  SYSTEM/Administrators descriptor. Validation, runner check and sanitation
+  use bounded agent commands with fixed PowerShell argument arrays and framed
+  stdin, exclusively during build/lab work. Guest output never enters errors.
+  The build checks hardware D3D11, presentation and pixel readback, requires
+  graceful shutdown, flattens the child and writes the manifest last.
+- **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the
+  only optional setup asset (required when the template has no runner).
+  No legacy agent, helper, display-driver or OpenSSH installer is accepted.
+  Bivouac build scripts, helpers, markers and temporary probes live under
+  protected `C:\ProgramData\Bivouac\Image`.
+- **Specialize:** before FirstLogon, stop/delete the legacy agent service,
+  remove every legacy VDD device (including phantom nodes) and its driver
+  package, and delete the entire legacy component directory with bounded
+  traversal that refuses links. Stop/delete both OpenSSH services; uninstall
+  registered OpenSSH MSI products by bounded registry display-name/product-code
+  lookup and fixed msiexec arguments; delete remaining program directories,
+  server state, authorization files and the old host-key boot task.
+  Every removal has a numbered failure step. Synthetic video enable retains
+  the existing identity checks, ConfigFlags handling and numeric diagnostics.
+- **FirstLogon:** preserve specialize failures, retry synthetic video problem
+  22 once and verify component removal/video startup. Recover error 43 only
+  on `vrd.inf` GPU-PV display devices with a bounded device restart. The
+  reference copy path used disable/enable for those devices after an online
+  copy; offline placement precedes initial device startup. Its optional GL,
+  Vulkan and NVIDIA runtime provisioning is not reproduced by the driver-only
+  factory. D3D11 validation does not establish those other APIs.
+  Register `bivouac-guest-agent` for the configured user's logon with Interactive,
+  Highest, three one-minute failure restarts and no execution time limit.
+  The action executes the installed binary's `guest-agent --user <user>`
+  directly; start the task for the build session. No PowerShell runs in the
+  persistent task action.
+- **Sanitation:** rotate the console password into the LSA autologon secret;
+  remove answer/setup residue, temporary probes, disposable Guest state and
+  agent logs; retain the agent logon task. Agent logs use separate protected
+  `C:\ProgramData\Bivouac\Agent` storage with delete-shared files, so sanitation
+  can remove build logs without interrupting the command transport. No SSH
+  configuration or host-key generation is part of sanitation or runtime boot.
+- **Inspection/manifest:** template inspection refuses an existing agent
+  installation, logon task or Guest directory. Public agent presence/hash/task
+  facts replace legacy service and package facts; template VDD presence remains
+  informational. The manifest records source/asset/output/agent hashes, agent
+  protocol, guest identity, driver INF versions, probe/validation/autologon pins
+  and bounded topology observations. Per-file staging inventories are build-local
+  and excluded from bounded durable records.
 - **Single-display invariant:** exactly one attached-to-desktop display must
   be primary. The hash-pinned validation script carries an inline topology
   probe launched by an interactive scheduled task in the console user's

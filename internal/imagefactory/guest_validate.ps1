@@ -25,12 +25,12 @@ public static class SpikeConsole {
   }
   $setup=Get-ItemProperty 'HKLM:\SYSTEM\Setup'
   $explorer=@(Get-Process explorer -ErrorAction SilentlyContinue | Where-Object SessionId -eq $session)
-  if((!$data.require_setup -or (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-setup-complete.json'))) -and $matched -and $setup.SystemSetupInProgress -eq 0 -and $setup.OOBEInProgress -eq 0 -and $explorer.Count){$stable++}else{$stable=0}
+  if((!$data.require_setup -or (Test-Path -LiteralPath (Join-Path 'C:\ProgramData\Bivouac\Image' 'hcs-spike-setup-complete.json'))) -and $matched -and $setup.SystemSetupInProgress -eq 0 -and $setup.OOBEInProgress -eq 0 -and $explorer.Count){$stable++}else{$stable=0}
   if($stable -ge 5){break}
   Start-Sleep -Milliseconds 500
  }
  if($stable -lt 5){exit 12}
- $base='C:\ProgramData\BivouacHcsSpike'
+ $base='C:\ProgramData\Bivouac\Image\Probe'
  if(Test-Path -LiteralPath $base){exit 13}
  $step=21
  New-Item -ItemType Directory -Path $base | Out-Null
@@ -38,11 +38,11 @@ public static class SpikeConsole {
  $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
  Set-Acl -LiteralPath $base -AclObject $acl
  if($data.prepared -eq $true){
-  $marker=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-prepared.json'
+  $marker=Join-Path 'C:\ProgramData\Bivouac\Image' 'hcs-spike-prepared.json'
   if(!(Test-Path -LiteralPath $marker -PathType Leaf) -or ((Get-Item -LiteralPath $marker).Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Get-Item -LiteralPath $marker).Length -gt 4096){exit 21}
   $image=Get-Content -LiteralPath $marker -Raw|ConvertFrom-Json
   if($image.name -ine $data.name -or $image.user -ine $data.user -or $image.probe_sha256 -ine $data.sha256 -or $image.validation_sha256 -ine $data.script_sha256 -or $image.autologon_sha256 -ine $data.autologon_sha256){exit 21}
-  $secretHelper=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-autologon.ps1'
+  $secretHelper=Join-Path 'C:\ProgramData\Bivouac\Image' 'hcs-spike-autologon.ps1'
   if((Get-FileHash -LiteralPath $secretHelper -Algorithm SHA256).Hash -ine $data.autologon_sha256){throw 'Autologon helper integrity differs'}
   . $secretHelper
   $random=New-Object byte[] 32
@@ -60,7 +60,7 @@ public static class SpikeConsole {
  }
  $step=22
  $probe=Join-Path $base 'render.exe'
- Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox\hcs-render-probe.exe') -Destination $probe
+ Copy-Item -LiteralPath (Join-Path 'C:\ProgramData\Bivouac\Image' 'hcs-render-probe.exe') -Destination $probe
  if((Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash -ine $data.sha256){exit 14}
  # Read only fixed display/GPU-PV readiness facts. Never emit PnP identities,
  # device names, driver paths, or arbitrary WMI/PowerShell diagnostics.
@@ -251,7 +251,7 @@ public static class DesktopProbe {
  if(Get-ScheduledTask -TaskName $topologyTask -ErrorAction SilentlyContinue){exit 28}
  $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
  # Task Scheduler exposes a structured action field; every argument is fixed.
- $action=New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -File C:\ProgramData\BivouacHcsSpike\topology.ps1' -WorkingDirectory $base
+ $action=New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -File C:\ProgramData\Bivouac\Image\Probe\topology.ps1' -WorkingDirectory $base
  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
  Register-ScheduledTask -TaskName $topologyTask -Principal $principal -Action $action -Settings $settings | Out-Null
  try {

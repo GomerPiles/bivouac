@@ -24,7 +24,7 @@ type agentLog struct {
 }
 
 func newAgentLog(dir *guestDir) (*agentLog, error) {
-	f, err := dir.open("agent.log", windows.GENERIC_WRITE, windows.OPEN_ALWAYS, windows.FILE_SHARE_READ)
+	f, err := dir.open("agent.log", windows.GENERIC_WRITE, windows.OPEN_ALWAYS, windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func (l *agentLog) rotate() error {
 	if err := root.Rename("agent.log", "agent.log.1"); err != nil {
 		return err
 	}
-	l.file, err = l.dir.open("agent.log", windows.GENERIC_WRITE, windows.CREATE_NEW, windows.FILE_SHARE_READ)
+	l.file, err = l.dir.open("agent.log", windows.GENERIC_WRITE, windows.CREATE_NEW, windows.FILE_SHARE_READ|windows.FILE_SHARE_DELETE)
 	l.size = 0
 	return err
 }

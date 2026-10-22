@@ -16,9 +16,7 @@ import (
 func testConfig() Config {
 	h := strings.Repeat("a", 64)
 	c := Config{Source: `D:\Templates\base\disk.vhdx`, SourceSHA256: h, GuestUser: "imageuser", CPU: 4, MemoryMB: 8192, ImageRoot: `D:\Images`, TimeoutSeconds: 900, RenderProbe: PinnedFile{Source: `D:\Assets\render.exe`, SHA256: h}, Drivers: []string{`C:\Windows\System32\DriverStore\FileRepository\display.inf_amd64_example`}}
-	for _, n := range []string{"appsandbox-agent.exe", "appsandbox-input.exe", "appsandbox-displays.exe"} {
-		c.SetupAssets = append(c.SetupAssets, Asset{Name: n, PinnedFile: PinnedFile{Source: `D:\Assets\` + n, SHA256: h}})
-	}
+	c.SetupAssets = []Asset{{Name: "RUNNER.ZIP", PinnedFile: PinnedFile{Source: `D:\Assets\runner.zip`, SHA256: h}}}
 	return c
 }
 func TestConfig(t *testing.T) {
@@ -34,7 +32,7 @@ func TestConfig(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*Config){
-		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets[1] = c.SetupAssets[0] }, "asset missing": func(c *Config) { c.SetupAssets = c.SetupAssets[:2] }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
+		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets = append(c.SetupAssets, c.SetupAssets[0]) }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := testConfig()
@@ -60,9 +58,9 @@ func TestConfig(t *testing.T) {
 			t.Fatal("invalid input or error echo")
 		}
 	}
-	c.SetupAssets = append(c.SetupAssets, Asset{Name: "RUNNER.ZIP", PinnedFile: PinnedFile{Source: `D:\Assets\runner.zip`, SHA256: c.SourceSHA256}})
+	c.SetupAssets = nil
 	if c.Validate() != nil {
-		t.Fatal("optional runner asset rejected")
+		t.Fatal("optional assets required")
 	}
 }
 func TestGuestNameAndPins(t *testing.T) {
@@ -146,7 +144,7 @@ func TestScriptConstantsMatchLF(t *testing.T) {
 	if err != nil || string(b) != offlineFiles || strings.ContainsRune(offlineFiles, '\r') {
 		t.Fatal("regenerate LF offline facts script")
 	}
-	for name, content := range map[string]string{"make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
+	for name, content := range map[string]string{"offline_payload.ps1": offlinePayload, "make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -166,7 +164,7 @@ func TestManifestPublicFields(t *testing.T) {
 	if json.Unmarshal(b, &fields) != nil {
 		t.Fatal("manifest JSON")
 	}
-	for _, required := range []string{"build_id", "guest_name", "guest_user", "source", "source_sha256", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
+	for _, required := range []string{"agent_sha256", "agent_version", "build_id", "guest_name", "guest_user", "source", "source_sha256", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
 		if _, ok := fields[required]; !ok {
 			t.Fatal("missing", required)
 		}
@@ -181,13 +179,14 @@ func TestManifestPublicFields(t *testing.T) {
 }
 func TestRunnerInput(t *testing.T) {
 	c := testConfig()
+	c.SetupAssets = nil
 	for _, state := range []string{"absent", "unconfigured"} {
 		facts := Inspection{RunnerState: state}
 		if (facts.RunnerInput(c) != nil) != (state == "absent") {
 			t.Fatal("conditional runner archive requirement")
 		}
 		withArchive := c
-		withArchive.SetupAssets = append(append([]Asset(nil), c.SetupAssets...), Asset{Name: "runner.zip"})
+		withArchive.SetupAssets = []Asset{{Name: "runner.zip"}}
 		if facts.RunnerInput(withArchive) != nil {
 			t.Fatal("pinned runner archive not recognized")
 		}

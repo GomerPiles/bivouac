@@ -98,7 +98,7 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader) error {
 	if !check() {
 		return errors.New("agent session refused")
 	}
-	dir, err := openGuestDirectory(guestDirectory)
+	dir, err := openGuestDirectory(agentLogDirectory)
 	if err != nil {
 		return errors.New("agent storage unavailable")
 	}

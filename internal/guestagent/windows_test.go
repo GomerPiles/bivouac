@@ -388,6 +388,32 @@ func TestAgentLogBoundedAndProtected(t *testing.T) {
 	}
 }
 
+func TestAgentLogCanBeSanitizedWhileServing(t *testing.T) {
+	d, err := openGuestDirectory(receiveDirectory(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	l, err := newAgentLog(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	if _, err := l.Write([]byte("fixed_category\n")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(d.path, "agent.log")
+	if err := os.Remove(path); err != nil {
+		t.Fatal("cannot sanitize open agent log", err)
+	}
+	if _, err := l.Write([]byte("fixed_category\n")); err != nil {
+		t.Fatal("serving log failed after sanitation", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatal("build log remains after sanitation")
+	}
+}
+
 func helperArgs(mode string, args ...string) []string {
 	return append([]string{os.Args[0], "-test.run=^TestWindowsCommandHelper$", "--", "--guest-helper", mode}, args...)
 }
