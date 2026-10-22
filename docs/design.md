@@ -30,8 +30,8 @@ internal/winhost     Windows host checks: protected storage, private staging, sy
 internal/hcs         typed Host Compute Service binding for direct Windows guests
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
 internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
-internal/winguest    prepared Windows guest client: App Sandbox guest agent setup, SSH over HvSocket
-internal/winrunner   Windows guest runner adapter (`guest windows`) and its fixed control scripts
+internal/winguest    transitional App Sandbox/SSH client for the image factory and vmhost lab only
+internal/winrunner   Windows guest runner adapter (`guest windows`), fixed Go modes
 internal/perf        bounded numeric host/guest performance sampling
 internal/cache       bounded objects, authenticated download service, guest client
 internal/redact      credential redaction applied at every sink
@@ -737,14 +737,15 @@ native dispatch; installation must use the same user as the credential owner.
 ### Windows guests through HCS
 
 Bivouac drives the Host Compute Service (`internal/hcs`) directly.
-Guests retain App Sandbox's guest agent, input/display helpers, OpenSSH and
-the PowerShell boot task, but the image factory removes App Sandbox's display
-driver. HCS synthetic video supplies the sole desktop display, alongside GPU-PV
-for hardware rendering. A later increment replaces the guest agent with
-bivouac's own agent over HvSocket.
+The runtime provider reaches guests only through bivouac's guest agent over
+HvSocket. It requests only `guestagent.ServiceID`; there is no SSH, App Sandbox
+protocol, PowerShell readiness path or host-key pin. Old images are unsupported;
+rollback uses the previous binary and image. The image factory and vmhost lab
+batch still use App Sandbox's agent and SSH through transitional `winguest`
+until phase 5. They do not yet produce the image this provider requires.
+HCS synthetic video supplies the desktop display alongside GPU-PV rendering.
 
-The Windows `guest-agent --user <account>` transport is implemented separately
-from that provider switch. It uses protocol version 1 on service
+The Windows `guest-agent --user <account>` transport uses protocol version 1 on service
 `54f2299e-45e4-4605-b3ed-03d3d5fbea6a`, with a parent-only HvSocket listener
 and no IP listener. At startup and each connection it requires the configured
 account's SID, the active nonzero console session, and an elevated full or
@@ -761,15 +762,21 @@ It verifies up to 1 GiB before atomic publication, refuses links/alternate
 streams and the `launched` marker, and uses delete-on-close temporary files.
 The adapter must hold the same exclusive `.receive.lock` while writing that
 marker. The host dialer uses cancellable 3-second attempts and 500 ms pauses.
-When the provider switches, its existing per-service connect descriptor remains
-the authorization boundary, equivalent to the macOS 0600 agent socket: any
-process of an admitted host account can already deploy an SSH key and execute
+The existing per-service connect descriptor admits SYSTEM, Administrators and
+the creating manager's account. It is the authentication boundary, equivalent
+to the macOS 0600 agent socket: any process of an admitted host account can
+already deploy an SSH key and execute
 as the guest administrator; the new transport executes as that same user
-directly. Provider admission and image registration are later phases.
+directly. No key deployment, host-key pins or per-guest secrets remain. The
+image installs the matching agent at `guestagent.WindowsPath`
+(`C:\Program Files\Bivouac\bivouac.exe`); phase 5 owns factory registration.
 
-The delivered Windows adapter also implements Go `preflight`, `prepare`,
-`start`, `stop`, `clock` and `cache-listen` modes for that later switch. The
-current provider still uses its existing scripts and interactive tasks.
+The provider delivers its matching Windows adapter and uses its Go `preflight`,
+`prepare`, `start`, `stop`, `clock` and `cache-listen` modes. The receiver
+contract is the fixed allowlist, exact size and SHA-256; the adapter contract
+is the fixed argv, stdin and bounded JSON/UTC/base64 outputs described here.
+The protocol version is proved before any delivery. Host adapter and provider
+come from the same build; there is no legacy script or task-mode compatibility.
 
 - `preflight` reads `bivouac-config.json` in the protected guest directory,
   checks computer/user identity, console ownership, completed setup/OOBE,
@@ -796,15 +803,16 @@ current provider still uses its existing scripts and interactive tasks.
   exited or never-launched runners are no-ops.
 - `clock` accepts one bounded UTC RFC3339 line on stdin and uses
   `SetSystemTime` directly, returning current UTC. It has no local-time/DST
-  conversion. The current provider's PowerShell clock path is unchanged.
+  conversion. The provider refuses a corrected clock more than 5 s from host UTC.
 - `cache-listen` binds only `127.0.0.1:0`, publishes `cache-port.json` and
   emits the same `{ "port": <number> }` JSON line before engine frames on
-  stdout. The later host adapter must consume that bounded line (preserving
-  any buffered frame bytes), use the port in the existing cache bootstrap URL,
-  and call `engine.Relay` with limit 64. The guest uses `engine.Listen` with
-  that same limit until stream closure. Container relays retain limit 16.
+  stdout. The host consumes exactly that bounded line, uses the port in the
+  cache bootstrap URL, and calls `engine.Relay` with limit 64, dialing an
+  in-process connection to the shared TLS cache handler for each guest connection.
+  The guest uses `engine.Listen` with that same limit until stream closure.
+  Container relays retain limit 16.
   Cache setup/removal files and the agent protocol remain unchanged; this
-  adds no host transport, automatic reconnection or NIC exception.
+  adds no automatic reconnection or NIC exception.
 
 HCS and Windows networking refuse ordinary tokens, so the work splits in two:
 
@@ -859,21 +867,21 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   labels the guest with the controller and instance IDs, which Status and
   List check. The VM host returns only this account's guests. **Stop** and
   **Delete** both destroy the disposable guest.
-- **Guest sessions:** each session generates an in-memory SSH identity and
-  deploys it through the image's guest agent, whose connection stays open.
-  It then authenticates SSH over HvSocket.
-  - The guest's host key fingerprint is public, and is pinned beside
-    manager state. A manager that reconnects, for example after a restart,
-    refuses a different key.
-  - A transport failure drops the session, and the next probe reconnects.
-    These failures are retryable for the manager's bounded grace;
-    authentication and host-key failures are terminal.
-- **Readiness** delivers files by scp to fixed names: first the shared
-  winrunner preflight, then its control script, the configuration and this
-  executable as the guest adapter. Runner status and diagnostics call the
-  adapter directly, without PowerShell, because status runs every few
-  seconds.
-- **JIT** bytes travel only on SSH stdin.
+- **Guest commands:** a per-guest dialer uses the current runtime ID. Every
+  command owns one agent connection; closing it kills that bounded command
+  and ordinary descendants. Transport failures get the manager's bounded grace;
+  version refusal is terminal with fixed unavailable text. Adoption repeats
+  current ownership/running proof and dials again, without any pin file.
+- **Readiness** first proves the agent with a fixed `version` command, retrying
+  transient failures within the readiness bound. Dial attempts are capped at
+  3 s with 500 ms pauses; each proof command is bounded to 15 s. Then it receives
+  configuration, helper and optional runner archive; runs the delivered
+  `bivouac-helper.exe` preflight and prepare; and calls installed `bivouac.exe`
+  clock with host UTC on stdin. Every later adapter command uses
+  `C:\ProgramData\Bivouac\Guest\bivouac.exe`. Status remains one bounded agent
+  command at the existing approximately 2 s polling interval.
+- **JIT** bytes travel only on agent stdin. Neither JIT delivery nor start is
+  replayed after an uncertain outcome.
 - **Startup measurements:** each readiness call emits one Info record with
   fixed numeric millisecond spans and a fixed failure stage when applicable.
   Host-monotonic create-relative milestones exist only when this provider
@@ -882,24 +890,25 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   separately measures cache setup, JIT delivery and process start; the first
   existing status poll observing listening or running records JIT-to-listening
   once. Observations contain no guest text, identity or credential material
-  and add no guest commands, retries or timeout changes. See
+  and add no measurement-only guest commands or polls. See
   [operations](operations.md#direct-hcs-vm-host) for field semantics.
 - **Network:** every create asks for an isolated endpoint. The lease (address,
   gateway, prefix and MAC) goes to the guest in its runner configuration.
   WaitReady still refuses a guest without a lease, because its runner could
   not reach GitHub.
-- **Cache:** after readiness and before JIT delivery, a dedicated SSH client
-  authenticates over HvSocket with the command session's in-memory identity and
-  host-key pin. It serves the shared cache handler through a guest-loopback
-  listener without using the guest NIC or relaxing HCN/VFP isolation. Cache
-  revocation and command cancellation close independent clients. Setup uses
+- **Cache:** after readiness and before JIT delivery, a dedicated agent Duplex
+  command exports a guest-loopback listener without using the guest NIC or
+  relaxing HCN/VFP isolation. It outlives its bounded attachment context and
+  closes on relay loss, grant revocation or service shutdown. Commands and cache
+  use independent connections. TLS/HTTP timeouts and header limits are unchanged.
+  Setup uses
   the shared Windows adapter with the bootstrap on stdin, cleared after use.
   Failed setup revokes the grant and removes partial guest settings before
   upstream fallback; uncertain cleanup refuses JIT. Confirmed deletion or
   absence revokes the grant, and provider Close closes its cache transports.
   Transport loss uses upstream fallback without reattachment.
 
-The official runner starts once through an interactive scheduled task, with
+The official runner starts once through a detached breakaway supervisor, with
 rebuilt machine/user PATH and a default-input-desktop probe. The guest adapter
 records listener PID, executable and process creation time; cancellation
 rechecks that identity before signaling its console. Stop requests official
@@ -907,7 +916,10 @@ runner shutdown, which reports a failed job without calling GitHub's workflow
 cancellation API. Off lets accepted work finish normally. A baseline may contain
 an unconfigured runner, or each clone receives a hash-pinned official runner ZIP.
 Diagnostics use bounded base64 and ZIP extraction that rejects unsafe paths and
-expansion before redacting host sinks. No host directory is mounted.
+expansion before redacting host sinks. No host directory is mounted. The
+detached listener survives the start request and agent/manager restarts;
+status, diagnostics, clock and other ordinary commands remain tied to their
+connections.
 
 The VM host runs either as an optional Windows service or as an elevated
 foreground `bivouac vmhost run` (one UAC prompt per start). Nothing installs the
@@ -1451,11 +1463,12 @@ for Windows host parity with macOS, including its Windows and Linux guests.
 Provider adapters own guest delivery, trust installation, network reachability,
 and native launch setup; implementation alone is not live validation.
 
-Windows-hosted providers use a guest-loopback listener on the existing owned SSH
-transport. The host terminates TLS and serves only the cache HTTP handler through
-SSH channels; it does not relay arbitrary guest connections to host TCP sockets.
-The SSH host key must already be pinned by normal guest preparation, and the
-provider repeats its current admission proof before cache setup or JIT. HCS
+Windows-hosted providers use a guest-loopback listener: HCS exports it through
+the bivouac agent Duplex/engine relay, while Crosvm retains its existing SSH
+transport and pinned host key. The host terminates TLS and serves only the cache
+HTTP handler through these streams; it never relays arbitrary guest connections
+to host TCP sockets. Each provider repeats current admission proof before cache
+setup or JIT. HCS
 checks ownership and running state (quarantine reports stopped); its VM host
 verifies the deny layer during create and reproves it every 10 s, without a
 new synchronous policy check.
@@ -1472,7 +1485,7 @@ CurrentUser root-store consent that fails over SSH. Proxy leaf certificates name
 the granting guest's cache endpoint for a signed revocation list, so Schannel
 keeps its default revocation checks. The fixed `/ca.crl` GET/HEAD endpoint serves
 only public PKI bytes, renews before expiration and contains no capability or
-archive data. It uses the same TLS/SSH transport and opens no additional listener.
+archive data. It uses the same cache transport and opens no additional listener.
 Linux installs clone-only root trust and uses its system
 bundle. Runner children inherit the Actions preload, standard proxy settings and
 curl/Git/Node trust paths without workflow edits. The release bridge lives in the

@@ -1,7 +1,8 @@
 // Package winguest talks to the services already in a prepared Windows guest
 // image over HvSocket: App Sandbox's guest agent, which enables OpenSSH and
 // accepts a public key, and OpenSSH itself. A later increment replaces both
-// with bivouac's own guest agent.
+// with bivouac's own guest agent. This transitional package is for the image
+// factory and vmhost lab batch only until phase 5; runtime HCS uses guestagent.
 //
 // Guest output is untrusted: only fixed protocol lines are interpreted, and no
 // guest text reaches errors, logs or reports.

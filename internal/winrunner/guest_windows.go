@@ -145,7 +145,7 @@ func checkGuestExecutable() error {
 
 // RunGuest is the fixed helper copied into a disposable VM. It never
 // loads the host config or touches its credential store. The agent supplies
-// the interactive session; legacy tasks remain supported until provider cutover.
+// the interactive session; the listener is explicitly detached from the request.
 func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 	if mode == "prepare" {
 		return guestPrepare(ctx, out)
@@ -196,16 +196,6 @@ func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 		}
 		_, err = file.Write(jit)
 		return errors.Join(err, file.Close())
-	case "probe":
-		session, desktop, err := interactiveDesktop()
-		if err != nil {
-			return err
-		}
-		return writeGuestJSON("desktop.json", struct {
-			Ready   bool   `json:"ready"`
-			Session uint32 `json:"session"`
-			Desktop string `json:"desktop"`
-		}{true, session, desktop})
 	case "listener":
 		return guestListener(ctx, cfg)
 	case "status":
@@ -214,8 +204,6 @@ func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(out).Encode(status)
-	case "cancel":
-		return guestCancel(cfg)
 	case "hook":
 		runID, err := strconv.ParseInt(os.Getenv("GITHUB_RUN_ID"), 10, 64)
 		if err != nil || runID < 1 {

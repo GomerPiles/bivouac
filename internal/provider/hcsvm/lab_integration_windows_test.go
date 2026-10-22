@@ -278,7 +278,7 @@ func TestLabNetworkBatch(t *testing.T) {
 	}
 	p, err := New(Options{Name: "lab", ControllerID: labController, Image: labImage, GuestName: *lab.guestName, GuestUser: *lab.guestUser,
 		CPU: labCPU, MemoryMB: labMemoryMB, GPU: true, RunnerDir: *lab.runnerDir, RunnerArchive: *lab.runnerArchive, RunnerSHA256: *lab.runnerSHA256,
-		Helper: *lab.helper, StateDir: t.TempDir()}, host, NewTransport(*lab.guestUser))
+		Helper: *lab.helper}, host, NewTransport())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 		return fail("probes", err)
 	}
 	probeStarted := time.Now()
-	output, err := p.run(ctx, spec.Name, "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encodedPowerShell(probeScript), stdin, 8192)
+	output, err := p.run(ctx, spec.Name, []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(probeScript)}, stdin, 8192)
 	r.Timings["probes"] = ms(time.Since(probeStarted))
 	if err != nil {
 		return fail("probes", err)

@@ -9,9 +9,13 @@ production migration gates remain open.
 
 The Windows guest adapter's Go preflight/prepare/start/stop/clock modes and
 64-connection cache listener have unit coverage, including launch/delivery
-serialization, bounded extraction and relay closure. The HCS provider and images
-still use their existing PowerShell/SSH path. Console/OOBE readiness, native
-static networking, UTC clock setting, listener survival across request/agent
+serialization, bounded extraction and relay closure. The HCS provider now uses
+only bivouac's guest agent over HvSocket, including delivery, runtime commands
+and its 64-connection cache relay. The factory and vmhost lab batch remain on
+App Sandbox/SSH until phase 5; today's images cannot serve the new provider.
+Rollback uses the previous binary and image. This source change is not deployed
+or validated live. Console/OOBE readiness, native static networking, UTC clock
+setting, listener survival across request/agent
 restarts, cancellation and cache behavior on agent-served guests require live
 validation after the provider and factory switches.
 
@@ -20,6 +24,8 @@ validation after the provider and factory switches.
 Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
 `go build ./...`, `go test -race ./...`, cgo-disabled builds for macOS
 arm64/amd64, Windows amd64 and Linux amd64, and PowerShell 5.1/7 parsing.
+HCS/vmhost also pass vet with the `integration` tag; this does not run their
+opt-in live labs.
 Local macOS rootless checks pass `gofmt`, normal/integration `go vet`,
 `golangci-lint`, full race tests, a host build, and Windows
 amd64/Linux arm64 cross-builds. Hosted CI checks each PR revision on macOS,
@@ -153,6 +159,13 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
+The runtime agent switch is code-complete with fake-agent and relay tests;
+live validation is pending a matching image. Tests cover exact receive metadata,
+readiness ordering, command/output bounds, terminal protocol refusal, transient
+recovery, adoption without pins, unchanged status/diagnostics decoding, TLS cache
+requests, fallback cleanup and revocation. The historical live results below
+describe the previous App Sandbox/SSH runtime, not validation of this switch.
+
 Startup timing records and the network lab's matching per-run readiness report
 have fake-host/transport unit coverage, including partial failures, numeric-only
 spans, clock skew and first-observed listening. They have not been collected
@@ -202,8 +215,8 @@ account for about 5 s of that; the rest is PowerShell work in the image.
 
 Built since, covered by tests only: the VM host's authorized pipe API, the
 optional service and its install and control commands, and the `hcs` provider.
-The provider adopts guests by label, pins host keys, reconnects after transport
-loss and delivers files by scp. A real named-pipe
+The previous provider adopted guests by label, pinned host keys, reconnected after
+transport loss and delivered files by scp. A real named-pipe
 test covers caller identification, refusal of anonymous callers and refusal
 of an unprivileged server; the service has since run live (below).
 
@@ -283,7 +296,7 @@ isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
     scripts. The runner now gets a process-scope RemoteSigned policy on such
     a guest.
 
-HCS guests use the host cache through a dedicated authenticated HvSocket SSH
+The previously validated HCS guests used the host cache through a dedicated authenticated HvSocket SSH
 client. The adapter sets up before JIT, removes partial settings before any
 fallback, refuses the launch when that removal is uncertain, and revokes on
 confirmed deletion, confirmed absence or provider shutdown. It passed the

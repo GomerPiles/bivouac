@@ -14,11 +14,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestControlScriptParsesInStockWindowsPowerShell(t *testing.T) {
+func TestRunnerHooksParseInStockWindowsPowerShell(t *testing.T) {
 	directory := t.TempDir()
 	control := filepath.Join(directory, "control.ps1")
 	parser := filepath.Join(directory, "parse.ps1")
-	if err := os.WriteFile(control, []byte(ControlScript+"\n"+jobHook+"\n"+jobCompletedHook), 0o600); err != nil {
+	if err := os.WriteFile(control, []byte(jobHook+"\n"+jobCompletedHook), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	const inspect = `param([string]$SourcePath)

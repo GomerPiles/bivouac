@@ -5,8 +5,6 @@ package hcsvm
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,72 +16,32 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
+	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
-	"golang.org/x/crypto/ssh"
 )
 
-// cacheClientFixture authenticates real SSH and permits only the cache's
-// guest-loopback listener request. HTTP forwarding is covered in cache tests.
-func cacheClientFixture(t *testing.T) (*ssh.Client, <-chan struct{}) {
+// cacheAgentFixture supplies the real port prelude and relay protocol over a pipe.
+func cacheAgentFixture(t *testing.T) (net.Conn, <-chan struct{}) {
 	t.Helper()
-	_, private, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := ssh.NewSignerFromKey(private)
-	if err != nil {
-		t.Fatal("fixture signer unavailable")
-	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	config := &ssh.ServerConfig{PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if !bytes.Equal(key.Marshal(), signer.PublicKey().Marshal()) {
-			return nil, errors.New("fixture key refused")
-		}
-		return nil, nil
-	}}
-	config.AddHostKey(signer)
+	host, guest := net.Pipe()
 	closed := make(chan struct{})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = host.Close(); _ = guest.Close(); _ = listener.Close() })
 	go func() {
 		defer close(closed)
-		socket, err := listener.Accept()
-		if err != nil {
+		defer func() { _ = guest.Close() }()
+		if json.NewEncoder(guest).Encode(struct {
+			Port int `json:"port"`
+		}{listener.Addr().(*net.TCPAddr).Port}) != nil {
 			return
 		}
-		defer func() { _ = socket.Close() }()
-		conn, channels, requests, err := ssh.NewServerConn(socket, config)
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		go func() {
-			for channel := range channels {
-				_ = channel.Reject(ssh.Prohibited, "fixture has no command service")
-			}
-		}()
-		for request := range requests {
-			var binding struct {
-				Address string
-				Port    uint32
-			}
-			if request.Type == "tcpip-forward" && ssh.Unmarshal(request.Payload, &binding) == nil && binding.Address == "127.0.0.1" && binding.Port == 0 {
-				_ = request.Reply(true, ssh.Marshal(struct{ Port uint32 }{43210}))
-			} else {
-				_ = request.Reply(false, nil)
-			}
-		}
+		_ = engine.Listen(t.Context(), guest, listener, 64)
 	}()
-	client, err := ssh.Dial("tcp", listener.Addr().String(), &ssh.ClientConfig{User: "ciuser", Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()), Timeout: 5 * time.Second})
-	if err != nil {
-		t.Fatal("fixture authentication failed")
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	return client, closed
+	return host, closed
 }
-
 func enableCache(t *testing.T, p *Provider) *cache.Service {
 	t.Helper()
 	service, err := cache.Start(t.TempDir(), "127.0.0.1:0", "127.0.0.1", 1<<20, 1<<19, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -107,8 +65,8 @@ func TestCachePartialSetupCleanupBeforeJIT(t *testing.T) {
 			if err := p.WaitReady(t.Context(), spec().Name); err != nil {
 				t.Fatal(err)
 			}
-			client, closed := cacheClientFixture(t)
-			f.cacheClient = func(context.Context) (*ssh.Client, error) { return client, nil }
+			client, closed := cacheAgentFixture(t)
+			f.duplex = func(context.Context) (net.Conn, error) { return client, nil }
 			var bootstrap []byte
 			f.runHook = func(command string, stdin []byte) error {
 				if strings.HasSuffix(command, "cache-setup") {
@@ -131,7 +89,7 @@ func TestCachePartialSetupCleanupBeforeJIT(t *testing.T) {
 			}
 			want := []string{guestHelper + " guest windows cache-setup", guestHelper + " guest windows cache-remove"}
 			if !cleanupFails {
-				want = append(want, guestHelper+" guest windows seed-jit", control+"start")
+				want = append(want, guestHelper+" guest windows seed-jit", guestHelper+" guest windows start")
 			}
 			var commands []string
 			for _, call := range f.calls {
@@ -174,8 +132,8 @@ func TestCacheRevokedOnlyAfterConfirmedDeletionOrClose(t *testing.T) {
 			if err := p.Create(t.Context(), spec()); err != nil {
 				t.Fatal(err)
 			}
-			client, closed := cacheClientFixture(t)
-			f.cacheClient = func(context.Context) (*ssh.Client, error) { return client, nil }
+			client, closed := cacheAgentFixture(t)
+			f.duplex = func(context.Context) (net.Conn, error) { return client, nil }
 			if err := p.StartRunner(t.Context(), spec().Name, []byte("opaque-test-input")); err != nil {
 				t.Fatal(err)
 			}
@@ -236,7 +194,7 @@ func TestCacheAdmissionUsesCurrentGuestProof(t *testing.T) {
 			case "absent":
 				delete(h.guests, spec().Name)
 			}
-			f.cacheClient = func(context.Context) (*ssh.Client, error) {
+			f.duplex = func(context.Context) (net.Conn, error) {
 				t.Fatal("cache opened without current guest proof")
 				return nil, nil
 			}
@@ -249,7 +207,7 @@ func TestCacheAdmissionUsesCurrentGuestProof(t *testing.T) {
 
 func TestNoCacheSetupWithoutSetCache(t *testing.T) {
 	p, _, f := fixture(t, true)
-	f.cacheClient = func(context.Context) (*ssh.Client, error) {
+	f.duplex = func(context.Context) (net.Conn, error) {
 		t.Fatal("cache client opened without SetCache")
 		return nil, nil
 	}
@@ -261,5 +219,31 @@ func TestNoCacheSetupWithoutSetCache(t *testing.T) {
 	}
 	if len(f.calls) != 2 || f.calls[0].command != guestHelper+" guest windows seed-jit" {
 		t.Fatal("disabled cache affected runner startup")
+	}
+}
+
+func TestCacheTransportLossDoesNotReattach(t *testing.T) {
+	p, _, f := fixture(t, true)
+	enableCache(t, p)
+	if err := p.Create(t.Context(), spec()); err != nil {
+		t.Fatal(err)
+	}
+	stream, closed := cacheAgentFixture(t)
+	opens := 0
+	f.duplex = func(context.Context) (net.Conn, error) { opens++; return stream, nil }
+	if err := p.prepareCache(t.Context(), spec().Name); err != nil {
+		t.Fatal(err)
+	}
+	_ = stream.Close()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("guest listener survived stream loss")
+	}
+	if err := p.prepareCache(t.Context(), spec().Name); err != nil {
+		t.Fatal(err)
+	}
+	if opens != 1 || len(f.calls) != 1 || !strings.HasSuffix(f.calls[0].command, "cache-setup") {
+		t.Fatal("lost cache was reattached")
 	}
 }

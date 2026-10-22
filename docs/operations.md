@@ -180,11 +180,12 @@ asks for an isolated network on every guest.
 The host cache supports the optional release proxy and upload storage.
 With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
 and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
-defaults). A separate authenticated SSH client over HvSocket carries the cache;
+defaults). A separate bivouac agent Duplex command over HvSocket carries the cache;
 no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
 partial settings refuses launch. Cache transport loss falls back upstream
-without reattachment. Archive and release caching passed live on HCS guests;
-upload storage has not, so leave it off on Windows hosts. Use the isolated cache validation fixture
+without reattachment. Archive and release caching passed live on the previous
+SSH-based HCS provider; the new agent relay has test coverage only. Upload
+storage has not been validated live, so leave it off on Windows hosts. Use the isolated cache validation fixture
 below for archive/release cold and warm hits, outage fallback and uploads.
 
 For separately authorized end-to-end validation, reserve host resources and use a
@@ -204,9 +205,10 @@ HCS startup measurements appear at Info in the daemon log as one
 are completion milestones from this provider's Create call. Create milestones
 are omitted after adoption because a monotonic origin cannot survive restart.
 Absent fields mean a step was skipped or not reached, not a zero duration.
-The stages cover VM host create return, agent dial and initialization, SSH,
-each file delivery, preflight/console proof, prepare/desktop proof and clock
-sync. Proof durations cover reply validation; the guest's proof work is inside
+The stages cover `vmhost_create`, `session`, `network`, `agent_dial`, `agent_proof`,
+`config`, `delivery_config`, `delivery_helper`, optional `delivery_runner_archive`,
+`preflight`, `console_proof`, `prepare`, `desktop_proof` and `clock_sync`.
+Console/desktop proof durations cover reply validation; guest proof work is inside
 preflight or prepare. `wait_ready_total_ms` includes the whole readiness call.
 `agent_dial_retries` counts failed dial attempts, and signed `clock_skew_ms`
 is guest UTC minus host UTC after correction. `failure_step` is a fixed stage
@@ -226,9 +228,17 @@ existing `timings_ms` VM host/batch measurements, even on readiness failure.
 Compare interleaved cold boots at equal resources and quiet host load using
 the separately authorized lab procedure below.
 
+Adoption checks current VM host ownership and running state, then reconnects to
+the guest's runtime ID over HvSocket. It requires no host-key file or per-guest
+secret. Status uses one agent command per existing poll; JIT and start are never
+replayed after an uncertain outcome. A protocol-version refusal is terminal.
+This provider requires a matching bivouac-agent image; old images are unsupported.
+Rollback is the previous binary and image. The factory and vmhost lab batch below
+remain on App Sandbox/SSH until phase 5 and do not yet build that matching image.
+
 ## Direct HCS image factory
 
-`bivouac image build` prepares an image for the `hcs` provider from a
+`bivouac image build` currently prepares an image for the previous `hcs` binary from a
 generalized App Sandbox template. `bivouac image inspect` runs the same copy
 and offline checks without booting, so a template can be checked first. Both
 run elevated in the foreground (one UAC prompt each), drive HCS directly and
@@ -236,7 +246,8 @@ attach no network adapter, so production CI may keep running. Neither touches
 the VM host service, its journal or CI mode.
 
 Every image drops App Sandbox's display driver and uses HCS synthetic video
-with GPU-PV. This branch's provider and lab require these newly built images.
+with GPU-PV. The transitional vmhost lab requires these newly built images;
+the runtime provider additionally requires the phase-5 bivouac-agent installation.
 Rollback uses the previously deployed binary with its previously built image.
 
 The template is only read. The factory copies it into its own workspace,
@@ -443,7 +454,8 @@ offers to allow the test binary through the firewall, choose Cancel.
    go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
    ```
 
-3. Launch it once through UAC. Use this branch's factory image and pins. The lab root
+3. Launch it once through UAC. Use a matching bivouac-agent image and pins after
+   phase 5; today's factory image cannot serve this provider. The lab root
    must not exist yet; the VM host creates it protected.
    - If the image has no runner, add `-lab.runner-archive` and
      `-lab.runner-sha256` for an official runner ZIP.

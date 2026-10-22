@@ -1,6 +1,6 @@
 // Package winrunner runs the official Actions runner inside a disposable
 // Windows guest. Its fixed guest adapter (`bivouac guest windows <mode>`) and
-// fixed control scripts are shared by every Windows-guest provider; each
+// Go modes are shared by Windows-guest providers; each
 // provider delivers them over its own authenticated transport.
 //
 // No instance value is interpolated into a script or command line: settings
