@@ -9,8 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
-	"time"
 	"unsafe"
 
 	winio "github.com/Microsoft/go-winio"
@@ -73,6 +73,9 @@ func RunAgent(context.Context) error { return errors.New("windows guest agent re
 // resolved once to a SID, then checked against fresh process facts at startup
 // and on every accepted connection. Receiver children inherit that identity.
 func RunCLI(ctx context.Context, args []string, stdin io.Reader) error {
+	if len(args) > 0 && args[0] == "selftest" {
+		return selftest(ctx, args[1:], os.Stdout)
+	}
 	if len(args) > 0 && args[0] == "receive" {
 		if len(args) != 4 {
 			return errors.New("invalid receiver arguments")
@@ -110,15 +113,13 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader) error {
 	defer func() { _ = log.Close() }()
 	logger := slog.New(slog.NewJSONHandler(log, nil))
 	logger.Info("agent_start", "protocol", Version)
-	l, err := listenWindows(func(a *winio.HvsockAddr) (net.Listener, error) { return winio.ListenHvsock(a) })
-	if err != nil {
-		logger.Info("listener_failed")
-		return err
-	}
-	defer func() { _ = l.Close() }()
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	guarded := &sessionListener{Listener: l, check: check, logger: logger, cancel: cancel}
+	guarded := newSessionListener(serveCtx, check, logger, func() (Listener, error) {
+		return listenWindows(func(a *winio.HvsockAddr) (net.Listener, error) { return winio.ListenHvsock(a) })
+	})
+	guarded.cancel = cancel
+	defer func() { _ = guarded.Close() }()
 	err = Serve(serveCtx, guarded)
 	logger.Info("agent_stop")
 	if guarded.refused {
@@ -128,37 +129,4 @@ func RunCLI(ctx context.Context, args []string, stdin io.Reader) error {
 		return errors.New("agent listener ended")
 	}
 	return nil
-}
-
-type sessionListener struct {
-	Listener
-	check   func() bool
-	logger  *slog.Logger
-	cancel  context.CancelFunc
-	refused bool // Owned by the Serve accept loop.
-}
-
-func (l *sessionListener) Accept() (io.ReadWriteCloser, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		if l.cancel != nil {
-			l.cancel()
-		}
-		return nil, err
-	}
-	if !l.check() {
-		l.refused = true
-		l.logger.Info("session_refused")
-		// A fixed frame, bounded even if a refused peer does not read.
-		timer := time.AfterFunc(time.Second, func() { _ = conn.Close() })
-		_ = writeFrame(conn, frameFailed, []byte("session refused"))
-		timer.Stop()
-		_ = conn.Close()
-		if l.cancel != nil {
-			l.cancel()
-		}
-		return nil, errors.New("agent session refused")
-	}
-	l.logger.Info("connection_accepted")
-	return conn, nil
 }

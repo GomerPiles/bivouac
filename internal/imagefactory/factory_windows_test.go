@@ -96,7 +96,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 	if !reflect.DeepEqual(phases, []string{"iso", "answer"}) || len(copied) != len(c.SetupAssets)+2 {
 		t.Fatal("media preparation order")
 	}
-	if !pin(r.Manifest.AgentSHA256) || r.Manifest.AgentVersion != guestagent.Version {
+	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract {
 		t.Fatal("agent manifest pin missing")
 	}
 	for name, script := range mediaScripts() {

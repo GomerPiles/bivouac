@@ -16,11 +16,26 @@ the same agent. Factory code installs the pinned executable and logon task,
 stages GPU drivers offline, removes legacy guest components before FirstLogon,
 and sanitizes agent state/logs. Code and tests only; no agent image has been
 built or booted live.
-Rollback uses the previous binary and image. This source change is not deployed
+Rollback uses the previous manager, VM host service binary and image together. This source change is not deployed
 or validated live. Console/OOBE readiness, native static networking, UTC clock
 setting, listener survival across request/agent
 restarts, cancellation and cache behavior on agent-served guests require live
 validation after the provider and factory switches.
+
+Review fixes add in-process listener re-listening, bounded consecutive session
+refusals, pre-marker breakaway creation proof, Windows-contract admission and
+normal-priority task registration. MSI uninstall precedes server leftovers;
+Windows servicing removes the server capability while the inbox client and
+ssh-agent remain intact. These changes have unit coverage only.
+
+Recovery after an actual agent crash and listener/probe survival across agent
+kills and task End/Run remain unverified. The opt-in vmhost lab now asserts
+loopback refusal, task principal/action/priority, installed owner/ACL, probe job
+membership and survival across both restart paths, with fixed facts only.
+Sibling-guest negative testing is out of scope: it requires another live guest,
+extra resource admission and an additional inter-guest test fixture; this phase
+covers guest loopback and host-account authorization on the parent-only service.
+No live image build or timing run has been performed for these fixes.
 
 ## Checks
 
@@ -369,7 +384,7 @@ Open:
   not been built or validated live. Offline ownership/ACLs, specialize service/MSI
   removal, logon task/session readiness, error-43 recovery, sanitation and the
   lab's granted/ungranted agent checks remain live gates. The provider in this branch does not run images built
-  before it; rollback uses the previous binary and image.
+  before it; rollback uses the previous manager/service/image trio.
 
 ## Windows: Crosvm (Linux GPU guests)
 

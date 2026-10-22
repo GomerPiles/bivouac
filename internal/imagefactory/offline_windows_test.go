@@ -101,12 +101,12 @@ func TestAgentImageScripts(t *testing.T) {
 			t.Fatal("offline plan missing", token)
 		}
 	}
-	for _, token := range []string{"-LogonType Interactive -RunLevel Highest", "-AtLogOn -User $user", "-RestartCount 3", "-ExecutionTimeLimit ([TimeSpan]::Zero)", "-Execute $agent", "guest-agent --user ", "Start-ScheduledTask -TaskName 'bivouac-guest-agent'", "'/restart-device'"} {
+	for _, token := range []string{"-LogonType Interactive -RunLevel Highest", "-AtLogOn -User $user", "-Priority 4", "-RestartCount 3", "-ExecutionTimeLimit ([TimeSpan]::Zero)", "-Execute $agent", "guest-agent --user ", "Start-ScheduledTask -TaskName 'bivouac-guest-agent'", "'/restart-device'"} {
 		if !strings.Contains(guestSetup, token) {
 			t.Fatal("agent setup missing", token)
 		}
 	}
-	for _, token := range []string{"Remove-FixedService 'AppSandboxAgent'", "Remove-FixedService 'sshd'", "Remove-FixedService 'ssh-agent'", "@('/x',$key.PSChildName", "Remove-BoundedTree 'C:\\ProgramData\\ssh'", "bivouac-hcs-ssh-hostkeys"} {
+	for _, token := range []string{"Remove-FixedService 'AppSandboxAgent'", "Remove-FixedService 'sshd'", "@('/x',$key.PSChildName", "Remove-BoundedTree 'C:\\ProgramData\\ssh'", "bivouac-hcs-ssh-hostkeys"} {
 		if !strings.Contains(guestSpecialize, token) {
 			t.Fatal("specialize removal missing", token)
 		}

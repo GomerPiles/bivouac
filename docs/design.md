@@ -739,7 +739,7 @@ Bivouac drives the Host Compute Service (`internal/hcs`) directly.
 The runtime provider reaches guests only through bivouac's guest agent over
 HvSocket. It requests only `guestagent.ServiceID`; there is no SSH, App Sandbox
 protocol, PowerShell readiness path or host-key pin. Old images are unsupported;
-rollback uses the previous binary and image. The image factory and vmhost lab
+rollback uses the previous manager binary, VM host service binary and image. The image factory and vmhost lab
 batch use the same bivouac agent and service ID.
 HCS synthetic video supplies the desktop display alongside GPU-PV rendering.
 
@@ -754,18 +754,28 @@ the runner adapter may explicitly use `CREATE_BREAKAWAY_FROM_JOB` with independe
 standard streams to survive a request. Guest-local logs contain fixed categories
 and numbers only, capped at 1 MiB plus one rotation.
 
+Listener Accept/open failures close the failed listener and re-listen in-process
+with exponential backoff from 100 ms to 5 s, cancellable on shutdown. Existing
+commands keep their context during listener recovery. A failed per-connection
+session check sends one bounded fixed refusal and closes only that connection.
+A successful check resets refusal history. The agent exits after at least five
+consecutive refusals spanning 10 seconds within a 30-second window; older
+windows reset. The scheduled task's three one-minute retries are a backstop for
+process failure, rather than the listener recovery mechanism. Recovery after an
+actual crash and survival across task/agent restarts remain live gates.
+
 Its `guest-agent receive <name> <size> <sha256>` mode accepts only the helper,
 configuration and runner archive names in the protected guest directory.
 It verifies up to 1 GiB before atomic publication, refuses links/alternate
 streams and the `launched` marker, and uses delete-on-close temporary files.
 The adapter must hold the same exclusive `.receive.lock` while writing that
 marker. The host dialer uses cancellable 3-second attempts and 500 ms pauses.
-The existing per-service connect descriptor admits SYSTEM, Administrators and
-the creating manager's account. It is the authentication boundary, equivalent
-to the macOS 0600 agent socket: any process of an admitted host account can
-already deploy an SSH key and execute
-as the guest administrator; the new transport executes as that same user
-directly. No key deployment, host-key pins or per-guest secrets remain. The
+The per-service connect descriptor admits SYSTEM, Administrators and the creating
+manager's account. Every process of an admitted host account has authority to
+execute commands as the configured guest administrator. Account identity is the
+authentication boundary, equivalent to the macOS agent's 0600 socket; neither
+transport authenticates individual processes within that account. No key
+deployment, host-key pins or per-guest secrets remain. The
 image installs the matching agent at `guestagent.WindowsPath`
 (`C:\Program Files\Bivouac\bivouac.exe`); the factory registers its logon task.
 
@@ -773,6 +783,13 @@ The provider delivers its matching Windows adapter and uses its Go `preflight`,
 `prepare`, `start`, `stop`, `clock` and `cache-listen` modes. The receiver
 contract is the fixed allowlist, exact size and SHA-256; the adapter contract
 is the fixed argv, stdin and bounded JSON/UTC/base64 outputs described here.
+`guestagent.WindowsContract` independently numbers the Windows agent CLI,
+receiver and adapter-mode semantics relied on by the provider. Change it when
+those semantics change; framing `Version` is independent and remains shared
+with macOS. The factory manifest records `windows_contract` and the agent hash.
+The VM host reads each protected adjacent manifest and reports `image_contracts`
+in Info (zero for missing, unreadable or invalid metadata). Doctor and activation
+require the exact local WindowsContract before readiness or guest creation.
 The protocol version is proved before any delivery. Host adapter and provider
 come from the same build; there is no legacy script or task-mode compatibility.
 
@@ -915,8 +932,9 @@ cancellation API. Off lets accepted work finish normally. A baseline may contain
 an unconfigured runner, or each clone receives a hash-pinned official runner ZIP.
 Diagnostics use bounded base64 and ZIP extraction that rejects unsafe paths and
 expansion before redacting host sinks. No host directory is mounted. The
-detached listener survives the start request and agent/manager restarts;
-status, diagnostics, clock and other ordinary commands remain tied to their
+detached listener is intended to survive the start request and agent/manager
+restarts. Survival across actual agent/task restarts remains a live gate.
+Status, diagnostics, clock and other ordinary commands remain tied to their
 connections.
 
 The VM host runs either as an optional Windows service or as an elevated
@@ -1079,24 +1097,38 @@ ACL and deny-write handles, not hashed per job.
 - **Specialize:** before FirstLogon, stop/delete the legacy agent service,
   remove every legacy VDD device (including phantom nodes) and its driver
   package, and delete the entire legacy component directory with bounded
-  traversal that refuses links. Stop/delete both OpenSSH services; uninstall
-  registered OpenSSH MSI products by bounded registry display-name/product-code
-  lookup and fixed msiexec arguments; delete remaining program directories,
+  traversal that refuses links. Uninstall registered OpenSSH MSI products first
+  using bounded display-name/product-code lookup and fixed msiexec arguments,
+  then stop/delete the leftover sshd service and delete MSI program directories,
   server state, authorization files and the old host-key boot task.
   Every removal has a numbered failure step. Synthetic video enable retains
   the existing identity checks, ConfigFlags handling and numeric diagnostics.
-- **FirstLogon:** preserve specialize failures, retry synthetic video problem
-  22 once and verify component removal/video startup. Recover error 43 only
+- **FirstLogon:** remove the installed `OpenSSH.Server~~~~0.0.1.0` capability
+  through Windows servicing. A requested reboot fails closed for operator review;
+  no partially serviced image is published. Verify no sshd service, server
+  executable (including the inbox server location), server state or authorization
+  remains. Keep the inbox OpenSSH client directory and ssh-agent service intact:
+  they supply no listener and are owned by Windows servicing. Preserve specialize
+  failures, retry synthetic video problem 22 once and verify component
+  removal/video startup. Recover error 43 only
   on `vrd.inf` GPU-PV display devices with a bounded device restart. The
   reference copy path used disable/enable for those devices after an online
   copy; offline placement precedes initial device startup. Its optional GL,
   Vulkan and NVIDIA runtime provisioning is not reproduced by the driver-only
   factory. D3D11 validation does not establish those other APIs.
   Register `bivouac-guest-agent` for the configured user's logon with Interactive,
-  Highest, three one-minute failure restarts and no execution time limit.
+  Highest, priority 4 (normal), three one-minute failure restarts and no execution
+  time limit.
   The action executes the installed binary's `guest-agent --user <user>`
   directly; start the task for the build session. No PowerShell runs in the
   persistent task action.
+- **Launch safety:** before writing the single-use `launched` marker, create a
+  suspended trivial child of the current executable with explicit breakaway,
+  terminate it and join it. Failure returns a fixed refusal without consuming
+  the marker or input. The lab's harmless long-lived probe shares this checked
+  marker/launch path and detachment flags. Creation success does not establish
+  survival across agent or Task Scheduler lifetime changes: the opt-in lab must
+  prove that separately with the real task and agent.
 - **Sanitation:** rotate the console password into the LSA autologon secret;
   remove answer/setup residue, temporary probes, disposable Guest state and
   agent logs; retain the agent logon task. Agent logs use separate protected
@@ -1107,7 +1139,7 @@ ACL and deny-write handles, not hashed per job.
   installation, logon task or Guest directory. Public agent presence/hash/task
   facts replace legacy service and package facts; template VDD presence remains
   informational. The manifest records source/asset/output/agent hashes, agent
-  protocol, guest identity, driver INF versions, probe/validation/autologon pins
+  Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations. Per-file staging inventories are build-local
   and excluded from bounded durable records.
 - **Single-display invariant:** exactly one attached-to-desktop display must

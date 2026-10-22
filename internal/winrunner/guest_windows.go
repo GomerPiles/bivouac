@@ -147,6 +147,9 @@ func checkGuestExecutable() error {
 // loads the host config or touches its credential store. The agent supplies
 // the interactive session; the listener is explicitly detached from the request.
 func RunGuest(ctx context.Context, mode string, out io.Writer) error {
+	if strings.HasPrefix(mode, "lab-") {
+		return runLabProbe(ctx, mode, out)
+	}
 	if mode == "prepare" {
 		return guestPrepare(ctx, out)
 	}
@@ -265,16 +268,21 @@ func processIdentity(pid uint32) (listenerIdentity, bool, error) {
 	if code != stillActive {
 		return listenerIdentity{}, false, nil
 	}
+	identity, err := identityFromHandle(pid, handle)
+	return identity, err == nil, err
+}
+
+func identityFromHandle(pid uint32, handle windows.Handle) (listenerIdentity, error) {
 	var created, exited, kernel, user windows.Filetime
 	if err := windows.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
-		return listenerIdentity{}, false, err
+		return listenerIdentity{}, err
 	}
 	var image [32768]uint16
 	length := uint32(len(image))
 	if err := windows.QueryFullProcessImageName(handle, 0, &image[0], &length); err != nil {
-		return listenerIdentity{}, false, err
+		return listenerIdentity{}, err
 	}
-	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, true, nil
+	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, nil
 }
 func recordedListener(cfg Config) (listenerIdentity, bool, error) {
 	data, err := readGuestFile(filepath.Join(guestBase, "listener.json"), 4096)

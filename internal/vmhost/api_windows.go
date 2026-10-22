@@ -88,14 +88,15 @@ type NetworkLease struct {
 // Info reports the VM host's identity and limits. Running counts every
 // caller's guests, so each manager can budget against the shared host.
 type Info struct {
-	Controller   string   `json:"controller"`
-	Images       []string `json:"images"`
-	MaxInstances int      `json:"max_instances"`
-	MaxCPU       uint32   `json:"max_cpu"`
-	MaxMemoryMB  uint64   `json:"max_memory_mb"`
-	Running      int      `json:"running"`
-	RunningCPU   uint32   `json:"running_cpu"`
-	RunningMB    uint64   `json:"running_memory_mb"`
+	ImageContracts map[string]int `json:"image_contracts"`
+	Controller     string         `json:"controller"`
+	Images         []string       `json:"images"`
+	MaxInstances   int            `json:"max_instances"`
+	MaxCPU         uint32         `json:"max_cpu"`
+	MaxMemoryMB    uint64         `json:"max_memory_mb"`
+	Running        int            `json:"running"`
+	RunningCPU     uint32         `json:"running_cpu"`
+	RunningMB      uint64         `json:"running_memory_mb"`
 }
 
 const (

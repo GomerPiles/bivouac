@@ -68,10 +68,6 @@ try {
  }
  if(!$videoDiagnostics.specialize_enable.returned){throw 'synthetic video enable failed'}
  # Windows setup's following boot settles PnP changes; do not reboot here.
- $step=86;Write-SetupStep $step $false
- Remove-FixedService 'sshd'
- $step=87;Write-SetupStep $step $false
- Remove-FixedService 'ssh-agent'
  $step=90;Write-SetupStep $step $false
  $uninstalls=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
  $products=0
@@ -87,8 +83,11 @@ try {
    if($process.ExitCode -notin @(0,1605,3010)){throw 'uninstall failed'}
   }
  }
+ $step=86;Write-SetupStep $step $false
+ # MSI uninstall owns its services first; remove only leftover server state.
+ Remove-FixedService 'sshd'
  $step=91;Write-SetupStep $step $false
- foreach($path in @('C:\Program Files\OpenSSH','C:\Program Files\OpenSSH-Win64','C:\Windows\System32\OpenSSH')){Remove-BoundedTree $path}
+ foreach($path in @('C:\Program Files\OpenSSH','C:\Program Files\OpenSSH-Win64')){Remove-BoundedTree $path}
  $step=92;Write-SetupStep $step $false
  Remove-BoundedTree 'C:\ProgramData\ssh'
  $step=93;Write-SetupStep $step $false

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
+
 	"github.com/GomerPiles/bivouac/internal/vmhost"
 	"golang.org/x/sys/windows/svc"
 )
@@ -41,6 +43,9 @@ func hostInfo(ctx context.Context, host Host) (vmhost.Info, error) {
 func checkInfo(info vmhost.Info, image string, cpu uint32, memoryMB uint64) error {
 	if !slices.Contains(info.Images, image) {
 		return fmt.Errorf("VM host has no image %q", image)
+	}
+	if info.ImageContracts[image] != guestagent.WindowsContract {
+		return errors.New("HCS image requires the matching Windows guest agent contract; switch the bivouac binary, VM host service binary and image together")
 	}
 	if cpu > info.MaxCPU || memoryMB > info.MaxMemoryMB {
 		return errors.New("guest size exceeds the VM host's limits")

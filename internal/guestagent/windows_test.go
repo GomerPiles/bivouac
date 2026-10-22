@@ -91,37 +91,6 @@ func (l *pipeListener) Close() error {
 	return nil
 }
 
-func TestSessionCheckedOnEachConnection(t *testing.T) {
-	base := &pipeListener{make(chan io.ReadWriteCloser, 1), make(chan struct{})}
-	checks := 0
-	l := &sessionListener{Listener: base, check: func() bool { checks++; return checks == 1 }, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	for i := range 2 {
-		host, guest := net.Pipe()
-		base.connections <- guest
-		done := make(chan error, 1)
-		go func() {
-			conn, err := l.Accept()
-			if conn != nil {
-				_ = conn.Close()
-			}
-			done <- err
-		}()
-		if i == 1 {
-			kind, p, err := readFrame(host, nil)
-			if err != nil || kind != frameFailed || string(p) != "session refused" {
-				t.Fatal("missing fixed refusal", err)
-			}
-		}
-		if err := <-done; (err == nil) != (i == 0) {
-			t.Fatal("session check not enforced")
-		}
-		_ = host.Close()
-	}
-	if checks != 2 {
-		t.Fatal("missing connection check")
-	}
-}
-
 func TestWindowsListenerWiring(t *testing.T) {
 	called := false
 	l, err := listenWindows(func(a *winio.HvsockAddr) (net.Listener, error) {
@@ -455,6 +424,24 @@ func TestWindowsCommandHelper(t *testing.T) {
 		}
 		if err := receive(t.Context(), args[1], args[2], size, args[4], os.Stdin); err != nil {
 			os.Exit(44)
+		}
+	case "check-breakaway":
+		if CheckBreakaway() != nil {
+			os.Exit(44)
+		}
+	case "deny-breakaway":
+		job, err := windows.CreateJobObject(nil, nil)
+		if err != nil {
+			os.Exit(45)
+		}
+		if windows.AssignProcessToJobObject(job, windows.CurrentProcess()) != nil {
+			_ = windows.CloseHandle(job)
+			os.Exit(46)
+		}
+		refused := CheckBreakaway() != nil
+		_ = windows.CloseHandle(job)
+		if !refused {
+			os.Exit(47)
 		}
 	case "sleep":
 		time.Sleep(time.Minute)

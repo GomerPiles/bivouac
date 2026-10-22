@@ -276,6 +276,13 @@ func markAndLaunch(root *os.Root, launch func() error) error {
 	return launch()
 }
 
+func startChecked(root *os.Root, probe, launch func() error) error {
+	if probe() != nil {
+		return errors.New("detached listener breakaway unavailable")
+	}
+	return markAndLaunch(root, launch)
+}
+
 func stopGuest(root *os.Root, cancel func() error) error {
 	exited, err := guestFileExists(root, "runner.exit")
 	if err != nil || exited {
