@@ -111,17 +111,11 @@ function Read-SetupStep([string]$Root,$Facts){
   if((Get-Item -Force -LiteralPath (Join-Path $Root $relative)).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'setup path'}
  }
  $item=Get-Item -Force -LiteralPath $path
- if($item.PSIsContainer -or $item.Length -gt 256){throw 'setup status bound'}
+ if($item.PSIsContainer -or $item.Length -gt 32768){throw 'setup status bound'}
  $status=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
  if($status.step -isnot [int] -or $status.step -lt 10 -or $status.step -gt 100 -or $status.failed -isnot [bool]){throw 'setup status'}
  $Facts.guest_setup_step=[uint32]$status.step;$Facts.guest_setup_failed=$status.failed
  if($null -ne $status.video){
-  if($status.step -ne 35 -or !$status.failed){throw 'video status step'}
-  foreach($field in @('problem_code','devnode_status')){
-   $value=$status.video.$field
-   if(($value -isnot [int] -and $value -isnot [long]) -or $value -lt 0 -or $value -gt [uint32]::MaxValue){throw 'video status number'}
-  }
-  # Copy only the two validated numbers, never arbitrary status-file properties.
-  $Facts.guest_setup_video=@{problem_code=[uint32]$status.video.problem_code;devnode_status=[uint32]$status.video.devnode_status}
+  $Facts.guest_setup_video=Read-VideoDiagnostics $status.video
  }
 }

@@ -241,13 +241,21 @@ or owner record. It mounts, grants and boots only files it created.
      files and `devcon.exe` are unsupported. Specialize removes VDD devices
      (including phantom nodes), packages and the agent's `drivers` directory,
      enables synthetic video before Windows setup's following boot, and leaves
-     the agent disabled. FirstLogon then verifies these changes before starting
-     the agent. Specialize failures use steps 80–85; 88 marks completion and
+     the agent disabled. For each matching node, it clears only the disabled
+     bit in existing ConfigFlags/CSConfigFlags values and tries pnputil enable,
+     falling back to Enable-PnpDevice. FirstLogon retries once for problem 22,
+     then verifies these changes before starting the agent. Specialize failures
+     use steps 80–85; 88 marks completion and
      89 means FirstLogon could not confirm completion. Verification failures
      distinguish video startup (35), VDD nodes (36), packages (37) and the
-     drivers directory (38). Step 35 includes numeric problem code/DevNodeStatus
-     diagnostics when a complete pair is available, also in the offline facts,
-     build record and error. The synchronous specialize command does not
+     drivers directory (38). Numeric diagnostics include up to 32 matching
+     nodes (present or phantom), before/after specialize and at FirstLogon:
+     presence, problem code/DevNodeStatus, ConfigFlags, CSConfigFlags existence
+     and value, plus enable return/exit codes. These survive in the offline
+     facts, build record and error without device identifiers. FirstLogon
+     failure records its status and shuts down; the factory observes early
+     exit and inspects the owned disk rather than waiting for an absent agent.
+     The synchronous specialize command does not
      explicitly request a reboot; confirm the template's setup-to-OOBE reboot
      boundary and specialize-pass PnP availability during live validation.
    - `drivers` names the host's GPU driver directories. The build copies

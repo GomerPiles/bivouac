@@ -190,11 +190,43 @@ type Inspection struct {
 	GuestSetupVideo       *SetupVideoStatus        `json:"guest_setup_video,omitempty"`
 }
 
-// SetupVideoStatus holds a single failing synthetic video's numeric PnP facts.
-// A nil status means no complete problem-code/status pair was available.
+// SetupVideoStatus contains only bounded numeric diagnostics, never device IDs.
 type SetupVideoStatus struct {
-	ProblemCode   uint32 `json:"problem_code"`
-	DevNodeStatus uint32 `json:"devnode_status"`
+	SpecializeBefore *SetupVideoSnapshot `json:"specialize_before,omitempty"`
+	SpecializeAfter  *SetupVideoSnapshot `json:"specialize_after,omitempty"`
+	FirstLogon       *SetupVideoSnapshot `json:"first_logon,omitempty"`
+	SpecializeEnable *SetupVideoEnable   `json:"specialize_enable,omitempty"`
+	FirstLogonEnable *SetupVideoEnable   `json:"first_logon_enable,omitempty"`
+}
+
+type SetupVideoSnapshot struct {
+	NodeCount uint32           `json:"node_count"`
+	Nodes     []SetupVideoNode `json:"nodes"`
+}
+
+type SetupVideoNode struct {
+	Present              uint32 `json:"present"`
+	ProblemCode          uint32 `json:"problem_code"`
+	DevNodeStatus        uint32 `json:"devnode_status"`
+	ConfigFlagsPresent   uint32 `json:"config_flags_present"`
+	ConfigFlags          uint32 `json:"config_flags"`
+	CSConfigFlagsPresent uint32 `json:"csconfig_flags_present"`
+	CSConfigFlags        uint32 `json:"csconfig_flags"`
+}
+
+type SetupVideoEnable struct {
+	Returned uint32              `json:"returned"`
+	Attempts []SetupVideoAttempt `json:"attempts"`
+}
+
+type SetupVideoAttempt struct {
+	NodeIndex         uint32 `json:"node_index"`
+	FlagsCleared      uint32 `json:"flags_cleared"`
+	PnPUtilStarted    uint32 `json:"pnputil_started"`
+	PnPUtilExitCode   uint32 `json:"pnputil_exit_code"`
+	FallbackAttempted uint32 `json:"fallback_attempted"`
+	FallbackSucceeded uint32 `json:"fallback_succeeded"`
+	Returned          uint32 `json:"returned"`
 }
 
 // AnswerFacts contains only predicates, never answer-file values or commands.

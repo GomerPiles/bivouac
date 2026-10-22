@@ -14,7 +14,7 @@ import (
 func filesystemFacts(t *testing.T, root string) Inspection {
 	t.Helper()
 	data, _ := json.Marshal(map[string]string{"root": root})
-	script := "$ErrorActionPreference='Stop';" + offlineFiles + `
+	script := "$ErrorActionPreference='Stop';" + (videoFacts + offlineFiles) + `
 $d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-FactoryFiles $d.root $f
 [Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))`
 	var facts Inspection
@@ -130,7 +130,7 @@ func TestPantherAnswerFacts(t *testing.T) {
 				}
 			}
 			data, _ := json.Marshal(map[string]string{"root": root, "user": "imageuser"})
-			script := "$ErrorActionPreference='Stop';" + offlineFiles + `;$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-PantherAnswerFacts $d.root $d.user $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))`
+			script := "$ErrorActionPreference='Stop';" + (videoFacts + offlineFiles) + `;$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-PantherAnswerFacts $d.root $d.user $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))`
 			result := runTestPS(t, script, data)
 			var facts Inspection
 			if json.Unmarshal([]byte(result), &facts) != nil {
@@ -200,7 +200,7 @@ function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessP
 }
 function Dismount-DiskImage {param($ImagePath)}
 `
-	script := mocks + offlineFiles + inspectDisk[:start] + bindings + inspectDisk[end:]
+	script := mocks + (videoFacts + offlineFiles) + inspectDisk[:start] + bindings + inspectDisk[end:]
 	path := filepath.Join(workspace, "fake-inspection.ps1")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)

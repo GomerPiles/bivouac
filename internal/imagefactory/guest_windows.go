@@ -145,6 +145,32 @@ func dialGuest(ctx context.Context, runtimeID, service string) (net.Conn, error)
 		}
 	}
 }
+
+// Join the exit watcher before its creating handle can be closed or reused.
+// Errors still take the factory's owned cleanup/offline-inspection path.
+func prepareUntilExit(ctx context.Context, wait, prepare func(context.Context) error) error {
+	work, cancelWork := context.WithCancelCause(ctx)
+	defer cancelWork(nil)
+	watch, cancelWatch := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err := wait(watch)
+		if watch.Err() == nil {
+			if err != nil {
+				cancelWork(errors.New("guest exit observation failed during preparation"))
+			} else {
+				cancelWork(errors.New("guest powered off before preparation completed"))
+			}
+		}
+	}()
+	defer func() { cancelWatch(); <-done }()
+	err := prepare(work)
+	cancelWatch()
+	<-done
+	return errors.Join(err, context.Cause(work))
+}
+
 func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error {
 	identity, err := winguest.NewIdentity()
 	if err != nil {

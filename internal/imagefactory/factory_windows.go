@@ -316,7 +316,10 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		if e = r.save(); e != nil {
 			return e
 		}
-		return prepareGuest(guardCtx, api, c, r)
+		return prepareUntilExit(guardCtx, func(ctx context.Context) error {
+			_, err := system.WaitExit(ctx)
+			return err
+		}, func(ctx context.Context) error { return prepareGuest(ctx, api, c, r) })
 	}); err != nil {
 		return Manifest{}, errors.Join(err, context.Cause(guardCtx))
 	}

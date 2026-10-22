@@ -24,7 +24,7 @@ func TestDisplayMediaAndManifest(t *testing.T) {
 	copyFile := func(_ context.Context, _, _, pin string, _ int64) (int64, string, error) { return 1, pin, nil }
 	run := func(_ context.Context, _ string, input any, _ bool) ([]byte, error) {
 		content := input.(map[string]string)["specialize"]
-		if content != guestSpecialize+disableFirstLogonAnimation || strings.Contains(content, "$display") {
+		if content != guestVideo+guestSpecialize+disableFirstLogonAnimation || strings.Contains(content, "$display") {
 			t.Fatal("specialize retained mode selection")
 		}
 		return nil, nil

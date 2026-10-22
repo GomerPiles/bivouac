@@ -124,6 +124,9 @@ func TestAnswerAndMediaScripts(t *testing.T) {
 		t.Fatal("XML escaping")
 	}
 	files := mediaScripts()
+	if files["SETUP.PS1"] != videoFacts+guestVideo+guestSetup {
+		t.Fatal("setup media lacks video helpers")
+	}
 	for _, name := range []string{"SETUP.PS1", "HCSRUNNER.PS1", "HCSVALIDATE.PS1", "HCSSANITIZE.PS1", "HCSLOGON.PS1", "HCSCHECK.PS1"} {
 		if files[name] == "" {
 			t.Fatal("missing setup script", name)
@@ -143,7 +146,7 @@ func TestScriptConstantsMatchLF(t *testing.T) {
 	if err != nil || string(b) != offlineFiles || strings.ContainsRune(offlineFiles, '\r') {
 		t.Fatal("regenerate LF offline facts script")
 	}
-	for name, content := range map[string]string{"make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
+	for name, content := range map[string]string{"make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)

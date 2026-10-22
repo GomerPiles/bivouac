@@ -1,20 +1,21 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $step=10
-$videoDiagnostics=$null
+$videoDiagnostics=@{}
 function Write-SetupStep([int]$Code,[bool]$Failed){
  $fact=@{step=$Code;failed=$Failed}
- if($Code -eq 35 -and $Failed -and $null -ne $videoDiagnostics){$fact.video=$videoDiagnostics}
- [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',($fact|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+ $fact.video=$videoDiagnostics
+ [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',($fact|ConvertTo-Json -Compress -Depth 8),[Text.UTF8Encoding]::new($false))
 }
 try{
  # Do not replace a failed/interrupted specialize step with FirstLogon's 10.
  $step=89
  $path=Join-Path $env:SystemRoot 'Panther\Unattend\setup-step.json'
  $item=Get-Item -Force -LiteralPath $path
- if($item.PSIsContainer -or $item.Length -gt 256 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'specialize status bound or link'}
+ if($item.PSIsContainer -or $item.Length -gt 32768 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'specialize status bound or link'}
  $previous=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
  if($previous.step -isnot [int] -or $previous.step -lt 80 -or $previous.step -gt 88 -or $previous.failed -isnot [bool]){throw 'specialize status'}
+ $videoDiagnostics=Read-VideoDiagnostics $previous.video
  if($previous.failed -or $previous.step -ne 88){$step=$previous.step;throw 'specialize incomplete'}
 
  $step=10
@@ -52,21 +53,23 @@ foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1
   return $packages
  }
  $step=35;Write-SetupStep $step $false
- $video=@(Get-PnpDevice -Class Display -PresentOnly | Where-Object {
-  @((Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds').Data | Where-Object {$_ -like '*DA0A7802*'}).Count -gt 0
- })
- if(!$video.Count -or $video.Count -gt 32){throw 'synthetic video absent or bound'}
+ $videoDiagnostics.first_logon=Get-VideoSnapshot
+ Write-SetupStep $step $false
+ if(@($videoDiagnostics.first_logon.nodes | Where-Object problem_code -eq 22).Count){
+  try{Enable-VideoNodes $videoDiagnostics.first_logon $true}finally{
+   $videoDiagnostics.first_logon_enable=$script:videoEnableResult
+   $videoDiagnostics.first_logon=Get-VideoSnapshot
+   Write-SetupStep $step $false
+  }
+ }
  $budget=[Diagnostics.Stopwatch]::StartNew()
  do{
-  $started=$true;$videoDiagnostics=$null
-  foreach($node in $video){
-   $problem=(Get-PnpDeviceProperty -InstanceId $node.InstanceId -KeyName 'DEVPKEY_Device_ProblemCode').Data
-   $status=(Get-PnpDeviceProperty -InstanceId $node.InstanceId -KeyName 'DEVPKEY_Device_DevNodeStatus').Data
-   if($null -eq $problem -or $null -eq $status -or $problem -ne 0 -or !($status -band 8)){
-    $started=$false
-    if($null -eq $videoDiagnostics -and $null -ne $problem -and $null -ne $status){
-     $videoDiagnostics=@{problem_code=[uint32]$problem;devnode_status=[uint32]$status}
-    }
+  $videoDiagnostics.first_logon=Get-VideoSnapshot
+  $started=$false
+  foreach($node in $videoDiagnostics.first_logon.nodes){
+   if($node.present -eq 1){
+    if($node.problem_code -ne 0 -or !($node.devnode_status -band 8)){$started=$false;break}
+    $started=$true
    }
   }
   if($started){break};Start-Sleep -Milliseconds 200
@@ -122,4 +125,9 @@ foreach($name in @('_work','_diag')){
 $step=100;Write-SetupStep $step $false
 Set-Content -LiteralPath (Join-Path $base 'hcs-spike-setup-complete.json') -Value '{"ready":true}' -Encoding UTF8
 exit 0
-}catch{try{Write-SetupStep $step $true}catch{};exit $step}
+}catch{
+ try{Write-SetupStep $step $true}catch{}
+ # No agent may exist yet. Power off so the host observes failure promptly.
+ try{& (Join-Path $env:SystemRoot 'System32\shutdown.exe') @('/s','/t','0') *> $null}catch{}
+ exit $step
+}
