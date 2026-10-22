@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	guestDirectory       = `C:\ProgramData\Bivouac\Guest`
-	maxReceiveSize int64 = 1 << 30 // Existing Windows delivery bound.
+	guestDirectory          = `C:\ProgramData\Bivouac\Guest`
+	agentLogDirectory       = `C:\ProgramData\Bivouac\Agent`
+	maxReceiveSize    int64 = 1 << 30 // Existing Windows delivery bound.
 )
 
 type guestDir struct {
@@ -61,7 +62,7 @@ func openGuestDirectory(path string) (_ *guestDir, err error) {
 		if i >= 0 {
 			current = filepath.Join(current, parts[i])
 		}
-		protected := current == path || (path == guestDirectory && current == filepath.Dir(path))
+		protected := current == path || ((path == guestDirectory || path == agentLogDirectory) && current == filepath.Dir(path))
 		text, e := windows.UTF16PtrFromString(current)
 		if e != nil {
 			return nil, e

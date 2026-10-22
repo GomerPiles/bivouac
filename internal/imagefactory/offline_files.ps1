@@ -1,11 +1,5 @@
 # Public filesystem facts only. Do not read runner registration files, policy
 # backup contents, authorized keys or credentials.
-function Set-PublicImagePath([string]$Value,$Fact){
- if($Value -match '^"?([A-Za-z]:\\[^"\r\n]*?\.exe)"?(?:\s+(.*))?$'){
-  $binary=$Matches[1];$arguments=$Matches[2]
-  if(!$arguments -or $arguments -in @('--service','-D')){$Fact.image_path=$Value}else{$Fact.image_path=$binary;$Fact.image_path_redacted=$true}
- }else{$Fact.image_path_redacted=$true}
-}
 function Test-OrdinaryFilePath([string]$Path){
  try{return !((Get-Item -Force -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint)}catch{return $false}
 }
@@ -50,21 +44,21 @@ function Read-FactoryFiles([string]$Root,$Facts) {
  $bivouac=Join-Path $Root 'ProgramData\Bivouac'
  $Facts.guest_state_present=Test-Path -LiteralPath (Join-Path $bivouac 'Guest')
  Read-RunnerFacts (Join-Path $Root 'actions-runner') $Facts
- # Everything below is informational. Omit unreadable, unusual or oversized
- # metadata rather than making it an additional image eligibility gate.
- $base=Join-Path $Root 'Windows\AppSandbox'
- $Facts.executables=@{}
- try{if(Test-OrdinaryFilePath $base){
-  foreach($file in (Get-ChildItem -Force -LiteralPath $base -Filter '*.exe'|Select-Object -First 32)){
-   if($file.PSIsContainer -or $file.Name -notmatch '^[a-zA-Z0-9_.-]{1,128}\.exe$' -or $file.Length -gt 64MB -or !(Test-OrdinaryFilePath $file.FullName)){continue}
-   try{
-    $stream=[IO.File]::Open($file.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
-    $hash=[Security.Cryptography.SHA256]::Create()
-    try{$Facts.executables[$file.Name]=[BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose();$stream.Dispose()}
-   }catch{}
-  }
- }}catch{}
- try{if((Test-OrdinaryFilePath $base) -and (Test-OrdinaryFilePath (Join-Path $base 'drivers'))){$Facts.vdd_package_present=Test-Path -LiteralPath (Join-Path $base 'drivers\AppSandboxVDD.inf') -PathType Leaf}}catch{}
+ $agentDirectory=Join-Path $Root 'Program Files\Bivouac'
+ $agent=Join-Path $agentDirectory 'bivouac.exe'
+ foreach($path in @((Join-Path $Root 'Program Files'),$agentDirectory)){
+  if((Test-Path -LiteralPath $path) -and !(Test-OrdinaryFilePath $path)){throw 'agent install path'}
+ }
+ # Any existing install directory, even incomplete, refuses template reuse.
+ $Facts.agent_present=Test-Path -LiteralPath $agentDirectory
+ $Facts.agent_task_present=Test-Path -LiteralPath (Join-Path $Root 'Windows\System32\Tasks\bivouac-guest-agent')
+ $Facts.agent_sha256=''
+ if(Test-Path -LiteralPath $agent){
+  $file=Get-Item -Force -LiteralPath $agent
+  if($file.PSIsContainer -or $file.Length -gt 128MB -or !(Test-OrdinaryFilePath $agent)){throw 'agent install file'}
+  $Facts.agent_sha256=(Get-FileHash -LiteralPath $agent -Algorithm SHA256).Hash.ToLowerInvariant()
+ }
+ # Runner version and names below are informational public metadata.
  $runner=Join-Path $Root 'actions-runner'
  try{if((Test-OrdinaryFilePath $runner) -and (Test-OrdinaryFilePath (Join-Path $runner 'bin'))){
   $listener=Join-Path $runner 'bin\Runner.Listener.exe'

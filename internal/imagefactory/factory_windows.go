@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
@@ -226,12 +227,12 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		if e := r.Inspection.RunnerInput(c); e != nil {
 			return e
 		}
-		if e := prepareMedia(buildCtx, c, r); e != nil {
-			return e
-		}
 		var e error
 		r.Manifest.Drivers, e = copyDrivers(buildCtx, c, r)
 		if e != nil {
+			return e
+		}
+		if e := prepareMedia(buildCtx, c, r); e != nil {
 			return e
 		}
 		if e = api.CreateGuestStateFiles(filepath.Join(workspace, "vm.vmgs"), filepath.Join(workspace, "vm.vmrs")); e != nil {
@@ -240,21 +241,6 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		// Keep ownership records and the workspace directory private. Only the
 		// VM's payloads need grants; all are checked before any ACL changes.
 		paths := []string{r.disk(), filepath.Join(workspace, "source.vhdx"), filepath.Join(workspace, "vm.vmgs"), filepath.Join(workspace, "vm.vmrs"), filepath.Join(workspace, "setup-private"), filepath.Join(workspace, "setup-private", "setup.iso")}
-		if e = filepath.WalkDir(filepath.Join(workspace, "drivers"), func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.Type()&os.ModeSymlink != 0 {
-				return errors.New("owned payload became a link")
-			}
-			if e := buildCtx.Err(); e != nil {
-				return e
-			}
-			paths = append(paths, path)
-			return nil
-		}); e != nil {
-			return e
-		}
 		for _, path := range paths {
 			if e = winhost.CheckProtected(path); e != nil {
 				return e
@@ -319,7 +305,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return prepareUntilExit(guardCtx, func(ctx context.Context) error {
 			_, err := system.WaitExit(ctx)
 			return err
-		}, func(ctx context.Context) error { return prepareGuest(ctx, api, c, r) })
+		}, func(ctx context.Context) error { return prepareGuest(ctx, c, r) })
 	}); err != nil {
 		return Manifest{}, errors.Join(err, context.Cause(guardCtx))
 	}
@@ -588,19 +574,11 @@ func watchResources(ctx context.Context, c Config, cancel context.CancelCauseFun
 }
 
 func document(c Config, r *record) hcs.ComputeSystem {
-	services := map[string]hcs.HvSocketService{}
-	for _, service := range []string{"a5b0cafe-0001-4000-8000-000000000001", "a5b0cafe-0007-4000-8000-000000000001"} {
-		services[service] = hcs.HvSocketService{BindSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)", ConnectSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}
-	}
-	shares := []hcs.Plan9Share{}
-	for i := range c.Drivers {
-		n := fmt.Sprintf("AppSandbox.Drv.%d", i)
-		shares = append(shares, hcs.Plan9Share{Name: n, AccessName: n, Path: filepath.Join(r.Workspace, "drivers", fmt.Sprint(i)), Port: 50001, Flags: hcs.Plan9ShareReadOnly})
-	}
+	services := map[string]hcs.HvSocketService{guestagent.ServiceID: {BindSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)", ConnectSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}
 	return hcs.ComputeSystem{Owner: r.Owner, SchemaVersion: hcs.Schema21(), TerminateOnLastHandleClosed: true, VirtualMachine: &hcs.VirtualMachine{
 		Chipset:          hcs.Chipset{Uefi: &hcs.Uefi{Console: "Default", ApplySecureBootTemplate: "Apply", SecureBootTemplateID: hcs.SecureBootMicrosoftWindows}},
 		ComputeTopology:  hcs.Topology{Memory: hcs.Memory{SizeInMB: c.MemoryMB}, Processor: hcs.Processor{Count: c.CPU}},
-		Devices:          hcs.Devices{Scsi: map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: r.disk()}, "1": {Type: hcs.AttachmentISO, Path: filepath.Join(r.Workspace, "setup-private", "setup.iso"), ReadOnly: true}}}}, VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768}, Keyboard: &hcs.Keyboard{}, Mouse: &hcs.Mouse{}, HvSocket: &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}, Plan9: &hcs.Plan9{Shares: shares}},
+		Devices:          hcs.Devices{Scsi: map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: r.disk()}, "1": {Type: hcs.AttachmentISO, Path: filepath.Join(r.Workspace, "setup-private", "setup.iso"), ReadOnly: true}}}}, VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768}, Keyboard: &hcs.Keyboard{}, Mouse: &hcs.Mouse{}, HvSocket: &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}},
 		SecuritySettings: &hcs.SecuritySettings{EnableTpm: true, Isolation: &hcs.Isolation{IsolationType: hcs.IsolationGuestStateOnly}}, GuestState: &hcs.GuestState{GuestStateFilePath: filepath.Join(r.Workspace, "vm.vmgs"), RuntimeStateFilePath: filepath.Join(r.Workspace, "vm.vmrs")},
 	}}
 }

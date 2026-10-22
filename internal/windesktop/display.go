@@ -1,4 +1,4 @@
-package winguest
+package windesktop
 
 // Topology contains only bounded numeric and boolean desktop observations.
 // AdapterKind: 1 = Hyper-V synthetic video, 2 = AppSandboxVDD, 3 = other

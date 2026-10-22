@@ -76,6 +76,10 @@ public static class SpikeOfflineAnswer {
    $output=[IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
    try{$output.Write($content,0,$content.Length);$output.Flush($true)}finally{$output.Dispose();[Array]::Clear($content,0,$content.Length)}
   }
+  $phaseCode=64
+  Install-OfflineAgent $mount $data.agent $data.agent_sha256
+  $phaseCode=65
+  Copy-OfflineDrivers $mount (Join-Path $child 'drivers') ($data.driver_plan | ConvertFrom-Json)
  } finally {
   if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}
  }

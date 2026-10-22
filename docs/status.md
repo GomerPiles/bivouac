@@ -11,8 +11,11 @@ The Windows guest adapter's Go preflight/prepare/start/stop/clock modes and
 64-connection cache listener have unit coverage, including launch/delivery
 serialization, bounded extraction and relay closure. The HCS provider now uses
 only bivouac's guest agent over HvSocket, including delivery, runtime commands
-and its 64-connection cache relay. The factory and vmhost lab batch remain on
-App Sandbox/SSH until phase 5; today's images cannot serve the new provider.
+and its 64-connection cache relay. The factory and vmhost lab batch now use
+the same agent. Factory code installs the pinned executable and logon task,
+stages GPU drivers offline, removes legacy guest components before FirstLogon,
+and sanitizes agent state/logs. Code and tests only; no agent image has been
+built or booted live.
 Rollback uses the previous binary and image. This source change is not deployed
 or validated live. Console/OOBE readiness, native static networking, UTC clock
 setting, listener survival across request/agent
@@ -159,7 +162,7 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
-The runtime agent switch is code-complete with fake-agent and relay tests;
+The runtime and factory agent switch is code-complete with fake-agent, offline-copy and relay tests;
 live validation is pending a matching image. Tests cover exact receive metadata,
 readiness ordering, command/output bounds, terminal protocol refusal, transient
 recovery, adoption without pins, unchanged status/diagnostics decoding, TLS cache
@@ -362,8 +365,10 @@ Open:
   build's cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
-- Images built by this branch drop App Sandbox's display driver and have not
-  been validated live. The provider in this branch does not run images built
+- Agent images built by this branch contain no legacy guest components and have
+  not been built or validated live. Offline ownership/ACLs, specialize service/MSI
+  removal, logon task/session readiness, error-43 recovery, sanitation and the
+  lab's granted/ungranted agent checks remain live gates. The provider in this branch does not run images built
   before it; rollback uses the previous binary and image.
 
 ## Windows: Crosvm (Linux GPU guests)
