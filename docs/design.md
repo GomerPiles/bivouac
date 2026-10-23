@@ -1017,7 +1017,7 @@ absence is still confirmed by name before its storage and network are removed.
 
 The guest's RTC holds host local time and the image reads it in its own time
 zone; the creation document has no time-sync channel. The image factory keeps
-the template's time zone and RTC handling, so the provider's `WaitReady` sets the
+the install image's time zone and RTC handling, so the provider's `WaitReady` sets the
 guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
 skewed clock. The clock is set through local time, so in the guest's
@@ -1092,19 +1092,50 @@ configuration or requests a reboot. Hyper-V's compute and network services
 must already be present.
 
 Prepared images are built once by the image factory (`internal/imagefactory`,
-`bivouac image`) from a generalized App Sandbox template and published as a
+`bivouac image`) from pinned Windows install media and published as a
 single standalone VHDX. At runtime they are pinned by file identity, protected
 ACL and deny-write handles, not hashed per job.
 
-- **Template safety:** the source template is immutable; the factory only reads
-  it. It copies the template into its own protected
-  workspace, hashing as it copies, and builds on a differencing child of the
-  copy. Mounts, VM access grants and the boot touch only files the build
-  created.
-- **Inspection gate:** before anything boots, an offline inspection of the
-  child must show a template generalized to OOBE with no answer-file pointer,
-  no configured runner and no bivouac job state. Its facts are public and
-  recorded; answer-file values and file contents are never read into them.
+- **Media and base disk:** `iso` and required `iso_sha256` replace template
+  paths and owner records. The source is pinned by a deny-write/delete handle
+  while copying and hashing into the protected workspace. Only that copy is
+  mounted, read-only without a drive letter. A bounded pure-Go UDF reader
+  inventories exactly one install.wim, unencrypted install.esd, or complete
+  install*.swm set; metadata comes from the uncompressed UTF-16LE WIM XML
+  resource, never localized DISM text. DTDs, malformed XML, unknown flags,
+  excessive sizes and incomplete/mismatched split sets refuse. Selection uses
+  EditionID `Professional` by default and x64 Client; an explicit image index
+  overrides the edition. Display names are sanitized, bounded information.
+- **Disk layout:** the factory creates a dynamic VHDX (default 127 GiB,
+  bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
+  cross-checks the mounted image's physical device, Storage disk path and
+  reverse device-to-owned-VHDX association. Windows generates the disk and
+  partition GUIDs once; later child inspection/staging selects the recorded
+  Windows partition GUID. Layout: 200 MiB FAT32 ESP, 16 MiB MSR, NTFS Windows
+  using the rest, no recovery partition. DISM applies the selected index with
+  `/CheckIntegrity` and `/SWMFile` for split media. WinRE is left unconfigured.
+  BCDBoot uses `/s` with a journalled temporary ESP letter and `/f UEFI`;
+  `/bootex` is omitted for the existing MicrosoftWindows firmware template;
+  the reference image's normal EFI boot manager has a 2011-PCA signer.
+  The fallback EFI loader, Microsoft loader and BCD store must exist.
+  The base and ISO are detached before the differencing child is created.
+  Disk/partition GUIDs remain shared by clones; they are not randomized on
+  host attachment. TPM-bound BitLocker protectors are not supported.
+- **Ownership and cleanup:** ISO mount, base/child attachment, partitions,
+  access paths and temporary letter have durable intents before creation.
+  Fixed host helpers and DISM/BCDBoot descendants are atomically assigned to
+  a recorded private kill-on-close job. Cancellation joins native absence;
+  an existing named worker prevents cleanup overtaking it. Cleanup proves
+  guest absence, removes only recorded access paths on the owned attachments,
+  confirms detach, then removes workspace files. No provider service journal
+  or CI mode is touched. Applied-image TOTALBYTES, ISO size and child/flatten
+  headroom replace the template-copy space estimate.
+- **Inspection gate:** before boot, the child must be generalized to OOBE,
+  with no answer-file pointer, an absent/empty embedded answer directory,
+  no runner, agent installation, either guest task or bivouac job state. The reference
+  install image's pristine hives satisfy the existing setup-state gates.
+  `image inspect` instead hashes and inventories media without mounts, disk
+  creation or HCS. Facts are public; answer-file values are never reported.
 - **Offline staging:** the factory installs its own executable at
   `guestagent.WindowsPath`, recording SHA-256 and `guestagent.Version` in the
   manifest. The installation grants SYSTEM, Administrators and TrustedInstaller
@@ -1114,7 +1145,7 @@ ACL and deny-write handles, not hashed per job.
   Exact file/directory inventories and SHA-256 checks refuse links, incomplete
   or changed snapshots. A temporary sibling is renamed only after verification;
   ownership and inherited ACLs come from the guest repository, never the host.
-  Existing destination trees are refused. The template remains read-only.
+  Existing destination trees are refused. Install media remains read-only.
 - **Build:** one elevated foreground process boots the child with GPU-PV,
   no NIC or Plan9 shares, and only `guestagent.ServiceID` with the base
   SYSTEM/Administrators descriptor. Validation, runner check and sanitation
@@ -1144,7 +1175,7 @@ ACL and deny-write handles, not hashed per job.
   The build checks hardware D3D11, presentation and pixel readback, requires
   graceful shutdown, flattens the child and writes the manifest last.
 - **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the
-  only optional setup asset (required when the template has no runner).
+  only setup asset and is required for every install-media build.
   No legacy agent, helper, display-driver or OpenSSH installer is accepted.
   Bivouac build scripts, helpers, markers and temporary probes live under
   protected `C:\ProgramData\Bivouac\Image`.
@@ -1242,10 +1273,13 @@ ACL and deny-write handles, not hashed per job.
   `C:\ProgramData\Bivouac\Agent` storage with delete-shared files, so sanitation
   can remove build logs without interrupting the command transport. No SSH
   configuration or host-key generation is part of sanitation or runtime boot.
-- **Inspection/manifest:** template inspection refuses an existing agent
-  installation, either task or Guest directory. Public agent presence/hash/task
-  facts replace legacy service and package facts; template VDD presence remains
-  informational. The manifest records source/asset/output/agent hashes, agent
+- **Inspection/manifest:** offline inspection refuses an existing agent
+  installation, either guest task or Guest directory. Public agent presence/hash/task
+  facts replace legacy service and package facts; legacy VDD presence remains
+  informational. The manifest records media/asset/output/agent hashes, selected image metadata,
+  host DISM version, BCDBoot options, WinRE choice, disk/partition GUIDs and
+  effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
+  and TPM present (readiness is recorded). It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;
@@ -1272,7 +1306,7 @@ ACL and deny-write handles, not hashed per job.
   video, no VDD nodes, enabled/started synthetic video, and all existing render
   gates. Every desktop lab run also requires those topology gates and all
   probe-window checks. Windows Security observations are diagnostic only.
-- The image's time zone and execution policy are the template's.
+- The image's time zone and execution policy are inherited from install media.
 - Admission does not yet compare the host GPU driver with the one the image
   was built with; rebuild the image after a host driver update.
 

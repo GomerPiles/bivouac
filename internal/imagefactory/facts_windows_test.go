@@ -151,7 +151,7 @@ public static class FactoryInspection {
 function Get-DiskImage {param($ImagePath) [pscustomobject]@{Attached=$false}}
 function Mount-DiskImage {param($ImagePath,$Access,[switch]$NoDriveLetter,[switch]$PassThru) [pscustomobject]@{Fake=$true}}
 function Get-Disk {[pscustomobject]@{Number=123}}
-function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100}}
+function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100;Guid='{11111111-1111-1111-1111-111111111111}'}}
 function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
  foreach($part in @('Windows\Panther','Windows\System32\config')){$null=New-Item -ItemType Directory -Path (Join-Path $AccessPath $part) -Force}
  foreach($part in @('SYSTEM','SOFTWARE','SAM')){[IO.File]::WriteAllText((Join-Path $AccessPath ('Windows\System32\config\'+$part)),'public-placeholder')}
@@ -166,7 +166,7 @@ function Dismount-DiskImage {param($ImagePath)}
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "guest_user": "imageuser"})
+	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "guest_user": "imageuser", "windows_guid": "{11111111-1111-1111-1111-111111111111}"})
 	b, err := executeHost(t.Context(), path, data, true)
 	var facts Inspection
 	if err != nil || json.Unmarshal(b, &facts) != nil || !facts.Eligible() || facts.GuestUserExists != nil || facts.VDDPresent != nil {

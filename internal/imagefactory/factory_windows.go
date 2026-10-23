@@ -56,20 +56,10 @@ func loadConfig(path string, check func(string) error) (Config, error) {
 // Build is deliberately synchronous. Its creating handle remains owned until
 // shutdown or failure cleanup has settled; no service or journal is contacted.
 func Build(ctx context.Context, c Config, log *slog.Logger) (_ Manifest, err error) {
-	return runFactory(ctx, c, log, nil)
+	return runFactory(ctx, c, log)
 }
 
-// Inspect shares the exact copy/child/inspection path with Build, prints the
-// recorded facts before deferred cleanup, and never enters preparation or boot.
-func Inspect(ctx context.Context, c Config, log *slog.Logger, out io.Writer) error {
-	if out == nil {
-		return errors.New("image inspect requires an output writer")
-	}
-	_, err := runFactory(ctx, c, log, out)
-	return err
-}
-
-func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.Writer) (result Manifest, err error) {
+func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifest, err error) {
 	if err = RequireElevated(); err != nil {
 		return Manifest{}, err
 	}
@@ -81,9 +71,6 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 	}
 	if err = winhost.CheckProtected(c.ImageRoot); err != nil {
 		return Manifest{}, errors.New("image root must already be administrator-protected")
-	}
-	if err = winhost.CheckProtected(c.Source); err != nil {
-		return Manifest{}, errors.New("source must be administrator-protected")
 	}
 	if err = checkFinalInputs(c); err != nil {
 		return Manifest{}, err
@@ -116,7 +103,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{BuildID: id, GuestName: name, GuestUser: c.GuestUser, Source: c.Source, SourceSHA256: strings.ToLower(c.SourceSHA256), Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
+	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{BuildID: id, GuestName: name, GuestUser: c.GuestUser, Media: MediaRecord{ISOSHA256: strings.ToLower(c.ISOSHA256)}, Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
 	if err = writeJSON(filepath.Join(workspace, "owner.json"), r); err != nil {
 		// No native or disk operation has occurred, and this invocation created
 		// both entries. Remove only these entries, without recursive traversal.
@@ -191,31 +178,45 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		r.Manifest.PhaseMS[label] = time.Since(begun).Milliseconds()
 		return errors.Join(e, r.save())
 	}
-	if err = phase("source_copy", func() error {
-		var e error
-		r.Manifest.Template, e = ownerTemplate(c)
+	if err = phase("media_copy", func() error {
+		size, e := diskSize(c.ISO)
 		if e != nil {
 			return e
 		}
-		size, e := diskSize(c.Source)
-		if e != nil {
-			return e
-		}
-		space, e := admitSpace(c.ImageRoot, "source_copy", size, 0, false)
+		space, e := admitSpace(c.ImageRoot, "media_copy", size, 1, false)
 		r.SpaceChecks = append(r.SpaceChecks, space)
 		if e != nil {
 			return e
 		}
-		_, _, e = copyPinned(buildCtx, c.Source, filepath.Join(workspace, "source.vhdx"), c.SourceSHA256, 256<<30)
+		if _, _, e = copyPinned(buildCtx, c.ISO, filepath.Join(workspace, "install.iso"), c.ISOSHA256, 32<<30); e != nil {
+			return e
+		}
+		inventory, e := inventoryISOFile(filepath.Join(workspace, "install.iso"), c.EditionID, c.ImageIndex)
 		if e != nil {
 			return e
 		}
-		return verifyStandalone(filepath.Join(workspace, "source.vhdx"))
+		r.Manifest.Media.Kind = inventory.Kind
+		r.Manifest.Media.Image = inventory.Selected
+		if inventory.Selected.TotalBytes+(4<<30) > uint64(c.DiskGB)<<30 {
+			return errors.New("selected install image does not fit configured disk")
+		}
+		space, e = admitSpace(c.ImageRoot, "base_disk", size, inventory.Selected.TotalBytes, false)
+		r.SpaceChecks = append(r.SpaceChecks, space)
+		return e
 	}); err != nil {
+		return Manifest{}, err
+	}
+	if err = phase("base_disk", func() error { return prepareBase(buildCtx, c, r) }); err != nil {
+		return Manifest{}, err
+	}
+	if err = r.intent("child_attach", r.save); err != nil {
 		return Manifest{}, err
 	}
 	if err = vhd.CreateDiffVhd(r.disk(), filepath.Join(workspace, "source.vhdx"), 0); err != nil {
 		return Manifest{}, errors.New("cannot create owned differencing disk")
+	}
+	if err = r.intent("inspection_access", r.save); err != nil {
+		return Manifest{}, err
 	}
 	err = phase("inspection", func() error {
 		facts, e := inspectOwned(buildCtx, c, r, false, runHost)
@@ -228,17 +229,10 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		}
 		return nil
 	})
-	if inspectOut != nil {
-		printErr := json.NewEncoder(inspectOut).Encode(InspectionReport{BuildID: id, Facts: r.Inspection})
-		return r.Manifest, errors.Join(err, printErr)
-	}
 	if err != nil {
 		return Manifest{}, err
 	}
 	if err = phase("preparation", func() error {
-		if e := r.Inspection.RunnerInput(c); e != nil {
-			return e
-		}
 		var e error
 		r.Manifest.Drivers, e = copyDrivers(buildCtx, c, r)
 		if e != nil {
@@ -414,7 +408,7 @@ func prove(r *record, p hcs.Properties, running bool) error {
 }
 
 func detachOwned(ctx context.Context, r *record) error {
-	if _, err := os.Lstat(r.disk()); errors.Is(err, os.ErrNotExist) {
+	if len(r.StorageIntents) == 0 {
 		return nil
 	}
 	_, err := runHost(ctx, detachDisk, r.scriptData(), false)
@@ -594,4 +588,10 @@ func document(c Config, r *record) hcs.ComputeSystem {
 		Devices:          hcs.Devices{Scsi: map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: r.disk()}, "1": {Type: hcs.AttachmentISO, Path: filepath.Join(r.Workspace, "setup-private", "setup.iso"), ReadOnly: true}}}}, VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768}, Keyboard: &hcs.Keyboard{}, Mouse: &hcs.Mouse{}, HvSocket: &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}},
 		SecuritySettings: &hcs.SecuritySettings{EnableTpm: true, Isolation: &hcs.Isolation{IsolationType: hcs.IsolationGuestStateOnly}}, GuestState: &hcs.GuestState{GuestStateFilePath: filepath.Join(r.Workspace, "vm.vmgs"), RuntimeStateFilePath: filepath.Join(r.Workspace, "vm.vmrs")},
 	}}
+}
+
+func hashReader(ctx context.Context, r io.Reader, limit int64) (string, error) {
+	h := sha256.New()
+	_, e := copyContext(ctx, h, r, limit)
+	return hex.EncodeToString(h.Sum(nil)), e
 }

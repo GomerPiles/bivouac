@@ -15,6 +15,9 @@ import (
 )
 
 func prepareMedia(ctx context.Context, c Config, r *record) error {
+	if err := r.intent("staging_access", r.save); err != nil {
+		return err
+	}
 	return prepareMediaWith(ctx, c, r, newProtectedDirectory, copyPinned, runHost)
 }
 
