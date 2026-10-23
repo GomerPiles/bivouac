@@ -85,8 +85,8 @@ func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestag
 		return errors.Join(errors.New("guest desktop validation failed"), err)
 	}
 	var topology windesktop.Topology
-	if json.Unmarshal(b, &topology) != nil {
-		return errors.New("invalid topology report")
+	if err := json.Unmarshal(b, &topology); err != nil {
+		return fmt.Errorf("invalid topology report (%s)", reportShape(b, err))
 	}
 	r.Manifest.Topology = &topology
 	if err := factoryDisplayReportOK(b); err != nil {
@@ -138,8 +138,8 @@ func factoryDisplayReportOK(b []byte) error {
 		return errors.New("guest desktop rendering checks did not all pass")
 	}
 	var topology windesktop.Topology
-	if json.Unmarshal(b, &topology) != nil {
-		return errors.New("invalid topology report")
+	if err := json.Unmarshal(b, &topology); err != nil {
+		return fmt.Errorf("invalid topology report (%s)", reportShape(b, err))
 	}
 	if !topology.SyntheticOK() {
 		return errors.New("guest synthetic topology checks did not all pass")
@@ -166,4 +166,22 @@ func renderOK(b []byte) bool {
 		Problem          uint32 `json:"virtual_render_problem_code"`
 	}
 	return json.Unmarshal(b, &r) == nil && r.Ready && r.Desktop && r.Hardware && r.Presented && r.Pixels && r.Stage == 7 && r.HRESULT == 0 && r.Vendor != 0 && (r.Vendor != 0x1414 || r.Device != 0x8c) && r.Adapters > 0 && r.Adapters <= 32 && r.HardwareAdapters > 0 && r.HardwareAdapters <= r.Adapters && r.GPUValid && r.Displays <= 32 && r.Virtual > 0 && r.Virtual <= r.Displays && r.Problem == 0
+}
+
+// reportShape describes a malformed guest report with numbers and this
+// package's own field names only, never guest bytes.
+func reportShape(b []byte, err error) string {
+	shape := fmt.Sprintf("len=%d", len(b))
+	if len(b) > 0 {
+		shape += fmt.Sprintf(" first=0x%02x last=0x%02x", b[0], b[len(b)-1])
+	}
+	var syntax *json.SyntaxError
+	var kind *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syntax):
+		shape += fmt.Sprintf(" syntax_offset=%d", syntax.Offset)
+	case errors.As(err, &kind):
+		shape += fmt.Sprintf(" field=%q json_kind=%q offset=%d", kind.Field, kind.Value, kind.Offset)
+	}
+	return shape
 }
