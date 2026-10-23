@@ -2,7 +2,9 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $step=10
 function Emit-Result($Value){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine(($Value|ConvertTo-Json -Compress -Depth 5))}
-function Invoke-ImageTool([string]$Path,[string[]]$Arguments){& $Path @Arguments *> $null;return [int]$LASTEXITCODE}
+# Windows PowerShell 5.1 turns a native tool's stderr into a terminating error
+# under Stop, before its exit code can be read. The exit code is the contract.
+function Invoke-ImageTool([string]$Path,[string[]]$Arguments){$ErrorActionPreference='Continue';& $Path @Arguments *> $null;return [int]$LASTEXITCODE}
 function Get-MountedDeviceNames{
  $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
  if(!$key){throw 'mount-manager state unavailable'}
