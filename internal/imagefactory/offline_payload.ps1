@@ -84,8 +84,12 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
   $expected=@($driver.files.PSObject.Properties)
   if(!$expected.Count -or $expected.Count -gt 8192 -or $files.Count -ne $expected.Count -or $directories.Count -ne @($driver.directories).Count){throw 'partial snapshot'}
   foreach($directory in $driver.directories){if(!$directories.ContainsKey($directory)){throw 'partial directory'}}
-  $target=Join-Path $repository $driver.name;$temporary=$target+'.bivouac-staging'
-  foreach($path in @($target,$temporary)){Assert-OfflinePath $Mount $path;if(Test-Path -LiteralPath $path){throw 'existing driver tree'}}
+  $target=Join-Path $repository $driver.name;$temporary=$target+'.bivouac-staging';$replaced=$target+'.bivouac-replaced'
+  # Templates prepared by App Sandbox may already hold this driver directory.
+  # It is replaced, never merged; only bivouac's own staging names must be absent.
+  foreach($path in @($target,$temporary,$replaced)){Assert-OfflinePath $Mount $path}
+  foreach($path in @($temporary,$replaced)){if(Test-Path -LiteralPath $path){throw 'existing driver staging'}}
+  if((Test-Path -LiteralPath $target) -and !(Get-Item -Force -LiteralPath $target).PSIsContainer){throw 'driver target is not a directory'}
   try {
    New-OfflineDirectory $Mount $temporary
    # Only owner and inherited guest permissions come from the guest parent.
@@ -107,8 +111,15 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
    }
    foreach($directory in $driver.directories){$path=Join-Path $temporary $directory;Set-OfflineOwner $path ($parentACL.GetOwner([Security.Principal.SecurityIdentifier]))}
    # Rename on the mounted volume publishes only the complete verified tree.
-   [IO.Directory]::Move($temporary,$target)
-  } finally {if(Test-Path -LiteralPath $temporary){Assert-OfflinePath $Mount $temporary;Remove-Item -LiteralPath $temporary -Recurse -Force}}
+   # An existing tree moves aside first and returns if publication fails.
+   if(Test-Path -LiteralPath $target){
+    [IO.Directory]::Move($target,$replaced)
+    try{[IO.Directory]::Move($temporary,$target)}catch{[IO.Directory]::Move($replaced,$target);throw}
+   } else {[IO.Directory]::Move($temporary,$target)}
+  } finally {
+   if(Test-Path -LiteralPath $temporary){Assert-OfflinePath $Mount $temporary;Remove-Item -LiteralPath $temporary -Recurse -Force}
+   if((Test-Path -LiteralPath $replaced) -and (Test-Path -LiteralPath $target)){Assert-OfflinePath $Mount $replaced;Remove-Item -LiteralPath $replaced -Recurse -Force}
+  }
  }
 }
 function Install-OfflineAgent([string]$Mount,[string]$Source,[string]$Hash) {
