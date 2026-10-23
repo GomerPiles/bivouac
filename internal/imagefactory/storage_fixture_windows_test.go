@@ -123,7 +123,13 @@ const storageFixturePS = `
   switch($fixture.refuse){'unsigned' {$status='NotSigned'};'invalid_signature' {$status='HashMismatch'};'issuer2023' {$issuer='CN=Windows UEFI CA 2023, O=Microsoft Corporation'};'unknown_issuer' {$issuer='CN=Unrecognized'}}
   [pscustomobject]@{Status=$status;SignerCertificate=[pscustomobject]@{Issuer=$issuer}}
  }
- function Test-RecordedLetterMapping([string]$Letter){if($fixture.refuse -eq 'mapping_unreadable'){throw 'unavailable'};return ($state.letter -or $fixture.stale_mapping)}
+ function Get-MountedDeviceNames{if($fixture.refuse -eq 'mapping_unreadable'){throw 'unavailable'};$fixture.reservations}
+ function Get-MountedDeviceMapping([string]$Letter){
+  if($fixture.refuse -eq 'mapping_unreadable'){throw 'unavailable'}
+  if($fixture.foreign_mapping){return ,([byte[]]([Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+([Guid]'{ffffffff-ffff-ffff-ffff-ffffffffffff}').ToByteArray()))}
+  if($state.letter -or $fixture.stale_mapping){return ,([byte[]]([Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+([Guid]$fixture.guids[0]).ToByteArray()))}
+  return $null
+ }
 `
 
 type storageFixture struct {
@@ -215,6 +221,84 @@ func requireScriptStep(t *testing.T, err error, want int) {
 	}
 }
 
+func TestBaseLetterReservations(t *testing.T) {
+	t.Run("selection", func(t *testing.T) {
+		f := newStorageFixture(t, "media")
+		f.options["reservations"] = []string{`\DosDevices\z:`, `\DosDevices\Y:`, `\DosDevices\X:other`, `\??\Volume{foreign}`}
+		b, e := f.run(baseDisk, f.data("media"))
+		var result struct{ Letter string }
+		if e != nil || json.Unmarshal(b, &result) != nil || result.Letter != "X" {
+			t.Fatal("selection did not skip reserved absent devices", e)
+		}
+	})
+	t.Run("reservation_after_selection", func(t *testing.T) {
+		f := newStorageFixture(t, "boot")
+		f.options["reservations"] = []string{`\DosDevices\Z:`}
+		_, e := f.run(baseDisk, f.data("boot"))
+		requireScriptStep(t, e, 60)
+		if len(f.trace()) != 0 {
+			t.Fatal("reserved letter taken during boot")
+		}
+	})
+	t.Run("unreadable", func(t *testing.T) {
+		f := newStorageFixture(t, "media")
+		f.options["refuse"] = "mapping_unreadable"
+		_, e := f.run(baseDisk, f.data("media"))
+		requireScriptStep(t, e, 20)
+	})
+}
+
+func TestGPTLetterMappingBytes(t *testing.T) {
+	helpers, _, ok := strings.Cut(detachDisk, "\ntry{")
+	if !ok {
+		t.Fatal("cleanup helper boundary absent")
+	}
+	// This asymmetric GUID makes textual/network byte order differ from the
+	// Windows binary GUID layout. No registry or native Storage command runs.
+	script := helpers + `
+$guid='{00112233-4455-6677-8899-aabbccddeeff}'
+[byte[]]$owned=68,77,73,79,58,73,68,58,51,34,17,0,85,68,119,102,136,153,170,187,204,221,238,255
+if(!(Test-GPTLetterMapping $owned $guid)){throw 'owned mapping rejected'}
+$foreign=$owned.Clone();$foreign[8]=0
+$prefix=$owned.Clone();$prefix[0]=0
+[byte[]]$network=68,77,73,79,58,73,68,58,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255
+foreach($value in @($null,'DMIO:ID:',([byte[]]@()),$foreign,$prefix,$network,([byte[]]$owned[0..22]),([byte[]]($owned+0)))){
+ if(Test-GPTLetterMapping $value $guid){throw 'foreign mapping claimed'}
+}
+[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
+[Console]::Out.WriteLine('{}')
+`
+	path := filepath.Join(t.TempDir(), "mapping.ps1")
+	if e := os.WriteFile(path, []byte(script), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := executeHost(t.Context(), path, nil, true); e != nil {
+		t.Fatal("mapping byte comparison", e)
+	}
+}
+
+func TestForeignLetterMappingBuildAndCleanup(t *testing.T) {
+	f := newStorageFixture(t, "boot")
+	if _, e := f.run(baseDisk, f.data("boot")); e != nil {
+		t.Fatal("boot failed", e)
+	}
+	if _, e := f.run(baseDisk, f.data("detach")); e != nil {
+		t.Fatal("build detach failed", e)
+	}
+	// Another device reserves the recorded letter after the factory releases it.
+	f.options["foreign_mapping"] = true
+	b, e := f.cleanup()
+	var result struct {
+		Letter string `json:"retained_letter"`
+	}
+	if e != nil || json.Unmarshal(b, &result) != nil || result.Letter != "" {
+		t.Fatal("foreign mapping retained a completed build", e)
+	}
+	if calls := f.trace(); slices.Contains(calls[slices.Index(calls, "detach_base")+1:], "remove_letter") {
+		t.Fatal("cleanup touched a foreign reservation")
+	}
+}
+
 func TestBaseLayoutSafetyRefusals(t *testing.T) {
 	for _, refuse := range []string{"device", "backing", "storage", "nonraw", "sector", "existing_partitions"} {
 		t.Run(refuse, func(t *testing.T) {
@@ -248,7 +332,7 @@ func TestBaseExactPartitionTable(t *testing.T) {
 					t.Fatal("valid table refused", e)
 				}
 			} else {
-				requireScriptStep(t, e, 45)
+				requireScriptStep(t, e, 44)
 				if slices.Contains(f.trace(), "access_windows") {
 					t.Fatal("access path added after bad table")
 				}
@@ -357,7 +441,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 	cases := []struct {
 		mode, fail string
 		step       int
-	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 44}, {"layout", "access_esp", 44}, {"apply", "tool_dism", 50}, {"boot", "letter", 60}, {"boot", "tool_bcdboot", 60}, {"boot", "remove_letter", 60}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
+	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "letter", 60}, {"boot", "tool_bcdboot", 60}, {"boot", "remove_letter", 60}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
 	for _, test := range cases {
 		t.Run(test.fail, func(t *testing.T) {
 			f := newStorageFixture(t, test.mode)
@@ -391,7 +475,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 	}
 }
 func TestCleanupAccessIntentsAndStaleLetter(t *testing.T) {
-	for _, test := range []string{"all", "no_access_intents", "reboot_mapping", "mapping_unreadable", "detached_no_mapping"} {
+	for _, test := range []string{"all", "no_access_intents", "reboot_mapping", "foreign_mapping", "mapping_unreadable", "detached_no_mapping"} {
 		t.Run(test, func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.state["child_attached"] = true
@@ -404,6 +488,9 @@ func TestCleanupAccessIntentsAndStaleLetter(t *testing.T) {
 			}
 			if test == "mapping_unreadable" {
 				f.options["refuse"] = test
+			}
+			if test == "foreign_mapping" {
+				f.options["foreign_mapping"] = true
 			}
 			writeFixtureJSON(t, f.statePath, f.state)
 			data := f.data("cleanup")
@@ -428,6 +515,9 @@ func TestCleanupAccessIntentsAndStaleLetter(t *testing.T) {
 			retained := test == "reboot_mapping" || test == "mapping_unreadable"
 			if (result.Letter == "Z") != retained {
 				t.Fatal("stale letter retention wrong")
+			}
+			if test == "foreign_mapping" && slices.Contains(f.trace(), "remove_letter") {
+				t.Fatal("foreign mapping touched")
 			}
 			if test == "all" {
 				for _, call := range []string{"remove_windows", "remove_esp", "remove_inspection", "remove_staging"} {

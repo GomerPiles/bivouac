@@ -1149,9 +1149,12 @@ ACL and deny-write handles, not hashed per job.
   worker. It proves guest absence, removes only recorded access paths on the
   owned attachments (including RAW/partitionless bases), confirms detach, then
   removes workspace files. Storage uncertainty retains the workspace.
-  A persistent temporary-letter mapping whose safe removal cannot be proved
-  after detach/reboot is left untouched, recorded as retained_letter and
-  reported by image cleanup; the workspace remains for operator resolution.
+  Temporary-letter selection excludes live letters and every mount-manager
+  reservation, including absent devices; boot rechecks reservations before use.
+  After detach/reboot, only a GPT mapping with the exact DMIO:ID: prefix and
+  recorded ESP GUID bytes retains the workspace for operator resolution.
+  Unreadable mount-manager state also retains it. Cleanup reports retained_letter;
+  known foreign mappings remain untouched and do not retain the workspace.
   No provider service journal or CI mode is touched. Applied-image TOTALBYTES,
   ISO size and child/flatten headroom replace the template-copy space estimate.
 - **Inspection gate:** before boot, the child must be generalized to OOBE,

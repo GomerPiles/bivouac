@@ -426,9 +426,13 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    job or a build that is still running, and never removes a published image.
    Host-worker jobs cover the helper/DISM processes, not WMI providers or
    storage-service operations; uncertain detach retains the workspace.
-   If a temporary-letter mapping survives detach or a host reboot and cannot
-   be safely proved/removable, cleanup leaves it untouched and retains the
-   workspace. The build record and cleanup JSON contain `retained_letter`.
+   Temporary-letter selection skips live letters and all MountedDevices
+   reservations, including absent devices; boot checks reservations again.
+   After detach or reboot, cleanup retains the workspace only for a GPT mapping
+   whose data is exactly `DMIO:ID:` plus the recorded ESP GUID's Windows binary
+   bytes, or when mount-manager state cannot be read. Foreign mappings remain
+   untouched and do not retain the workspace.
+   The build record and cleanup JSON contain `retained_letter`.
    The operator must verify that mapping against the recorded ESP GUID before
    resolving it, then retry cleanup; do not delete a letter based on its name.
 
