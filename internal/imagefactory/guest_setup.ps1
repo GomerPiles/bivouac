@@ -67,7 +67,20 @@ foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1
  $step=37;Write-SetupStep $step $false
  if(@(Get-VDDPackages).Count){throw 'VDD packages remain'}
  $step=38;Write-SetupStep $step $false
- if(Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox')){throw 'removed component directory remains'}
+ # Specialize removes this directory, but the template can recreate it before
+ # first logon. Remove it again here; sanitation verifies it before shutdown.
+ $appSandbox=Join-Path $env:SystemRoot 'AppSandbox'
+ if(Test-Path -LiteralPath $appSandbox){
+  $current=$appSandbox
+  while($current){if((Get-Item -Force -LiteralPath $current).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'removal path link'};$current=Split-Path -Parent $current}
+  $queue=[Collections.Generic.Queue[string]]::new();$queue.Enqueue($appSandbox);$count=0
+  while($queue.Count){foreach($entry in @(Get-ChildItem -LiteralPath ($queue.Dequeue()) -Force)){
+   $count++;if($count -gt 16384 -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'removal bound or link'}
+   if($entry.PSIsContainer){$queue.Enqueue($entry.FullName)}
+  }}
+  Remove-Item -LiteralPath $appSandbox -Recurse -Force
+ }
+ if(Test-Path -LiteralPath $appSandbox){throw 'removed component directory remains'}
 
 # The inbox client and ssh-agent belong to Windows servicing and remain intact.
 $step=39;Write-SetupStep $step $false
