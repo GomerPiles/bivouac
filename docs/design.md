@@ -1130,8 +1130,11 @@ ACL and deny-write handles, not hashed per job.
   `/bootex` is omitted for the existing MicrosoftWindows firmware template;
   the reference image's normal EFI boot manager has a 2011-PCA signer.
   The final table must be exactly three partitions in offset order with the
-  recorded GUIDs, ESP/MSR/basic-data types and expected sizes; automatic extra
-  partitions refuse. The fallback EFI loader, Microsoft loader and BCD store
+  recorded GUIDs, ESP/MSR/basic-data types and expected sizes. If GPT
+  initialization creates its own MSR, the factory removes that one partition
+  before building the layout and records it; any other initial or extra
+  partition refuses. A refused table is reported as numbers only (type codes,
+  MiB offsets and sizes, GUID matches). The fallback EFI loader, Microsoft loader and BCD store
   must exist. Both loaders must have valid Authenticode signatures from the
   expected 2011 issuer. The manifest records fixed issuer names and BCDBoot's
   version alongside DISM's version.
