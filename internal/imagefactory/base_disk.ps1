@@ -23,13 +23,17 @@ function Get-LayoutShape($Parts,$Expected){
  }
  return [ordered]@{layout_failure=$true;partition_count=[uint32]$Parts.Count;partitions=$rows}
 }
-function Get-BootIssuer([string]$Path){
+# Numbers only: 0 invalid or unsigned, 1 Windows Production PCA 2011,
+# 2 Windows UEFI CA 2023, 3 Windows Production PCA 2026, 4 other valid issuer.
+function Get-IssuerCode([string]$Path){
+ if(!(Test-Path -LiteralPath $Path -PathType Leaf)){return 0}
  $signature=Get-AuthenticodeSignature -LiteralPath $Path
- if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){throw 'invalid boot signature'}
+ if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){return 0}
  $issuer=$signature.SignerCertificate.Issuer
- if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2011(?:,|$)'){return 'windows_production_pca_2011'}
- if($issuer -match '(?:^|,\s*)CN=Windows UEFI CA 2023(?:,|$)'){return 'windows_uefi_ca_2023'}
- throw 'unsupported boot issuer'
+ if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2011(?:,|$)'){return 1}
+ if($issuer -match '(?:^|,\s*)CN=Windows UEFI CA 2023(?:,|$)'){return 2}
+ if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2026\b'){return 3}
+ return 4
 }
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
@@ -132,14 +136,20 @@ try{
   $step=60
   if($data.letter -cnotmatch '^[D-Z]$' -or (Get-Volume|Where-Object DriveLetter -eq $data.letter) -or (Get-PSDrive -PSProvider FileSystem|Where-Object Name -eq $data.letter) -or $data.letter -in @(Get-ReservedDriveLetters)){throw 'letter unavailable'}
   $access=$data.letter+':\'
+  $step=61
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath $access
   try{
+   $step=62
    $bcdboot=Join-Path $env:SystemRoot 'System32\bcdboot.exe'
    $bootArgs=@((Join-Path $win 'Windows'),'/s',($data.letter+':'),'/f','UEFI','/offline','/nofirmwaresync')
-   if((Invoke-ImageTool $bcdboot $bootArgs) -ne 0){throw 'bcdboot failed'}
+   $bootExit=Invoke-ImageTool $bcdboot $bootArgs
+   if($bootExit -ne 0){Emit-Result @{boot_failure=$true;bcdboot_exit=[int64]$bootExit};throw 'bcdboot failed'}
+   $step=63
    foreach($name in @('EFI\Boot\bootx64.efi','EFI\Microsoft\Boot\bootmgfw.efi','EFI\Microsoft\Boot\BCD')){if(!(Test-Path -LiteralPath (Join-Path $esp $name) -PathType Leaf)){throw 'boot artifact absent'}}
-   $issuers=@{fallback=(Get-BootIssuer (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-BootIssuer (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'))}
-   if($issuers.fallback -ne 'windows_production_pca_2011' -or $issuers.microsoft -ne 'windows_production_pca_2011'){throw 'boot issuer differs from offline non-bootex selection'}
+   $step=64
+   $codes=@{fallback=(Get-IssuerCode (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-IssuerCode (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'));source=(Get-IssuerCode (Join-Path $win 'Windows\Boot\EFI\bootmgfw.efi'))}
+   if($codes.fallback -ne 1 -or $codes.microsoft -ne 1){Emit-Result @{boot_failure=$true;fallback_issuer=$codes.fallback;microsoft_issuer=$codes.microsoft;source_issuer=$codes.source};throw 'boot issuer differs from offline non-bootex selection'}
+   $issuers=@{fallback='windows_production_pca_2011';microsoft='windows_production_pca_2011'}
    $v=(Get-Item -LiteralPath $bcdboot).VersionInfo
    $bootVersion=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)
   }finally{$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath $access}

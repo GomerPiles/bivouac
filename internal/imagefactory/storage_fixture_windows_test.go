@@ -432,7 +432,14 @@ func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
 					t.Fatal("invalid signed boot result", e)
 				}
 			} else {
-				requireScriptStep(t, e, 60)
+				step := map[string]int{"letter_collision": 60, "tool_exit": 62, "missing_artifact": 63}[refuse]
+				if step == 0 {
+					step = 64
+				}
+				requireScriptStep(t, e, step)
+				if (step == 62 || step == 64) && bootShape(b) == nil {
+					t.Fatal("refused boot has no numeric shape")
+				}
 			}
 			trace := f.trace()
 			if refuse == "letter_collision" {
@@ -467,7 +474,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 	cases := []struct {
 		mode, fail string
 		step       int
-	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "letter", 60}, {"boot", "tool_bcdboot", 60}, {"boot", "remove_letter", 60}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
+	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "letter", 61}, {"boot", "tool_bcdboot", 62}, {"boot", "remove_letter", 64}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
 	for _, test := range cases {
 		t.Run(test.fail, func(t *testing.T) {
 			f := newStorageFixture(t, test.mode)
@@ -567,7 +574,7 @@ func TestCleanupAfterAmbiguousCreationResponses(t *testing.T) {
 	for _, test := range []struct {
 		mode, call string
 		step       int
-	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"boot", "letter", 60}} {
+	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"boot", "letter", 61}} {
 		t.Run(test.call, func(t *testing.T) {
 			f := newStorageFixture(t, test.mode)
 			f.options["fail_after"] = test.call

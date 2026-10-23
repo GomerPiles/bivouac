@@ -60,6 +60,30 @@ type DiskLayout struct {
 	AutomaticMSRRemoved bool `json:"automatic_msr_removed"`
 }
 
+// bootShape describes a refused BCDBoot step with numbers only: BCDBoot's exit
+// code, or issuer codes for the ESP loaders and the applied image's own boot
+// manager (0 invalid, 1 PCA 2011, 2 UEFI CA 2023, 3 PCA 2026, 4 other).
+func bootShape(b []byte) error {
+	var shape struct {
+		Failure   bool   `json:"boot_failure"`
+		Exit      *int64 `json:"bcdboot_exit"`
+		Fallback  uint32 `json:"fallback_issuer"`
+		Microsoft uint32 `json:"microsoft_issuer"`
+		Source    uint32 `json:"source_issuer"`
+	}
+	if !json.Valid(b) {
+		return nil
+	}
+	_ = json.Unmarshal(b, &shape)
+	if !shape.Failure {
+		return nil
+	}
+	if shape.Exit != nil {
+		return fmt.Errorf("bcdboot refused: exit=%d", *shape.Exit)
+	}
+	return fmt.Errorf("boot loaders refused: fallback_issuer=%d microsoft_issuer=%d source_issuer=%d", shape.Fallback, shape.Microsoft, shape.Source)
+}
+
 // layoutShape describes a refused partition table with numbers only, from the
 // frame the layout script emits before failing. It returns nil without one.
 func layoutShape(b []byte) error {

@@ -129,7 +129,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	}
 	b, err = invoke("boot")
 	if err != nil {
-		return err
+		return errors.Join(err, bootShape(b))
 	}
 	var boot struct {
 		Version string      `json:"bcdboot_version"`
