@@ -3,6 +3,14 @@ $ProgressPreference='SilentlyContinue'
 $step=10
 function Emit-Result($Value){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine(($Value|ConvertTo-Json -Compress -Depth 5))}
 function Invoke-ImageTool([string]$Path,[string[]]$Arguments){& $Path @Arguments *> $null;return [int]$LASTEXITCODE}
+function Get-MountedDeviceNames{
+ $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
+ if(!$key){throw 'mount-manager state unavailable'}
+ try{return $key.GetValueNames()}finally{$key.Dispose()}
+}
+function Get-ReservedDriveLetters{
+ foreach($name in @(Get-MountedDeviceNames)){if($name -match '^\\DosDevices\\([D-Z]):$'){$Matches[1]}}
+}
 function Get-BootIssuer([string]$Path){
  $signature=Get-AuthenticodeSignature -LiteralPath $Path
  if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){throw 'invalid boot signature'}
@@ -27,6 +35,7 @@ try{
   if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){throw 'media volume'}
   $used=@(Get-Volume|Where-Object DriveLetter|ForEach-Object {[string]$_.DriveLetter})
   $used+=@(Get-PSDrive -PSProvider FileSystem|ForEach-Object {$_.Name})
+  $used+=@(Get-ReservedDriveLetters)
   $letter=$null;foreach($candidate in [char[]]'ZYXWVUTSRQPONMLKJIHGFED'){if([string]$candidate -notin $used){$letter=[string]$candidate;break}}
   if(!$letter){throw 'temporary letter unavailable'}
   Emit-Result @{volume=$volumes[0].Path;letter=$letter};exit 0
@@ -62,7 +71,7 @@ try{
   $step=43
   $wp=New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
   $null=Format-Volume -Partition $wp -FileSystem NTFS -Confirm:$false
-  $step=45
+  $step=44
   $parts=@(Get-Partition -DiskNumber $disk.Number | Sort-Object Offset)
   if($parts.Count -ne 3){throw 'unexpected partition count'}
   $expected=@($ep,$mp,$wp)
@@ -72,7 +81,7 @@ try{
    if($i -gt 0 -and $parts[$i].Offset -lt ($parts[$i-1].Offset+$parts[$i-1].Size)){throw 'overlapping partition layout'}
   }
   if($parts[0].Size -ne 200MB -or $parts[1].Size -ne 16MB -or $parts[2].Size -le 0){throw 'unexpected partition sizes'}
-  $step=44
+  $step=46
   foreach($path in @($win,$esp)){if(Test-Path -LiteralPath $path){throw 'access path exists'};$null=New-Item -ItemType Directory -Path $path}
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp.PartitionNumber -AccessPath ($win+'\')
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep.PartitionNumber -AccessPath ($esp+'\')
@@ -98,7 +107,7 @@ try{
  }
  if($data.mode -eq 'boot'){
   $step=60
-  if($data.letter -cnotmatch '^[D-Z]$' -or (Get-Volume|Where-Object DriveLetter -eq $data.letter) -or (Get-PSDrive -PSProvider FileSystem|Where-Object Name -eq $data.letter)){throw 'letter unavailable'}
+  if($data.letter -cnotmatch '^[D-Z]$' -or (Get-Volume|Where-Object DriveLetter -eq $data.letter) -or (Get-PSDrive -PSProvider FileSystem|Where-Object Name -eq $data.letter) -or $data.letter -in @(Get-ReservedDriveLetters)){throw 'letter unavailable'}
   $access=$data.letter+':\'
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath $access
   try{

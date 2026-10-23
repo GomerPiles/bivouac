@@ -1,11 +1,24 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-function Test-RecordedLetterMapping([string]$Letter){
- # Read only: a detached mount-manager mapping cannot safely be deleted by
- # letter alone. Keep the record/workspace for the operator if it still exists.
+function Get-MountedDeviceMapping([string]$Letter){
  $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
  if(!$key){throw 'mount-manager state unavailable'}
- try{return ('\DosDevices\'+$Letter+':') -in $key.GetValueNames()}finally{$key.Dispose()}
+ try{return ,($key.GetValue(('\DosDevices\'+$Letter+':'),$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))}finally{$key.Dispose()}
+}
+function Test-GPTLetterMapping($Mapping,[string]$ESPGuid){
+ # GPT mount-manager data is exactly the ASCII prefix and Windows GUID bytes.
+ # Anything else belongs to another device and must not retain this workspace.
+ if($Mapping -isnot [byte[]] -or $Mapping.Length -ne 24){return $false}
+ $guid=[Guid]::Empty
+ if(![Guid]::TryParse($ESPGuid,[ref]$guid)){throw 'recorded ESP identity unavailable'}
+ $expected=[Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+$guid.ToByteArray()
+ for($i=0;$i -lt $expected.Length;$i++){if($Mapping[$i] -ne $expected[$i]){return $false}}
+ return $true
+}
+function Test-RecordedLetterMapping([string]$Letter,[string]$ESPGuid){
+ # Read only: retain an owned stale mapping for operator resolution. Registry
+ # uncertainty also retains it; known foreign mappings are left alone.
+ return Test-GPTLetterMapping (Get-MountedDeviceMapping $Letter) $ESPGuid
 }
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
@@ -52,7 +65,7 @@ try{
  $retained=''
  if($intents.temporary_letter){
   if($data.temporary_letter -cnotmatch '^[D-Z]$'){exit 1}
-  try{if(Test-RecordedLetterMapping $data.temporary_letter){$retained=$data.temporary_letter}}catch{$retained=$data.temporary_letter}
+  try{if(Test-RecordedLetterMapping $data.temporary_letter $data.esp_guid){$retained=$data.temporary_letter}}catch{$retained=$data.temporary_letter}
  }
  [Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
  [Console]::Out.WriteLine((@{retained_letter=$retained}|ConvertTo-Json -Compress))
