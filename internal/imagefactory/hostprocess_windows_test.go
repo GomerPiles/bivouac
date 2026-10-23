@@ -57,7 +57,10 @@ func TestHostWorkerCancellationJoinsDescendants(t *testing.T) {
 	}
 }
 func TestHostWorkerRefusesExistingJob(t *testing.T) {
-	name := `Local\bivouac-image-test-` + hashBytes([]byte(t.TempDir()))[:32]
+	name := hostWorkerName(t.TempDir())
+	if !strings.HasPrefix(name, `Global\bivouac-image-`) {
+		t.Fatal("worker is not visible across sessions")
+	}
 	utf, e := windows.UTF16PtrFromString(name)
 	if e != nil {
 		t.Fatal(e)

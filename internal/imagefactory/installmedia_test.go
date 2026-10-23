@@ -144,6 +144,20 @@ func TestWIMSelectionFromMetadata(t *testing.T) {
 	}
 }
 
+func TestWIMIndexMustMatchPosition(t *testing.T) {
+	for _, indexes := range [][]int{{2}, {2, 1}, {1, 3}, {1, 1}} {
+		var images strings.Builder
+		for _, index := range indexes {
+			images.WriteString(imageXML("Professional", index))
+		}
+		b := syntheticWIM("<WIM>" + images.String() + "</WIM>")
+		binary.LittleEndian.PutUint32(b[44:], uint32(len(indexes))) // #nosec G115 -- <=2 fixture images.
+		if _, _, e := readWIMImages(bytes.NewReader(b), int64(len(b))); e == nil {
+			t.Fatal("non-positional INDEX accepted", indexes)
+		}
+	}
+}
+
 func sectionBytes(b []byte) *io.SectionReader {
 	return io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b)))
 }

@@ -38,6 +38,25 @@ func admitSpace(root, phase string, source, child uint64, publication bool) (Spa
 	if err != nil {
 		return SpaceCheck{}, err
 	}
+	return admitRequiredSpace(root, phase, source, child, required)
+}
+
+func requiredMediaCopySpace(iso uint64) (uint64, error) {
+	if iso == 0 || iso > 32<<30 {
+		return 0, errors.New("invalid ISO size")
+	}
+	return iso + (10 << 30), nil
+}
+
+func admitMediaCopySpace(root string, iso uint64) (SpaceCheck, error) {
+	required, err := requiredMediaCopySpace(iso)
+	if err != nil {
+		return SpaceCheck{}, err
+	}
+	return admitRequiredSpace(root, "media_copy", iso, 0, required)
+}
+
+func admitRequiredSpace(root, phase string, source, child, required uint64) (SpaceCheck, error) {
 	p, err := windows.UTF16PtrFromString(root)
 	if err != nil {
 		return SpaceCheck{}, err

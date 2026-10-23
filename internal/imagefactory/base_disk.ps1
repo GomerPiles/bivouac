@@ -2,6 +2,15 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $step=10
 function Emit-Result($Value){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine(($Value|ConvertTo-Json -Compress -Depth 5))}
+function Invoke-ImageTool([string]$Path,[string[]]$Arguments){& $Path @Arguments *> $null;return [int]$LASTEXITCODE}
+function Get-BootIssuer([string]$Path){
+ $signature=Get-AuthenticodeSignature -LiteralPath $Path
+ if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){throw 'invalid boot signature'}
+ $issuer=$signature.SignerCertificate.Issuer
+ if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2011(?:,|$)'){return 'windows_production_pca_2011'}
+ if($issuer -match '(?:^|,\s*)CN=Windows UEFI CA 2023(?:,|$)'){return 'windows_uefi_ca_2023'}
+ throw 'unsupported boot issuer'
+}
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){throw 'identity'}
@@ -53,6 +62,16 @@ try{
   $step=43
   $wp=New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
   $null=Format-Volume -Partition $wp -FileSystem NTFS -Confirm:$false
+  $step=45
+  $parts=@(Get-Partition -DiskNumber $disk.Number | Sort-Object Offset)
+  if($parts.Count -ne 3){throw 'unexpected partition count'}
+  $expected=@($ep,$mp,$wp)
+  $types=@('{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}','{e3c9e316-0b5c-4db8-817d-f92df00215ae}','{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}')
+  for($i=0;$i -lt 3;$i++){
+   if(!$parts[$i].Guid -or $parts[$i].Guid -ine $expected[$i].Guid -or $parts[$i].GptType -ine $types[$i] -or $parts[$i].Size -ne $expected[$i].Size -or $parts[$i].Offset -ne $expected[$i].Offset){throw 'unexpected partition layout'}
+   if($i -gt 0 -and $parts[$i].Offset -lt ($parts[$i-1].Offset+$parts[$i-1].Size)){throw 'overlapping partition layout'}
+  }
+  if($parts[0].Size -ne 200MB -or $parts[1].Size -ne 16MB -or $parts[2].Size -le 0){throw 'unexpected partition sizes'}
   $step=44
   foreach($path in @($win,$esp)){if(Test-Path -LiteralPath $path){throw 'access path exists'};$null=New-Item -ItemType Directory -Path $path}
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp.PartitionNumber -AccessPath ($win+'\')
@@ -73,8 +92,7 @@ try{
   $dism=Join-Path $env:SystemRoot 'System32\dism.exe'
   $dismArgs=@('/Apply-Image',('/ImageFile:'+$install),('/Index:'+$data.index),('/ApplyDir:'+$win),'/CheckIntegrity',('/LogPath:'+(Join-Path $child 'apply.log')))
   if($data.kind -eq 'swm'){$dismArgs+=('/SWMFile:'+(Join-Path $data.volume 'sources\install*.swm'))}
-  & $dism @dismArgs *> $null
-  if($LASTEXITCODE -ne 0){throw 'apply failed'}
+  if((Invoke-ImageTool $dism $dismArgs) -ne 0){throw 'apply failed'}
   $v=(Get-Item -LiteralPath $dism).VersionInfo
   Emit-Result @{dism_version=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)};exit 0
  }
@@ -84,12 +102,18 @@ try{
   $access=$data.letter+':\'
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath $access
   try{
-   & (Join-Path $env:SystemRoot 'System32\bcdboot.exe') @((Join-Path $win 'Windows'),'/s',($data.letter+':'),'/f','UEFI') *> $null
-   if($LASTEXITCODE -ne 0){throw 'bcdboot failed'}
+   $bcdboot=Join-Path $env:SystemRoot 'System32\bcdboot.exe'
+   $bootArgs=@((Join-Path $win 'Windows'),'/s',($data.letter+':'),'/f','UEFI','/offline','/nofirmwaresync')
+   if((Invoke-ImageTool $bcdboot $bootArgs) -ne 0){throw 'bcdboot failed'}
    foreach($name in @('EFI\Boot\bootx64.efi','EFI\Microsoft\Boot\bootmgfw.efi','EFI\Microsoft\Boot\BCD')){if(!(Test-Path -LiteralPath (Join-Path $esp $name) -PathType Leaf)){throw 'boot artifact absent'}}
+   $issuers=@{fallback=(Get-BootIssuer (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-BootIssuer (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'))}
+   if($issuers.fallback -ne 'windows_production_pca_2011' -or $issuers.microsoft -ne 'windows_production_pca_2011'){throw 'boot issuer differs from offline non-bootex selection'}
+   $v=(Get-Item -LiteralPath $bcdboot).VersionInfo
+   $bootVersion=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)
   }finally{$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath $access}
-  # No recovery partition or reagentc /enable: WinRE is left unconfigured.
-  Emit-Result @{};exit 0
+  # Apply-time policy only: no recovery partition; the factory does not register
+  # WinRE. Windows setup may subsequently configure it on the Windows volume.
+  Emit-Result @{bcdboot_version=$bootVersion;boot_issuers=$issuers};exit 0
  }
  if($data.mode -eq 'detach'){
   $step=70

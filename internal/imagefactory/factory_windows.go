@@ -183,7 +183,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 		if e != nil {
 			return e
 		}
-		space, e := admitSpace(c.ImageRoot, "media_copy", size, 1, false)
+		space, e := admitMediaCopySpace(c.ImageRoot, size)
 		r.SpaceChecks = append(r.SpaceChecks, space)
 		if e != nil {
 			return e
@@ -408,12 +408,28 @@ func prove(r *record, p hcs.Properties, running bool) error {
 }
 
 func detachOwned(ctx context.Context, r *record) error {
+	return detachOwnedWith(ctx, r, runHost)
+}
+func detachOwnedWith(ctx context.Context, r *record, run func(context.Context, string, any, bool) ([]byte, error)) error {
 	if len(r.StorageIntents) == 0 {
 		return nil
 	}
-	_, err := runHost(ctx, detachDisk, r.scriptData(), false)
+	b, err := run(ctx, detachDisk, r.scriptData(), true)
 	r.hostError("detach", err)
-	return err
+	if err != nil {
+		return err
+	}
+	var result struct {
+		RetainedLetter string `json:"retained_letter"`
+	}
+	if json.Unmarshal(b, &result) != nil || (result.RetainedLetter != "" && (result.RetainedLetter != r.TemporaryLetter || len(result.RetainedLetter) != 1 || result.RetainedLetter[0] < 'D' || result.RetainedLetter[0] > 'Z')) {
+		return errors.New("invalid storage cleanup result")
+	}
+	r.RetainedLetter = result.RetainedLetter
+	if r.RetainedLetter != "" {
+		return &RetainedLetterError{Letter: r.RetainedLetter}
+	}
+	return nil
 }
 func removeOwned(r *record) error {
 	if err := checkWorkspace(r); err != nil {

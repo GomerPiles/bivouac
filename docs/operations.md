@@ -267,17 +267,26 @@ Specialize removes legacy components and MSI server installations; FirstLogon re
 Runner ZIP, GPU driver directories and render probe remain explicit pinned inputs.
 Rollback uses the previous manager binary, VM host service binary and image together.
 
-The input ISO is only read; it need not be administrator-protected. A deny-write/delete
-handle pins it while copying and hashing into the protected workspace.
+Pinned input files (ISO, runner ZIP, render probe and factory executable) do
+not need administrator-protected ACLs. The factory hashes exactly the bytes
+it writes to its own protected copy in one pass and refuses a mismatch before
+using it. A deny-write/delete input handle pins each file during the copy.
+Driver-directory validation remains separate.
 Only the matching owned copy is mounted read-only without a drive letter.
 The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
 16 MiB MSR, remaining NTFS Windows; 512-byte sectors; no recovery partition).
 It verifies disk identity before initialization, applies the selected image
 with DISM integrity checking, and runs BCDBoot for UEFI on the owned ESP.
-BCDBoot's `/s` uses a recorded temporary letter, removed on success/failure;
+BCDBoot's `/s` uses a recorded temporary letter, removed on success/failure
+when its ownership can be proved. `/offline /nofirmwaresync` make boot-file
+selection explicit and disable host firmware synchronization;
 `/bootex` is omitted for the existing MicrosoftWindows HCS firmware template.
 The reference image's normal EFI boot manager has a 2011-PCA signer.
-WinRE is left unconfigured. Effective firmware trust and boot remain live gates.
+Both ESP loaders require valid Authenticode signatures from the expected 2011
+issuer; fixed issuer names and BCDBoot/DISM versions are recorded.
+At apply time there is no recovery partition and the factory does not register
+WinRE. Setup may register it on the OS volume; the manifest makes no claim
+about final installed WinRE state. Effective firmware trust and boot remain live gates.
 
 1. Write a JSON configuration in an administrator-protected directory. The
    runner/probe inputs stay pinned by hash:
@@ -387,7 +396,8 @@ WinRE is left unconfigured. Effective firmware trust and boot remain live gates.
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records ISO identity,
-   selected image metadata, host DISM version, BCDBoot options, WinRE choice,
+   selected image metadata, host DISM/BCDBoot versions and options, verified boot
+   issuer generations, apply-time WinRE policy,
    disk/partition GUIDs and guest Secure Boot/TPM presence/readiness, plus
    asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and
    autologon-account agreement, driver versions and
@@ -413,8 +423,27 @@ WinRE is left unconfigured. Effective firmware trust and boot remain live gates.
 
    Cleanup also releases recorded ISO/base attachments, access paths and any
    temporary letter after native absence. It refuses a surviving host-worker
-   job or a build that is still running, and never removes a
-   published image.
+   job or a build that is still running, and never removes a published image.
+   Host-worker jobs cover the helper/DISM processes, not WMI providers or
+   storage-service operations; uncertain detach retains the workspace.
+   If a temporary-letter mapping survives detach or a host reboot and cannot
+   be safely proved/removable, cleanup leaves it untouched and retains the
+   workspace. The build record and cleanup JSON contain `retained_letter`.
+   The operator must verify that mapping against the recorded ESP GUID before
+   resolving it, then retry cleanup; do not delete a letter based on its name.
+
+Before a separately authorized live build, compare `bcdedit /enum firmware`
+before and after BCDBoot. Compare entry counts and identifier sets in memory;
+record only the unchanged boolean/counts, never the raw firmware enumeration.
+Require no firmware-entry change and successful use of both `/offline` and
+`/nofirmwaresync` together. Also prove the exact three-partition layout,
+2011-signed ESP loaders, Secure Boot/TPM in the guest and interrupted-apply
+cleanup, including retry from another session and after a host reboot.
+DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
+GUID paths (`\\?\Volume{GUID}\...`); their acceptance by DISM, including the
+SWM wildcard, is a live gate. An optical ISO volume has no ordinary Storage
+partition access-path interface; a folder mount would require another native
+mount API and lifetime record, so this round keeps the volume path.
 
 ## Direct HCS lab batch
 

@@ -399,7 +399,7 @@ The earlier, replaced copy-based image factory built an image from an App Sandbo
 The following measurements describe that earlier pipeline, not ISO builds.
 `image inspect` first copied the 29.5 GB template in 20 s and found it
 generalized to OOBE. The only runner residue was one log from template
-preparation in `_diag`, which setup now removes. The build took 3 minutes:
+preparation in `_diag`, which that earlier setup removed. The build took 3 minutes:
 
 - 20 s copying the template;
 - 1 min 47 s from boot to a validated desktop with hardware D3D11;

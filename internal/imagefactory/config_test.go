@@ -177,7 +177,7 @@ func TestManifestPublicFields(t *testing.T) {
 		}
 	}
 	media := fields["media"].(map[string]any)
-	for _, required := range []string{"iso_sha256", "install_kind", "image", "host_dism_version", "bcdboot_options", "winre", "layout"} {
+	for _, required := range []string{"iso_sha256", "install_kind", "image", "host_dism_version", "host_bcdboot_version", "boot_issuers", "bcdboot_options", "winre", "layout"} {
 		if _, ok := media[required]; !ok {
 			t.Fatal("missing media field", required)
 		}
