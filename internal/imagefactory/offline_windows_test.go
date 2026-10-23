@@ -44,7 +44,11 @@ func TestOfflineDriverTransactions(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "existing":
+				// An App Sandbox template can already hold this driver directory.
 				if err := os.MkdirAll(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(target, "stale.dll"), nil, 0600); err != nil {
 					t.Fatal(err)
 				}
 			case "link":
@@ -74,7 +78,7 @@ try{Copy-OfflineDrivers $d.mount $d.snapshot $d.plan;$ok=$true}catch{$line=$_.In
 			if err := json.Unmarshal([]byte(runTestPS(t, script, data)), &result); err != nil {
 				t.Fatal(err)
 			}
-			succeeds := mode == "nested" || mode == "mounted root"
+			succeeds := mode == "nested" || mode == "mounted root" || mode == "existing"
 			if result.OK != succeeds {
 				t.Fatalf("transaction outcome, mode=%s line=%d kind=%s id=%s", mode, result.Line, result.Kind, result.ID)
 			}
@@ -89,7 +93,13 @@ try{Copy-OfflineDrivers $d.mount $d.snapshot $d.plan;$ok=$true}catch{$line=$_.In
 				if info, err := os.Stat(filepath.Join(target, "nested", "empty")); err != nil || !info.IsDir() {
 					t.Fatal("empty directory missing")
 				}
-			} else if mode != "existing" {
+				if _, err := os.Lstat(filepath.Join(target, "stale.dll")); !os.IsNotExist(err) {
+					t.Fatal("existing tree was merged, not replaced")
+				}
+				if _, err := os.Lstat(target + ".bivouac-replaced"); !os.IsNotExist(err) {
+					t.Fatal("replaced tree remains")
+				}
+			} else {
 				if _, err := os.Lstat(target); !os.IsNotExist(err) {
 					t.Fatal("partial tree published")
 				}
