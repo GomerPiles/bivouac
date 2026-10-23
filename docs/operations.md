@@ -339,6 +339,16 @@ or owner record. It mounts, grants and boots only files it created.
 
    Both print the build's facts or result as JSON. A Group Policy execution
    policy overrides the factory's own and can stop its scripts.
+   Build script stdout contains only deliberate UTF-8 Console writes; the
+   bootstrap discards incidental pipeline/host output and suppresses progress.
+   Topology JSON is decoded strictly, without byte repair or substring recovery.
+   An invalid report reports numbers only: length, BOM kind (0 absent, 1 UTF-8,
+   2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE, 5 UTF-32BE), NUL count, UTF-8/JSON validity
+   (0/1), first/last byte values, and syntax offset or type field/kind/offset.
+   Type fields use one-based `windesktop.Topology` declaration order (0 root or
+   unknown); kinds are 0 unknown, 1 bool, 2 number, 3 string, 4 array, 5 object.
+   Empty output, encoding signatures, leading/trailing contamination and valid
+   JSON with incompatible types can thus be distinguished without guest text.
 3. The offline inspection gates the build. The template must be generalized
    to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
    A configured runner (`.runner`, `.credentials`), anything under its `_work`,

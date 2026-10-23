@@ -1119,7 +1119,11 @@ ACL and deny-write handles, not hashed per job.
   no NIC or Plan9 shares, and only `guestagent.ServiceID` with the base
   SYSTEM/Administrators descriptor. Validation, runner check and sanitation
   use bounded agent commands with fixed PowerShell argument arrays and framed
-  stdin, exclusively during build/lab work. Guest output never enters errors.
+  stdin, exclusively during build/lab work. Their bootstrap discards incidental
+  pipeline and host streams and suppresses progress; deliberate Console writes
+  use UTF-8 without a BOM. Validation decodes the entire bounded stdout as one
+  JSON value with the expected types, without extracting or repairing bytes.
+  Decode errors contain only numeric shape facts, never guest text.
   The build checks hardware D3D11, presentation and pixel readback, requires
   graceful shutdown, flattens the child and writes the manifest last.
 - **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the

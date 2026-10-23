@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/windesktop"
@@ -197,10 +200,26 @@ func renderOK(b []byte) bool {
 	return json.Unmarshal(b, &r) == nil && r.Ready && r.Desktop && r.Hardware && r.Presented && r.Pixels && r.Stage == 7 && r.HRESULT == 0 && r.Vendor != 0 && (r.Vendor != 0x1414 || r.Device != 0x8c) && r.Adapters > 0 && r.Adapters <= 32 && r.HardwareAdapters > 0 && r.HardwareAdapters <= r.Adapters && r.GPUValid && r.Displays <= 32 && r.Virtual > 0 && r.Virtual <= r.Displays && r.Problem == 0
 }
 
-// reportShape describes a malformed guest report with numbers and this
-// package's own field names only, never guest bytes.
+// reportShape emits fixed labels and numbers only. In particular, never format
+// UnmarshalTypeError.Value: overflowing numbers include the guest's literal.
+// BOM: 0 absent, 1 UTF-8, 2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE, 5 UTF-32BE.
+// Field: one-based Topology declaration order, 0 root/unknown.
+// Kind: 0 unknown, 1 bool, 2 number, 3 string, 4 array, 5 object.
 func reportShape(b []byte, err error) string {
-	shape := fmt.Sprintf("len=%d", len(b))
+	bom := 0
+	for i, prefix := range [][]byte{{0xef, 0xbb, 0xbf}, {0xff, 0xfe}, {0xfe, 0xff}, {0xff, 0xfe, 0, 0}, {0, 0, 0xfe, 0xff}} {
+		if bytes.HasPrefix(b, prefix) {
+			bom = i + 1
+		}
+	}
+	validUTF8, validJSON := 0, 0
+	if utf8.Valid(b) {
+		validUTF8 = 1
+	}
+	if json.Valid(b) {
+		validJSON = 1
+	}
+	shape := fmt.Sprintf("len=%d bom=%d nul=%d utf8=%d json=%d", len(b), bom, bytes.Count(b, []byte{0}), validUTF8, validJSON)
 	if len(b) > 0 {
 		shape += fmt.Sprintf(" first=0x%02x last=0x%02x", b[0], b[len(b)-1])
 	}
@@ -210,7 +229,27 @@ func reportShape(b []byte, err error) string {
 	case errors.As(err, &syntax):
 		shape += fmt.Sprintf(" syntax_offset=%d", syntax.Offset)
 	case errors.As(err, &kind):
-		shape += fmt.Sprintf(" field=%q json_kind=%q offset=%d", kind.Field, kind.Value, kind.Offset)
+		field, value := 0, 0
+		topology := reflect.TypeFor[windesktop.Topology]()
+		for i := range topology.NumField() {
+			f := topology.Field(i)
+			if kind.Field == f.Tag.Get("json") || kind.Field == f.Name {
+				field = i + 1
+			}
+		}
+		switch {
+		case kind.Value == "bool":
+			value = 1
+		case strings.HasPrefix(kind.Value, "number"):
+			value = 2
+		case kind.Value == "string":
+			value = 3
+		case kind.Value == "array":
+			value = 4
+		case kind.Value == "object":
+			value = 5
+		}
+		shape += fmt.Sprintf(" field=%d json_kind=%d offset=%d", field, value, kind.Offset)
 	}
 	return shape
 }
