@@ -86,4 +86,11 @@ public static class SpikeOfflineAnswer {
  $phaseCode=70
  if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit $phaseCode}
  exit 0
-} catch {if($phaseCode -eq 62 -and $aclError -gt 0 -and $aclError -le 65535){exit (10000+[int]$aclError)};exit $phaseCode}
+} catch {
+ if($phaseCode -eq 62 -and $aclError -gt 0 -and $aclError -le 65535){exit (10000+[int]$aclError)}
+ # Offline payload failures report the failing line of this fixed script
+ # (offline payload followed by staging), never error text: phase*100000+line.
+ $line=$_.InvocationInfo.ScriptLineNumber
+ if($phaseCode -in @(64,65) -and $line -gt 0 -and $line -lt 100000){exit ($phaseCode*100000+[int]$line)}
+ exit $phaseCode
+}
