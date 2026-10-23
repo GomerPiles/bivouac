@@ -11,9 +11,16 @@ import (
 )
 
 func TestOfflineDriverTransactions(t *testing.T) {
-	for _, mode := range []string{"nested", "hash", "missing", "unexpected", "existing", "link", "destination link"} {
+	for _, mode := range []string{"nested", "hash", "missing", "unexpected", "existing", "link", "destination link", "mounted root"} {
 		t.Run(mode, func(t *testing.T) {
 			mount, snapshot := t.TempDir(), t.TempDir()
+			if mode == "mounted root" {
+				// The build's mount root is a volume access path, itself a reparse point.
+				mount = filepath.Join(t.TempDir(), "mount")
+				if err := createDriverTestJunction(mount, t.TempDir()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			source := filepath.Join(snapshot, "0")
 			if err := os.MkdirAll(filepath.Join(source, "nested", "empty"), 0700); err != nil {
 				t.Fatal(err)
@@ -67,13 +74,14 @@ try{Copy-OfflineDrivers $d.mount $d.snapshot $d.plan;$ok=$true}catch{$line=$_.In
 			if err := json.Unmarshal([]byte(runTestPS(t, script, data)), &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.OK != (mode == "nested") {
+			succeeds := mode == "nested" || mode == "mounted root"
+			if result.OK != succeeds {
 				t.Fatalf("transaction outcome, mode=%s line=%d kind=%s id=%s", mode, result.Line, result.Kind, result.ID)
 			}
 			if _, err := os.Lstat(target + ".bivouac-staging"); !os.IsNotExist(err) {
 				t.Fatal("temporary tree remains")
 			}
-			if mode == "nested" {
+			if succeeds {
 				b, err := os.ReadFile(filepath.Join(target, "nested", "driver.dll"))
 				if err != nil || string(b) != string(content) {
 					t.Fatal("nested bytes missing")

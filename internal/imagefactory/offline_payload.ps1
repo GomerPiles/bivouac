@@ -38,11 +38,13 @@ function Assert-OfflinePath([string]$Root,[string]$Path) {
  $pathValue=[IO.Path]::GetFullPath($Path)
  if(!$pathValue.StartsWith($rootPath+'\',[StringComparison]::OrdinalIgnoreCase) -and $pathValue -ine $rootPath){throw 'offline path boundary'}
  $current=$pathValue
- while($current.Length -ge $rootPath.Length){
+ # The root is the volume access path this build mounted, itself a mount
+ # point (a reparse point); every component below it must be ordinary.
+ while($current.Length -gt $rootPath.Length){
   if(Test-Path -LiteralPath $current){
    if((Get-Item -Force -LiteralPath $current).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'offline link'}
   }
-  if($current -ieq $rootPath){break};$current=Split-Path -Parent $current
+  $current=Split-Path -Parent $current
  }
 }
 function New-OfflineDirectory([string]$Root,[string]$Path) {
