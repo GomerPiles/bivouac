@@ -3,6 +3,7 @@
 package imagefactory
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -41,6 +42,10 @@ func sendFactoryFrame(w io.Writer, kind byte, b []byte) error {
 
 // Speak the real framed protocol without executing any guest commands.
 func fakeFactoryAgent(respond func([]string, []byte) ([]byte, int)) guestagent.Dialer {
+	return fakeFactoryAgentFrames(respond, 32768, 0)
+}
+
+func fakeFactoryAgentFrames(respond func([]string, []byte) ([]byte, int), frameSize, writeSize int) guestagent.Dialer {
 	return func(context.Context) (net.Conn, error) {
 		host, guest := net.Pipe()
 		go func() {
@@ -74,18 +79,30 @@ func fakeFactoryAgent(respond func([]string, []byte) ([]byte, int)) guestagent.D
 				}
 			}
 			output, code := respond(request.Argv, input)
+			var wire bytes.Buffer
 			for len(output) > 0 {
-				n := min(len(output), 32768)
-				if sendFactoryFrame(guest, 'O', output[:n]) != nil {
+				n := min(len(output), frameSize)
+				if sendFactoryFrame(&wire, 'O', output[:n]) != nil {
 					return
 				}
 				output = output[n:]
 			}
-			if sendFactoryFrame(guest, 'E', []byte("guest-private-output")) != nil {
+			if sendFactoryFrame(&wire, 'E', []byte("guest-private-output")) != nil {
 				return
 			}
 			status := binary.BigEndian.AppendUint32(nil, uint32(code)) // #nosec G115 -- small fixture exit codes.
-			_ = sendFactoryFrame(guest, 'X', status)
+			if sendFactoryFrame(&wire, 'X', status) != nil {
+				return
+			}
+			if writeSize <= 0 {
+				_, _ = guest.Write(wire.Bytes())
+				return
+			}
+			for wire.Len() > 0 {
+				if _, err := guest.Write(wire.Next(min(writeSize, wire.Len()))); err != nil {
+					return
+				}
+			}
 		}()
 		return host, nil
 	}
