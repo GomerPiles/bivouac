@@ -161,3 +161,16 @@ func TestWIMIndexMustMatchPosition(t *testing.T) {
 func sectionBytes(b []byte) *io.SectionReader {
 	return io.NewSectionReader(bytes.NewReader(b), 0, int64(len(b)))
 }
+
+func TestLayoutShapeNumbersOnly(t *testing.T) {
+	b := []byte(`{"layout_failure":true,"partition_count":2,"partitions":[{"type":2,"offset_mib":1,"size_mib":16,"guid_match":false},{"type":1,"offset_mib":17,"size_mib":200,"guid_match":true}]}`)
+	err := layoutShape(b)
+	if err == nil || err.Error() != "partition table refused: count=2 p1=type2@1MiB+16MiB,guid0 p2=type1@17MiB+200MiB,guid1" {
+		t.Fatalf("unexpected shape: %v", err)
+	}
+	for _, b := range [][]byte{nil, []byte(`{}`), []byte(`{"disk_guid":"x"}`), []byte(`not json`)} {
+		if layoutShape(b) != nil {
+			t.Fatal("shape reported without a layout failure frame")
+		}
+	}
+}

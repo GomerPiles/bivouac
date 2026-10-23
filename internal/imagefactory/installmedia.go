@@ -2,6 +2,7 @@ package imagefactory
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -54,6 +55,41 @@ type DiskLayout struct {
 	ESPGUID     string `json:"esp_guid"`
 	MSRGUID     string `json:"msr_guid"`
 	WindowsGUID string `json:"windows_guid"`
+	// GPT initialization may create its own MSR; the factory removes it so
+	// the owned disk keeps the ESP, MSR, Windows order.
+	AutomaticMSRRemoved bool `json:"automatic_msr_removed"`
+}
+
+// layoutShape describes a refused partition table with numbers only, from the
+// frame the layout script emits before failing. It returns nil without one.
+func layoutShape(b []byte) error {
+	var shape struct {
+		Failure    bool   `json:"layout_failure"`
+		Count      uint32 `json:"partition_count"`
+		Partitions []struct {
+			Type      uint32 `json:"type"`
+			OffsetMiB uint64 `json:"offset_mib"`
+			SizeMiB   uint64 `json:"size_mib"`
+			GUIDMatch bool   `json:"guid_match"`
+		} `json:"partitions"`
+	}
+	// An absent or malformed frame adds nothing: the script step already failed.
+	if !json.Valid(b) {
+		return nil
+	}
+	_ = json.Unmarshal(b, &shape)
+	if !shape.Failure || len(shape.Partitions) > 16 {
+		return nil
+	}
+	s := fmt.Sprintf("partition table refused: count=%d", shape.Count)
+	for i, p := range shape.Partitions {
+		match := 0
+		if p.GUIDMatch {
+			match = 1
+		}
+		s += fmt.Sprintf(" p%d=type%d@%dMiB+%dMiB,guid%d", i+1, p.Type, p.OffsetMiB, p.SizeMiB, match)
+	}
+	return errors.New(s)
 }
 
 type wimHeader struct {

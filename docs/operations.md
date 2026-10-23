@@ -275,6 +275,8 @@ Driver-directory validation remains separate.
 Only the matching owned copy is mounted read-only without a drive letter.
 The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
 16 MiB MSR, remaining NTFS Windows; 512-byte sectors; no recovery partition).
+An MSR that GPT initialization adds by itself is removed first and recorded
+as `automatic_msr_removed`.
 It verifies disk identity before initialization, applies the selected image
 with DISM integrity checking, and runs BCDBoot for UEFI on the owned ESP.
 BCDBoot's `/s` uses a recorded temporary letter, removed on success/failure

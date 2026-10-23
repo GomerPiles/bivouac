@@ -50,6 +50,7 @@ const storageFixturePS = `
   [pscustomobject]@{Number=123;Path=$path;PartitionStyle=$style;LogicalSectorSize=$sector;IsOffline=$state.offline;Guid=$guid;NumberOfPartitions=$state.parts}
  }
  function Get-Partition {[CmdletBinding()]param($DiskNumber)
+  if($state.parts -eq 0 -and $state.auto){$type='{e3c9e316-0b5c-4db8-817d-f92df00215ae}';if($state.auto -eq 'basic'){$type='{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'};return [pscustomobject]@{PartitionNumber=1;Guid='{eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee}';GptType=$type;Size=16MB;Offset=1MB;AccessPaths=@()}}
   if($state.parts -eq 0){Write-Error -Message 'no matching partitions' -Category ObjectNotFound -ErrorId CmdletizationQuery_NotFound_DiskNumber;return}
   $parts=@(Get-FixtureParts)
   if($fixture.refuse -eq 'partition_guid'){$parts[0].Guid='{ffffffff-ffff-ffff-ffff-ffffffffffff}'}
@@ -65,7 +66,8 @@ const storageFixturePS = `
   $parts
  }
  function Set-Disk {param($Number,$IsOffline) Trace 'set_disk';$state.offline=$IsOffline;Save-Fixture}
- function Initialize-Disk {param($Number,$PartitionStyle) Trace 'initialize';if($Number -ne 123 -or $PartitionStyle -ne 'GPT'){throw 'initialize plan'};$state.style='GPT';Save-Fixture}
+ function Initialize-Disk {param($Number,$PartitionStyle) Trace 'initialize';if($Number -ne 123 -or $PartitionStyle -ne 'GPT'){throw 'initialize plan'};$state.style='GPT';$state.auto=$fixture.auto;Save-Fixture}
+ function Remove-Partition {param($DiskNumber,$PartitionNumber,$Confirm) Trace 'remove_auto';if($DiskNumber -ne 123 -or $PartitionNumber -ne 1 -or $state.parts -ne 0 -or $state.auto -ne 'msr'){throw 'foreign partition removal'};$state.auto='';Save-Fixture}
  function New-Partition {param($DiskNumber,$Size,$GptType,[switch]$UseMaximumSize)
   $names=@('esp','msr','windows');Trace $names[$state.parts]
   if($DiskNumber -ne 123){throw 'disk number'}
@@ -153,7 +155,7 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 	}
 	writeFixtureJSON(t, filepath.Join(workspace, "owner.json"), map[string]string{"build_id": id, "workspace": workspace})
 	f := &storageFixture{t: t, workspace: workspace, root: root, id: id, optionsPath: filepath.Join(root, "fixture.json"), statePath: filepath.Join(root, "state.json"), tracePath: filepath.Join(root, "trace.txt")}
-	f.options = map[string]any{"workspace": workspace, "state": f.statePath, "trace": f.tracePath, "fail": "", "fail_after": "", "refuse": "", "table": "", "stale_mapping": false, "disk_guid": "{11111111-1111-1111-1111-111111111111}", "guids": []string{"{22222222-2222-2222-2222-222222222222}", "{33333333-3333-3333-3333-333333333333}", "{44444444-4444-4444-4444-444444444444}"}, "volume": `\\?\Volume{55555555-5555-5555-5555-555555555555}\`}
+	f.options = map[string]any{"workspace": workspace, "state": f.statePath, "trace": f.tracePath, "fail": "", "fail_after": "", "refuse": "", "table": "", "auto": "", "stale_mapping": false, "disk_guid": "{11111111-1111-1111-1111-111111111111}", "guids": []string{"{22222222-2222-2222-2222-222222222222}", "{33333333-3333-3333-3333-333333333333}", "{44444444-4444-4444-4444-444444444444}"}, "volume": `\\?\Volume{55555555-5555-5555-5555-555555555555}\`}
 	later := mode != "layout" && mode != "media"
 	style := "RAW"
 	parts := 0
@@ -161,7 +163,7 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 		style = "GPT"
 		parts = 3
 	}
-	f.state = map[string]any{"style": style, "parts": parts, "offline": true, "base_attached": later, "iso_attached": mode != "media", "child_attached": false, "windows_access": later, "esp_access": later, "inspection_access": false, "staging_access": false, "letter": false, "tool_args": []string{}}
+	f.state = map[string]any{"style": style, "parts": parts, "offline": true, "base_attached": later, "iso_attached": mode != "media", "child_attached": false, "windows_access": later, "esp_access": later, "inspection_access": false, "staging_access": false, "letter": false, "auto": "", "tool_args": []string{}}
 	t.Setenv("BIVOUAC_STORAGE_FIXTURE", f.optionsPath)
 	writeFixtureJSON(t, f.statePath, f.state)
 	return f
@@ -336,9 +338,33 @@ func TestBaseExactPartitionTable(t *testing.T) {
 				if slices.Contains(f.trace(), "access_windows") {
 					t.Fatal("access path added after bad table")
 				}
+				if layoutShape(b) == nil {
+					t.Fatal("refused table has no numeric shape")
+				}
 			}
 		})
 	}
+}
+
+func TestBaseAutomaticMSR(t *testing.T) {
+	t.Run("msr_removed", func(t *testing.T) {
+		f := newStorageFixture(t, "layout")
+		f.options["auto"] = "msr"
+		b, e := f.run(baseDisk, f.data("layout"))
+		var layout DiskLayout
+		if e != nil || json.Unmarshal(b, &layout) != nil || !layout.AutomaticMSRRemoved || !slices.Contains(f.trace(), "remove_auto") {
+			t.Fatal("automatic MSR not removed before layout", e)
+		}
+	})
+	t.Run("other_partition_refused", func(t *testing.T) {
+		f := newStorageFixture(t, "layout")
+		f.options["auto"] = "basic"
+		_, e := f.run(baseDisk, f.data("layout"))
+		requireScriptStep(t, e, 40)
+		if slices.Contains(f.trace(), "remove_auto") || slices.Contains(f.trace(), "esp") {
+			t.Fatal("unexpected initial partition was changed or built on")
+		}
+	})
 }
 func TestBaseLaterIdentityRefusals(t *testing.T) {
 	for _, mode := range []string{"apply", "boot", "detach"} {

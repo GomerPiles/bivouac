@@ -93,7 +93,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	data["letter"] = r.TemporaryLetter
 	b, err = invoke("layout")
 	if err != nil {
-		return err
+		return errors.Join(err, layoutShape(b))
 	}
 	var layout DiskLayout
 	if json.Unmarshal(b, &layout) != nil || !validGUID(layout.DiskGUID) || !validGUID(layout.ESPGUID) || !validGUID(layout.MSRGUID) || !validGUID(layout.WindowsGUID) {

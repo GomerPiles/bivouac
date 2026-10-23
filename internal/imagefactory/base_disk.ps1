@@ -11,6 +11,18 @@ function Get-MountedDeviceNames{
 function Get-ReservedDriveLetters{
  foreach($name in @(Get-MountedDeviceNames)){if($name -match '^\\DosDevices\\([D-Z]):$'){$Matches[1]}}
 }
+$espType='{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}';$msrType='{e3c9e316-0b5c-4db8-817d-f92df00215ae}';$basicType='{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
+# Numbers only: partition type codes (1 ESP, 2 MSR, 3 basic data, 0 other),
+# MiB offsets/sizes and whether each GUID is the one created in that slot.
+function Get-LayoutShape($Parts,$Expected){
+ $rows=@()
+ for($i=0;$i -lt $Parts.Count;$i++){
+  $t=0;if($Parts[$i].GptType -ieq $espType){$t=1}elseif($Parts[$i].GptType -ieq $msrType){$t=2}elseif($Parts[$i].GptType -ieq $basicType){$t=3}
+  $match=$i -lt $Expected.Count -and $Parts[$i].Guid -and $Parts[$i].Guid -ieq $Expected[$i].Guid
+  $rows+=[ordered]@{type=$t;offset_mib=[uint64][math]::Floor($Parts[$i].Offset/1MB);size_mib=[uint64][math]::Floor($Parts[$i].Size/1MB);guid_match=[bool]$match}
+ }
+ return [ordered]@{layout_failure=$true;partition_count=[uint32]$Parts.Count;partitions=$rows}
+}
 function Get-BootIssuer([string]$Path){
  $signature=Get-AuthenticodeSignature -LiteralPath $Path
  if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){throw 'invalid boot signature'}
@@ -63,30 +75,41 @@ try{
   if($disk.PartitionStyle -ne 'RAW' -or $disk.LogicalSectorSize -ne 512 -or @(Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue).Count){throw 'nonempty base'}
   if($disk.IsOffline){$null=Set-Disk -Number $disk.Number -IsOffline $false}
   $null=Initialize-Disk -Number $disk.Number -PartitionStyle GPT
+  # GPT initialization can add its own MSR first. Remove only that, so the
+  # owned disk gets Microsoft's recommended ESP, MSR, Windows order.
+  $autoMSR=$false
+  $initial=@(Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue)
+  if($initial.Count -gt 1 -or ($initial.Count -eq 1 -and $initial[0].GptType -ine $msrType)){throw 'unexpected initial partition'}
+  if($initial.Count -eq 1){
+   $null=Remove-Partition -DiskNumber $disk.Number -PartitionNumber $initial[0].PartitionNumber -Confirm:$false
+   if(@(Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue).Count){throw 'initial MSR remains'}
+   $autoMSR=$true
+  }
   $step=41
-  $ep=New-Partition -DiskNumber $disk.Number -Size 200MB -GptType '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'
+  $ep=New-Partition -DiskNumber $disk.Number -Size 200MB -GptType $espType
   $null=Format-Volume -Partition $ep -FileSystem FAT32 -Confirm:$false
   $step=42
-  $mp=New-Partition -DiskNumber $disk.Number -Size 16MB -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}'
+  $mp=New-Partition -DiskNumber $disk.Number -Size 16MB -GptType $msrType
   $step=43
-  $wp=New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
+  $wp=New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType $basicType
   $null=Format-Volume -Partition $wp -FileSystem NTFS -Confirm:$false
   $step=44
   $parts=@(Get-Partition -DiskNumber $disk.Number | Sort-Object Offset)
-  if($parts.Count -ne 3){throw 'unexpected partition count'}
   $expected=@($ep,$mp,$wp)
-  $types=@('{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}','{e3c9e316-0b5c-4db8-817d-f92df00215ae}','{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}')
-  for($i=0;$i -lt 3;$i++){
-   if(!$parts[$i].Guid -or $parts[$i].Guid -ine $expected[$i].Guid -or $parts[$i].GptType -ine $types[$i] -or $parts[$i].Size -ne $expected[$i].Size -or $parts[$i].Offset -ne $expected[$i].Offset){throw 'unexpected partition layout'}
-   if($i -gt 0 -and $parts[$i].Offset -lt ($parts[$i-1].Offset+$parts[$i-1].Size)){throw 'overlapping partition layout'}
+  $types=@($espType,$msrType,$basicType)
+  $layoutOK=$parts.Count -eq 3
+  for($i=0;$layoutOK -and $i -lt 3;$i++){
+   if(!$parts[$i].Guid -or $parts[$i].Guid -ine $expected[$i].Guid -or $parts[$i].GptType -ine $types[$i] -or $parts[$i].Size -ne $expected[$i].Size -or $parts[$i].Offset -ne $expected[$i].Offset){$layoutOK=$false}
+   if($i -gt 0 -and $parts[$i].Offset -lt ($parts[$i-1].Offset+$parts[$i-1].Size)){$layoutOK=$false}
   }
-  if($parts[0].Size -ne 200MB -or $parts[1].Size -ne 16MB -or $parts[2].Size -le 0){throw 'unexpected partition sizes'}
+  if($layoutOK -and ($parts[0].Size -ne 200MB -or $parts[1].Size -ne 16MB -or $parts[2].Size -le 0)){$layoutOK=$false}
+  if(!$layoutOK){Emit-Result (Get-LayoutShape $parts $expected);throw 'unexpected partition layout'}
   $step=46
   foreach($path in @($win,$esp)){if(Test-Path -LiteralPath $path){throw 'access path exists'};$null=New-Item -ItemType Directory -Path $path}
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp.PartitionNumber -AccessPath ($win+'\')
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep.PartitionNumber -AccessPath ($esp+'\')
   $disk=Get-Disk -Number $disk.Number
-  Emit-Result @{disk_guid=$disk.Guid;esp_guid=$ep.Guid;msr_guid=$mp.Guid;windows_guid=$wp.Guid};exit 0
+  Emit-Result @{disk_guid=$disk.Guid;esp_guid=$ep.Guid;msr_guid=$mp.Guid;windows_guid=$wp.Guid;automatic_msr_removed=$autoMSR};exit 0
  }
  if($disk.Guid -ine $data.disk_guid){throw 'disk GUID'}
  $wp=@(Get-Partition -DiskNumber $disk.Number|Where-Object Guid -eq $data.windows_guid)
