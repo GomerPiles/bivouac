@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -131,5 +132,21 @@ func TestRetainedLetterStopsDeletionAndPersists(t *testing.T) {
 	b, _ := json.Marshal(r)
 	if !errors.As(e, &retained) || retained.Letter != "Z" || removed || !strings.Contains(string(b), `"retained_letter":"Z"`) {
 		t.Fatal("ambiguous mapping lost ownership/diagnostics")
+	}
+}
+
+// The real helper, not the fixture's replacement: a tool that writes to
+// stderr must still report its own exit code under Windows PowerShell 5.1.
+func TestImageToolStderrKeepsExitCode(t *testing.T) {
+	start := strings.Index(baseDisk, "function Invoke-ImageTool(")
+	end := strings.Index(baseDisk[start:], "\n") + start
+	if start < 0 || end <= start {
+		t.Fatal("Invoke-ImageTool not found")
+	}
+	cmd := filepath.Join(os.Getenv("SystemRoot"), "System32", "cmd.exe")
+	script := "$ErrorActionPreference='Stop'\n" + baseDisk[start:end] + "\n" +
+		"[Console]::Out.Write((Invoke-ImageTool '" + cmd + "' @('/c','echo','tool-error','1>&2','&','exit','3')))"
+	if got := runTestPS(t, script, nil); got != "3" {
+		t.Fatalf("exit code lost after stderr: %q", got)
 	}
 }
