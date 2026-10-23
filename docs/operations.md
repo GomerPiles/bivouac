@@ -256,39 +256,47 @@ This procedure does not authorize a cutover or a live validation run.
 ## Direct HCS image factory
 
 `bivouac image build` prepares an agent image for the `hcs` provider from a
-generalized App Sandbox template. `bivouac image inspect` runs the same copy
-and offline checks without booting, so a template can be checked first. Both
-run elevated in the foreground (one UAC prompt each), drive HCS directly and
-attach no network adapter, so production CI may keep running. Neither touches
+SHA-256-pinned Windows installation ISO. `bivouac image inspect` hashes and
+inventories that ISO, lists images and reports the selected image as JSON,
+without native mounts, disks or HCS calls. Both run elevated in the foreground.
+Build drives HCS directly and attaches no network adapter. Neither touches
 the VM host service, its journal or CI mode.
 
 Images contain bivouac's guest agent and use HCS synthetic video with GPU-PV.
 Specialize removes legacy components and MSI server installations; FirstLogon removes the Windows OpenSSH server capability through servicing. The inbox client and ssh-agent remain intact.
-The template is still an App Sandbox template; template creation is out of scope.
+Runner ZIP, GPU driver directories and render probe remain explicit pinned inputs.
 Rollback uses the previous manager binary, VM host service binary and image together.
 
-The template is only read. The factory copies it into its own workspace,
-hashing as it copies, and never changes the template's file, directory, ACL
-or owner record. It mounts, grants and boots only files it created.
+The input ISO is only read; it need not be administrator-protected. A deny-write/delete
+handle pins it while copying and hashing into the protected workspace.
+Only the matching owned copy is mounted read-only without a drive letter.
+The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
+16 MiB MSR, remaining NTFS Windows; 512-byte sectors; no recovery partition).
+It verifies disk identity before initialization, applies the selected image
+with DISM integrity checking, and runs BCDBoot for UEFI on the owned ESP.
+BCDBoot's `/s` uses a recorded temporary letter, removed on success/failure;
+`/bootex` is omitted for the existing MicrosoftWindows HCS firmware template.
+The reference image's normal EFI boot manager has a 2011-PCA signer.
+WinRE is left unconfigured. Effective firmware trust and boot remain live gates.
 
 1. Write a JSON configuration in an administrator-protected directory. The
-   inputs must be protected too:
+   runner/probe inputs stay pinned by hash:
 
    ```json
    {
-     "source": "<template dir>\\disk.vhdx",
-     "source_sha256": "<the owner record's SHA256>",
-     "expected_template": "<template name>",
+     "iso": "D:\\ISOs\\Windows.iso",
+     "iso_sha256": "<64 hexadecimal digits>",
+     "edition_id": "Professional",
+     "disk_gb": 127,
      "guest_user": "ciuser",
      "image_root": "<protected parent>\\Images",
      "render_probe": {"source": "<path>", "sha256": "<hash>"},
-     "setup_assets": [],
+     "setup_assets": [{"name": "RUNNER.ZIP", "source": "D:\\Assets\\runner.zip", "sha256": "<hash>"}],
      "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
    }
    ```
 
-   - `RUNNER.ZIP` is the only accepted setup asset and is required only for a
-     template without a runner. The render probe remains required. Legacy guest
+   - `RUNNER.ZIP` is the only accepted setup asset and is required. The render probe remains required. Legacy guest
      agents, helpers, VDD/devcon files and OpenSSH installers are unsupported.
    - Offline staging copies this factory executable to
      `C:\Program Files\Bivouac\bivouac.exe`, protected for SYSTEM,
@@ -328,8 +336,18 @@ or owner record. It mounts, grants and boots only files it created.
      provisioning and other APIs are not covered. Rebuild after host driver changes.
    - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
      `timeout_seconds` (default 900) bounds the guest's run, not the copy.
-   - Keep `image_root` outside the template and instance trees. Its
-     volume needs about 2.2 times the template's size plus 10 GiB free.
+   - `edition_id` defaults to `Professional`; `image_index` optionally overrides
+     it. Exactly one matching x64 Client image is required. N editions have
+     separate EditionIDs. The UDF installation ISO must contain exactly one
+     install.wim, unencrypted install.esd, or complete install*.swm set under
+     sources. Malformed/oversized metadata and missing segments refuse.
+   - `disk_gb` defaults to 127, bounded to 64-256 GiB. ISO size is at most
+     32 GiB; selected image TOTALBYTES plus 4 GiB must fit the virtual disk.
+   - Keep `image_root` outside the ISO and instance trees. Free space admission
+     reserves ISO bytes + three times 125% of selected image TOTALBYTES +
+     10 GiB for the owned media/base, child, flatten and build headroom.
+     Publication rechecks actual base + child bytes + 5 GiB. These are free
+     space checks, not a quota or a promise about arbitrary image growth.
 2. Inspect, then build, from an elevated shell:
 
    ```text
@@ -354,30 +372,33 @@ or owner record. It mounts, grants and boots only files it created.
    task/process/GPU/desktop-age observations; unavailable observations carry
    explicit validity flags. Guest text and malformed diagnostic output are
    discarded.
-3. The offline inspection gates the build. The template must be generalized
-   to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
-   A configured runner (`.runner`, `.credentials`), anything under its `_work`,
-   an installed bivouac agent, either guest task, or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
-   runner's `_diag` by template preparation are allowed and are deleted during
-   setup. The record lists only public facts: agent presence/hash/task, runner state and residue names, never file contents or
-   answer-file values.
+3. Build inspects its freshly applied child by the recorded Windows partition
+   GUID. It requires generalized-to-OOBE setup state, no answer-file pointer,
+   an empty/absent `Windows\Panther\Unattend`, no runner, agent installation,
+   either guest task or `ProgramData\Bivouac\Guest`. Reference-media pristine hive
+   and path checks pass; a live apply/boot is separately required. Records
+   contain bounded public facts, never answer-file values or hive contents.
 4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
    agent, checks hardware rendering with the probe, removes setup files and agent logs,
    rotates the console password into the autologon secret, shuts down
-   cleanly and flattens the result. A build takes about 3 minutes plus the
-   copy. Admission waits for the guest's memory plus 10 GiB available and
+   cleanly and flattens the result. Install-media build timings are unmeasured.
+   Admission waits for the guest's memory plus 10 GiB available and
    8 GiB commit headroom, and the build cancels itself if available memory
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
-   VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and autologon-account agreement, driver versions and
+   VHDX, with `manifest.json` written last. The manifest records ISO identity,
+   selected image metadata, host DISM version, BCDBoot options, WinRE choice,
+   disk/partition GUIDs and guest Secure Boot/TPM presence/readiness, plus
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and
+   autologon-account agreement, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication
    requires one
    active primary display on Hyper-V synthetic video, no VDD nodes and the
-   existing render checks. Sanitation retains both tasks, requires the runner
-   task to be Ready, and removes launch/claim/cancellation and lab residue.
+   existing render checks. Secure Boot must be on and a TPM present.
+   Sanitation retains both tasks, requires the runner task to be Ready,
+   and removes launch/claim/cancellation and lab residue.
    A published directory is never reused.
 6. Build records stay in `<image_root>\.builds`. After guest preparation fails,
    cleanup first requests shutdown of its proven guest and waits at most
@@ -390,7 +411,9 @@ or owner record. It mounts, grants and boots only files it created.
    bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
    ```
 
-   Cleanup refuses a build that is still running, and never removes a
+   Cleanup also releases recorded ISO/base attachments, access paths and any
+   temporary letter after native absence. It refuses a surviving host-worker
+   job or a build that is still running, and never removes a
    published image.
 
 ## Direct HCS lab batch

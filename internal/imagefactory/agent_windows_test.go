@@ -152,7 +152,7 @@ func TestFactoryAgentConversation(t *testing.T) {
 			if payload.Data["require_setup"] != true || payload.Data["script_sha256"] != r.Manifest.ValidationSHA256 {
 				return nil, 14
 			}
-			return []byte(`{"guest_ready":true,"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0,"vendor_id":4098,"device_id":1,"adapter_count":2,"hardware_adapter_count":1,"gpu_device_diagnostics_valid":true,"display_device_count":2,"virtual_render_device_count":1,"virtual_render_problem_code":0,"topology_valid":true,"active_display_count":1,"primary_display_count":1,"primary_width":1024,"primary_height":768,"virtual_equals_primary":true,"primary_adapter_kind":1,"vdd_node_count":0,"hyperv_video_enabled":true,"hyperv_video_started":true}`), 0
+			return []byte(`{"secure_boot":true,"tpm_present":true,"tpm_ready":true,"guest_ready":true,"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0,"vendor_id":4098,"device_id":1,"adapter_count":2,"hardware_adapter_count":1,"gpu_device_diagnostics_valid":true,"display_device_count":2,"virtual_render_device_count":1,"virtual_render_problem_code":0,"topology_valid":true,"active_display_count":1,"primary_display_count":1,"primary_width":1024,"primary_height":768,"virtual_equals_primary":true,"primary_adapter_kind":1,"vdd_node_count":0,"hyperv_video_enabled":true,"hyperv_video_started":true}`), 0
 		case payload.Script == sanitizeEntry:
 			stages = append(stages, "sanitize")
 			return []byte("sanitized-shutdown-scheduled"), 0

@@ -94,6 +94,11 @@ func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestag
 	if err := json.Unmarshal(b, &topology); err != nil {
 		return fmt.Errorf("invalid topology report (%s)", reportShape(b, err))
 	}
+	security, err := parseGuestSecurity(b)
+	if err != nil {
+		return err
+	}
+	r.Manifest.Security = security
 	r.Manifest.Topology = &topology
 	if err := factoryDisplayReportOK(b); err != nil {
 		return err

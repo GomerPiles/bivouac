@@ -35,7 +35,9 @@ public static class FactoryInspection {
   $step=30
   $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadWrite -NoDriveLetter -PassThru
   $disk=$image|Get-Disk
-  $partition=Get-Partition -DiskNumber $disk.Number|Sort-Object Size -Descending|Select-Object -First 1
+  $partitions=@(Get-Partition -DiskNumber $disk.Number | Where-Object Guid -eq $data.windows_guid)
+  if($data.windows_guid -notmatch '^\{[0-9a-fA-F-]{36}\}$' -or $partitions.Count -ne 1){throw 'Windows partition identity'}
+  $partition=$partitions[0]
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   if($data.mode -eq 'setup'){
    $step=90;Read-SetupStep $mount $facts

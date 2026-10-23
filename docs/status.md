@@ -395,7 +395,8 @@ cache validation fixture live with production's Windows cache settings
 Loss fallback, `outage`, `interrupt` and upload storage have not run on HCS
 guests.
 
-The image factory built an image from production's App Sandbox template.
+The earlier, replaced copy-based image factory built an image from an App Sandbox template.
+The following measurements describe that earlier pipeline, not ISO builds.
 `image inspect` first copied the 29.5 GB template in 20 s and found it
 generalized to OOBE. The only runner residue was one log from template
 preparation in `_diag`, which setup now removes. The build took 3 minutes:
@@ -440,8 +441,9 @@ Open:
   - Host interface changes while a guest runs.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
-- Image factory paths not yet live: a template without a runner, a failed
-  build's cleanup and `image cleanup`, and the lab batch on a factory-built
+- Install-media factory paths not yet live: owned VHDX identity, partition/apply,
+  BCDBoot/firmware trust, no-NIC setup, guest Secure Boot/TPM, a failed build's
+  cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
 - Agent images built by this branch contain no legacy guest components and have

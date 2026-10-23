@@ -15,7 +15,7 @@ import (
 
 func testConfig() Config {
 	h := strings.Repeat("a", 64)
-	c := Config{Source: `D:\Templates\base\disk.vhdx`, SourceSHA256: h, GuestUser: "imageuser", CPU: 4, MemoryMB: 8192, ImageRoot: `D:\Images`, TimeoutSeconds: 900, RenderProbe: PinnedFile{Source: `D:\Assets\render.exe`, SHA256: h}, Drivers: []string{`C:\Windows\System32\DriverStore\FileRepository\display.inf_amd64_example`}}
+	c := Config{ISO: `D:\Media\base\install.iso`, ISOSHA256: h, EditionID: "Professional", DiskGB: 127, GuestUser: "imageuser", CPU: 4, MemoryMB: 8192, ImageRoot: `D:\Images`, TimeoutSeconds: 900, RenderProbe: PinnedFile{Source: `D:\Assets\render.exe`, SHA256: h}, Drivers: []string{`C:\Windows\System32\DriverStore\FileRepository\display.inf_amd64_example`}}
 	c.SetupAssets = []Asset{{Name: "RUNNER.ZIP", PinnedFile: PinnedFile{Source: `D:\Assets\runner.zip`, SHA256: h}}}
 	return c
 }
@@ -24,7 +24,7 @@ func TestConfig(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{`D:\IMAGES~1`, `D:\Templates\base\images`} {
+	for _, path := range []string{`D:\IMAGES~1`, `D:\Media\base\images`} {
 		bad := testConfig()
 		bad.ImageRoot = path
 		if bad.Validate() == nil {
@@ -32,7 +32,7 @@ func TestConfig(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*Config){
-		"pin": func(c *Config) { c.SourceSHA256 = "bad" }, "relative": func(c *Config) { c.Source = `disk.vhdx` }, "source inside output": func(c *Config) { c.Source = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Templates` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.ExpectedTemplate = "../template" }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets = append(c.SetupAssets, c.SetupAssets[0]) }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
+		"pin": func(c *Config) { c.ISOSHA256 = "bad" }, "relative": func(c *Config) { c.ISO = `disk.vhdx` }, "source inside output": func(c *Config) { c.ISO = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Media` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.EditionID = "../edition" }, "disk small": func(c *Config) { c.DiskGB = 63 }, "disk large": func(c *Config) { c.DiskGB = 257 }, "index": func(c *Config) { c.ImageIndex = 129 }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets = append(c.SetupAssets, c.SetupAssets[0]) }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := testConfig()
@@ -45,22 +45,24 @@ func TestConfig(t *testing.T) {
 	b, _ := json.Marshal(c)
 	var data map[string]any
 	_ = json.Unmarshal(b, &data)
+	delete(data, "edition_id")
+	delete(data, "disk_gb")
 	delete(data, "cpu")
 	delete(data, "memory_mb")
 	delete(data, "timeout_seconds")
 	b, _ = json.Marshal(data)
 	got, err := DecodeConfig(strings.NewReader(string(b)))
-	if err != nil || got.CPU != 4 || got.MemoryMB != 8192 || got.TimeoutSeconds != 900 {
+	if err != nil || got.CPU != 4 || got.MemoryMB != 8192 || got.TimeoutSeconds != 900 || got.EditionID != "Professional" || got.DiskGB != 127 {
 		t.Fatal("defaults", err)
 	}
-	for _, bad := range []string{string(b) + "{}", `{"unexpected":"arbitrary-input"}`, strings.Repeat("x", 65537)} {
+	for _, bad := range []string{string(b) + "{}", `{"unexpected":"arbitrary-input"}`, `{"source":"legacy"}`, `{"source_sha256":"legacy"}`, `{"expected_template":"legacy"}`, strings.Repeat("x", 65537)} {
 		if _, err := DecodeConfig(strings.NewReader(bad)); err == nil || strings.Contains(err.Error(), "arbitrary-input") {
 			t.Fatal("invalid input or error echo")
 		}
 	}
 	c.SetupAssets = nil
-	if c.Validate() != nil {
-		t.Fatal("optional assets required")
+	if c.Validate() == nil {
+		t.Fatal("missing runner archive accepted")
 	}
 }
 func TestGuestNameAndPins(t *testing.T) {
@@ -144,7 +146,7 @@ func TestScriptConstantsMatchLF(t *testing.T) {
 	if err != nil || string(b) != offlineFiles || strings.ContainsRune(offlineFiles, '\r') {
 		t.Fatal("regenerate LF offline facts script")
 	}
-	for name, content := range map[string]string{"offline_payload.ps1": offlinePayload, "make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
+	for name, content := range map[string]string{"base_disk.ps1": baseDisk, "offline_payload.ps1": offlinePayload, "make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -155,7 +157,7 @@ func TestScriptConstantsMatchLF(t *testing.T) {
 	}
 }
 func TestManifestPublicFields(t *testing.T) {
-	m := Manifest{BuildID: strings.Repeat("a", 32), GuestName: "bivouac-aaaaaaa", GuestUser: "imageuser", Source: `D:\Templates\disk.vhdx`, SourceSHA256: strings.Repeat("b", 64), Output: `D:\Images\disk.vhdx`, SHA256: strings.Repeat("c", 64), ProbeSHA256: hashBytes([]byte(guestValidate)), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{"AGENT.EXE": strings.Repeat("d", 64)}}
+	m := Manifest{BuildID: strings.Repeat("a", 32), GuestName: "bivouac-aaaaaaa", GuestUser: "imageuser", Media: MediaRecord{ISOSHA256: strings.Repeat("b", 64)}, Output: `D:\Images\disk.vhdx`, SHA256: strings.Repeat("c", 64), ProbeSHA256: hashBytes([]byte(guestValidate)), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{"AGENT.EXE": strings.Repeat("d", 64)}}
 	b, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
@@ -164,9 +166,26 @@ func TestManifestPublicFields(t *testing.T) {
 	if json.Unmarshal(b, &fields) != nil {
 		t.Fatal("manifest JSON")
 	}
-	for _, required := range []string{"agent_sha256", "windows_contract", "autologon_account_matches", "build_id", "guest_name", "guest_user", "source", "source_sha256", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
+	for _, required := range []string{"agent_sha256", "windows_contract", "autologon_account_matches", "agent_task", "runner_task", "build_id", "guest_name", "guest_user", "media", "security", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
 		if _, ok := fields[required]; !ok {
 			t.Fatal("missing", required)
+		}
+	}
+	for _, removed := range []string{"source", "source_sha256", "template"} {
+		if _, ok := fields[removed]; ok {
+			t.Fatal("template field survived", removed)
+		}
+	}
+	media := fields["media"].(map[string]any)
+	for _, required := range []string{"iso_sha256", "install_kind", "image", "host_dism_version", "bcdboot_options", "winre", "layout"} {
+		if _, ok := media[required]; !ok {
+			t.Fatal("missing media field", required)
+		}
+	}
+	layout := media["layout"].(map[string]any)
+	for _, required := range []string{"disk_guid", "esp_guid", "msr_guid", "windows_guid"} {
+		if _, ok := layout[required]; !ok {
+			t.Fatal("missing layout identity", required)
 		}
 	}
 	for key := range fields {
@@ -177,22 +196,6 @@ func TestManifestPublicFields(t *testing.T) {
 		}
 	}
 }
-func TestRunnerInput(t *testing.T) {
-	c := testConfig()
-	c.SetupAssets = nil
-	for _, state := range []string{"absent", "unconfigured"} {
-		facts := Inspection{RunnerState: state}
-		if (facts.RunnerInput(c) != nil) != (state == "absent") {
-			t.Fatal("conditional runner archive requirement")
-		}
-		withArchive := c
-		withArchive.SetupAssets = []Asset{{Name: "runner.zip"}}
-		if facts.RunnerInput(withArchive) != nil {
-			t.Fatal("pinned runner archive not recognized")
-		}
-	}
-}
-
 func TestCleanupOrdering(t *testing.T) {
 	for _, test := range []struct {
 		name           string
@@ -225,25 +228,16 @@ func TestCleanupOrdering(t *testing.T) {
 	}
 }
 
-func TestEligibleAdmitsOnlyDiagLogResidue(t *testing.T) {
-	exists := true
-	base := func(residue map[string]RunnerResidue) Inspection {
-		return Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &exists, RunnerState: "residue", RunnerResidue: residue}
+func TestEligibleRefusesTemplateRunnerState(t *testing.T) {
+	good := Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, RunnerState: "absent"}
+	if !good.Eligible() {
+		t.Fatal("clean image rejected")
 	}
-	log := RunnerEntry{Name: "Runner_20260101-000000-utc.log"}
-	if !base(map[string]RunnerResidue{"_diag": {Entries: []RunnerEntry{log}}}).Eligible() {
-		t.Fatal("diag log residue refused")
-	}
-	for name, residue := range map[string]map[string]RunnerResidue{
-		"work":      {"_work": {Entries: []RunnerEntry{log}}},
-		"both":      {"_diag": {Entries: []RunnerEntry{log}}, "_work": {Entries: []RunnerEntry{log}}},
-		"directory": {"_diag": {Entries: []RunnerEntry{{Name: "pages", Directory: true}}}},
-		"omitted":   {"_diag": {Entries: []RunnerEntry{log}, OmittedNames: 1}},
-		"truncated": {"_diag": {Entries: []RunnerEntry{log}, Truncated: true}},
-		"empty":     {"_diag": {}},
-	} {
-		if base(residue).Eligible() {
-			t.Fatalf("%s residue admitted", name)
+	for _, state := range []string{"unconfigured", "residue", "configured"} {
+		bad := good
+		bad.RunnerState = state
+		if bad.Eligible() {
+			t.Fatal("runner state accepted", state)
 		}
 	}
 }

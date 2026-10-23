@@ -47,7 +47,9 @@ public static class SpikeOfflineAnswer {
   $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadWrite -NoDriveLetter -PassThru
   $disk=$image | Get-Disk
   if($disk.IsReadOnly -or $disk.IsOffline){throw 'Owned child is not online read-write'}
-  $partition=Get-Partition -DiskNumber $disk.Number | Sort-Object Size -Descending | Select-Object -First 1
+  $partitions=@(Get-Partition -DiskNumber $disk.Number | Where-Object Guid -eq $data.windows_guid)
+  if($data.windows_guid -notmatch '^\{[0-9a-fA-F-]{36}\}$' -or $partitions.Count -ne 1){throw 'Windows partition identity'}
+  $partition=$partitions[0]
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   $phaseCode=40
   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM')){
