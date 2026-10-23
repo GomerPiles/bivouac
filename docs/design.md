@@ -1105,7 +1105,14 @@ ACL and deny-write handles, not hashed per job.
   resource, never localized DISM text. DTDs, malformed XML, unknown flags,
   excessive sizes and incomplete/mismatched split sets refuse. Selection uses
   EditionID `Professional` by default and x64 Client; an explicit image index
-  overrides the edition. Display names are sanitized, bounded information.
+  overrides the edition. XML INDEX must equal its 1-based position so selection
+  matches DISM. Display names are sanitized, bounded information.
+  Pinned file inputs (ISO, runner ZIP, render probe and factory executable)
+  need not be administrator-protected: copyPinned hashes exactly the bytes it
+  writes into the protected workspace in one pass, rejects a mismatch, and
+  only then permits use. Input handles deny write/delete while open. This
+  deliberately replaces source-ACL checks for all pinned file imports;
+  driver-directory validation remains separate.
 - **Disk layout:** the factory creates a dynamic VHDX (default 127 GiB,
   bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
   cross-checks the mounted image's physical device, Storage disk path and
@@ -1113,23 +1120,40 @@ ACL and deny-write handles, not hashed per job.
   partition GUIDs once; later child inspection/staging selects the recorded
   Windows partition GUID. Layout: 200 MiB FAT32 ESP, 16 MiB MSR, NTFS Windows
   using the rest, no recovery partition. DISM applies the selected index with
-  `/CheckIntegrity` and `/SWMFile` for split media. WinRE is left unconfigured.
-  BCDBoot uses `/s` with a journalled temporary ESP letter and `/f UEFI`;
+  `/CheckIntegrity` and `/SWMFile` for split media. The factory does not register
+  WinRE at apply time and creates no recovery partition; Windows setup may
+  subsequently register WinRE on the Windows volume. The manifest records
+  this apply-time policy, not the installed guest's final WinRE state.
+  BCDBoot uses `/s` with a journalled temporary ESP letter, `/f UEFI`,
+  `/offline` and `/nofirmwaresync` to select boot files explicitly and disable
+  host firmware synchronization;
   `/bootex` is omitted for the existing MicrosoftWindows firmware template;
   the reference image's normal EFI boot manager has a 2011-PCA signer.
-  The fallback EFI loader, Microsoft loader and BCD store must exist.
+  The final table must be exactly three partitions in offset order with the
+  recorded GUIDs, ESP/MSR/basic-data types and expected sizes; automatic extra
+  partitions refuse. The fallback EFI loader, Microsoft loader and BCD store
+  must exist. Both loaders must have valid Authenticode signatures from the
+  expected 2011 issuer. The manifest records fixed issuer names and BCDBoot's
+  version alongside DISM's version.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
-- **Ownership and cleanup:** ISO mount, base/child attachment, partitions,
-  access paths and temporary letter have durable intents before creation.
-  Fixed host helpers and DISM/BCDBoot descendants are atomically assigned to
-  a recorded private kill-on-close job. Cancellation joins native absence;
-  an existing named worker prevents cleanup overtaking it. Cleanup proves
-  guest absence, removes only recorded access paths on the owned attachments,
-  confirms detach, then removes workspace files. No provider service journal
-  or CI mode is touched. Applied-image TOTALBYTES, ISO size and child/flatten
-  headroom replace the template-copy space estimate.
+- **Ownership and cleanup:** ISO mount, base/child attachment, access paths and
+  temporary letter have durable intents before creation. Partitions share the
+  owned base attachment's lifetime; their GUIDs are recorded in the layout.
+  Fixed host helper processes and their DISM/BCDBoot descendants are atomically
+  assigned to a private kill-on-close job named in the Global namespace from
+  the durable workspace identity. Cancellation joins those processes only;
+  WMI providers and storage-service operations run outside that job and may
+  still be in flight. Cleanup from another session refuses a surviving named
+  worker. It proves guest absence, removes only recorded access paths on the
+  owned attachments (including RAW/partitionless bases), confirms detach, then
+  removes workspace files. Storage uncertainty retains the workspace.
+  A persistent temporary-letter mapping whose safe removal cannot be proved
+  after detach/reboot is left untouched, recorded as retained_letter and
+  reported by image cleanup; the workspace remains for operator resolution.
+  No provider service journal or CI mode is touched. Applied-image TOTALBYTES,
+  ISO size and child/flatten headroom replace the template-copy space estimate.
 - **Inspection gate:** before boot, the child must be generalized to OOBE,
   with no answer-file pointer, an absent/empty embedded answer directory,
   no runner, agent installation, either guest task or bivouac job state. The reference
@@ -1277,7 +1301,8 @@ ACL and deny-write handles, not hashed per job.
   installation, either guest task or Guest directory. Public agent presence/hash/task
   facts replace legacy service and package facts; legacy VDD presence remains
   informational. The manifest records media/asset/output/agent hashes, selected image metadata,
-  host DISM version, BCDBoot options, WinRE choice, disk/partition GUIDs and
+  host DISM/BCDBoot versions, options, verified boot issuer generations,
+  apply-time WinRE policy, disk/partition GUIDs and
   effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
   and TPM present (readiness is recorded). It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins

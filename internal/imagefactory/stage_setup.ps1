@@ -59,8 +59,8 @@ public static class SpikeOfflineAnswer {
   $phaseCode=50
   $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
   if((Get-Item -LiteralPath $system).Length -gt 256MB -or ![SpikeOfflineAnswer]::NoExplicitAnswer($system)){throw 'Offline explicit answer pointer must be absent'}
-  # The embedded answer directory outranks the template's cached Audit-mode
-  # file. Only an absent or empty directory is accepted; the parent stays pinned.
+  # Only an absent or empty embedded answer directory is accepted;
+  # the parent stays pinned.
   $phaseCode=60
   $answerDirectory=Join-Path $mount 'Windows\Panther\Unattend'
   Assert-EmptyAnswerDirectory $answerDirectory

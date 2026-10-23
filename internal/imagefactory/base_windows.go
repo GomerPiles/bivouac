@@ -60,9 +60,6 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		r.hostError("base_"+mode, e)
 		return b, e
 	}
-	if err := r.intent("host_worker", save); err != nil {
-		return err
-	}
 	if err := r.intent("iso_mount", save); err != nil {
 		return err
 	}
@@ -79,7 +76,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	}
 	data["volume"] = media.Volume
 	r.TemporaryLetter = media.Letter
-	if err = r.intent("base_disk", save); err != nil {
+	if err = r.intent("base_attach", save); err != nil {
 		return err
 	}
 	if err = create(filepath.Join(r.Workspace, "source.vhdx"), c.DiskGB); err != nil {
@@ -88,7 +85,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	// The complete layout/access-path plan is durable before the first attach.
 	// Even a process loss between New-Partition and the returned GUIDs can be
 	// recovered by detaching only the recorded owned backing file.
-	for _, name := range []string{"base_attach", "esp", "msr", "windows", "esp_access", "windows_access", "temporary_letter"} {
+	for _, name := range []string{"esp_access", "windows_access"} {
 		if err = r.intent(name, save); err != nil {
 			return err
 		}
@@ -122,12 +119,28 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	r.Manifest.Media.DISMVersion = applied.DISMVersion
 	// Default boot files match the existing MicrosoftWindows HCS trust template.
 	// /bootex deliberately requires a separately validated 2023-CA template.
-	r.Manifest.Media.BCDBootOptions = []string{"/s", r.TemporaryLetter + ":", "/f", "UEFI"}
-	r.Manifest.Media.WinRE = "unconfigured_no_recovery_partition"
+	r.Manifest.Media.BCDBootOptions = []string{"/s", r.TemporaryLetter + ":", "/f", "UEFI", "/offline", "/nofirmwaresync"}
+	r.Manifest.Media.WinRE = "apply_time_no_recovery_partition_not_registered_by_factory"
 	if err = save(); err != nil {
 		return err
 	}
-	if _, err = invoke("boot"); err != nil {
+	if err = r.intent("temporary_letter", save); err != nil {
+		return err
+	}
+	b, err = invoke("boot")
+	if err != nil {
+		return err
+	}
+	var boot struct {
+		Version string      `json:"bcdboot_version"`
+		Issuers BootIssuers `json:"boot_issuers"`
+	}
+	if json.Unmarshal(b, &boot) != nil || !numericVersion(boot.Version) || boot.Issuers.Fallback != "windows_production_pca_2011" || boot.Issuers.Microsoft != "windows_production_pca_2011" {
+		return errors.New("invalid offline boot signature result")
+	}
+	r.Manifest.Media.BCDBootVersion = boot.Version
+	r.Manifest.Media.BootIssuers = boot.Issuers
+	if err = save(); err != nil {
 		return err
 	}
 	if _, err = invoke("detach"); err != nil {

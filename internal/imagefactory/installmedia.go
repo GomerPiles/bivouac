@@ -33,13 +33,20 @@ type MediaInventory struct {
 }
 
 type MediaRecord struct {
-	ISOSHA256      string     `json:"iso_sha256"`
-	Kind           string     `json:"install_kind"`
-	Image          MediaImage `json:"image"`
-	DISMVersion    string     `json:"host_dism_version"`
-	BCDBootOptions []string   `json:"bcdboot_options"`
-	WinRE          string     `json:"winre"`
-	Layout         DiskLayout `json:"layout"`
+	ISOSHA256      string      `json:"iso_sha256"`
+	Kind           string      `json:"install_kind"`
+	Image          MediaImage  `json:"image"`
+	DISMVersion    string      `json:"host_dism_version"`
+	BCDBootOptions []string    `json:"bcdboot_options"`
+	BCDBootVersion string      `json:"host_bcdboot_version"`
+	BootIssuers    BootIssuers `json:"boot_issuers"`
+	WinRE          string      `json:"winre"`
+	Layout         DiskLayout  `json:"layout"`
+}
+
+type BootIssuers struct {
+	Fallback  string `json:"fallback"`
+	Microsoft string `json:"microsoft"`
 }
 
 type DiskLayout struct {
@@ -168,9 +175,9 @@ func readWIMImages(r io.ReaderAt, size int64) ([]MediaImage, wimHeader, error) {
 	}
 	seen := map[uint32]bool{}
 	images := make([]MediaImage, 0, len(doc.Images))
-	for _, im := range doc.Images {
+	for position, im := range doc.Images {
 		w := im.Windows
-		if im.Index < 1 || im.Index > 128 || seen[im.Index] || !mediaIdentifier(w.Edition, 64) || !mediaIdentifier(w.Type, 32) || im.Total == 0 || im.Total > 256<<30 || len(w.Languages) < 1 || len(w.Languages) > 32 {
+		if im.Index != uint32(position+1) || im.Index > 128 || seen[im.Index] || !mediaIdentifier(w.Edition, 64) || !mediaIdentifier(w.Type, 32) || im.Total == 0 || im.Total > 256<<30 || len(w.Languages) < 1 || len(w.Languages) > 32 { // #nosec G115 -- image count <=128.
 			return nil, h, errors.New("invalid WIM image identity")
 		}
 		seen[im.Index] = true

@@ -87,8 +87,8 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
   if(!$expected.Count -or $expected.Count -gt 8192 -or $files.Count -ne $expected.Count -or $directories.Count -ne @($driver.directories).Count){throw 'partial snapshot'}
   foreach($directory in $driver.directories){if(!$directories.ContainsKey($directory)){throw 'partial directory'}}
   $target=Join-Path $repository $driver.name;$temporary=$target+'.bivouac-staging';$replaced=$target+'.bivouac-replaced'
-  # Templates prepared by App Sandbox may already hold this driver directory.
-  # It is replaced, never merged; only bivouac's own staging names must be absent.
+  # Existing driver trees are replaced whole after snapshot verification.
+  # Only factory staging names must be absent; never merge payload trees.
   foreach($path in @($target,$temporary,$replaced)){Assert-OfflinePath $Mount $path}
   foreach($path in @($temporary,$replaced)){if(Test-Path -LiteralPath $path){throw 'existing driver staging'}}
   if((Test-Path -LiteralPath $target) -and !(Get-Item -Force -LiteralPath $target).PSIsContainer){throw 'driver target is not a directory'}

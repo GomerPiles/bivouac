@@ -26,6 +26,7 @@ import (
 type record struct {
 	StorageIntents   map[string]bool   `json:"storage_intents,omitempty"`
 	TemporaryLetter  string            `json:"temporary_letter,omitempty"`
+	RetainedLetter   string            `json:"retained_letter,omitempty"`
 	BuildID          string            `json:"build_id"`
 	Workspace        string            `json:"workspace"`
 	Name             string            `json:"name"`
@@ -304,7 +305,11 @@ func runHost(ctx context.Context, script string, data any, output bool) ([]byte,
 	if err = protect(workspace, path, false); err != nil {
 		return nil, err
 	}
-	return executeHostWithJob(ctx, path, b, output, `Local\bivouac-image-`+hashBytes([]byte(strings.ToLower(workspace)))[:32])
+	return executeHostWithJob(ctx, path, b, output, hostWorkerName(workspace))
+}
+
+func hostWorkerName(workspace string) string {
+	return `Global\bivouac-image-` + hashBytes([]byte(strings.ToLower(workspace)))[:32]
 }
 
 func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byte, error) {

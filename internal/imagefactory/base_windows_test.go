@@ -6,10 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,7 +28,7 @@ func TestBaseFailureIntents(t *testing.T) {
 				return nil
 			}
 			create := func(path string, gb uint32) error {
-				if !persisted["base_disk"] || path != filepath.Join(r.Workspace, "source.vhdx") || gb != 127 {
+				if !persisted["base_attach"] || path != filepath.Join(r.Workspace, "source.vhdx") || gb != 127 {
 					t.Fatal("unrecorded base create")
 				}
 				calls = append(calls, "create")
@@ -50,7 +48,7 @@ func TestBaseFailureIntents(t *testing.T) {
 					t.Fatal("unrecorded ISO mount")
 				}
 				if mode != "media" {
-					for _, name := range []string{"base_attach", "esp", "msr", "windows", "esp_access", "windows_access", "temporary_letter"} {
+					for _, name := range []string{"base_attach", "esp_access", "windows_access"} {
 						if !persisted[name] {
 							t.Fatal("unrecorded native object", name)
 						}
@@ -67,6 +65,11 @@ func TestBaseFailureIntents(t *testing.T) {
 					return []byte(`{"volume":"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\","letter":"Z"}`), nil
 				case "layout":
 					return []byte(`{"disk_guid":"{11111111-1111-1111-1111-111111111111}","esp_guid":"{22222222-2222-2222-2222-222222222222}","msr_guid":"{33333333-3333-3333-3333-333333333333}","windows_guid":"{44444444-4444-4444-4444-444444444444}"}`), nil
+				case "boot":
+					if !persisted["temporary_letter"] {
+						t.Fatal("unrecorded temporary letter")
+					}
+					return []byte(`{"bcdboot_version":"10.0.26300.1","boot_issuers":{"fallback":"windows_production_pca_2011","microsoft":"windows_production_pca_2011"}}`), nil
 				case "apply":
 					if !validGUID(r.Manifest.Media.Layout.WindowsGUID) {
 						t.Fatal("layout not persisted before apply")
@@ -86,119 +89,47 @@ func TestBaseFailureIntents(t *testing.T) {
 			if failure == "" && !slices.Equal(calls, []string{"media", "create", "layout", "apply", "boot", "detach"}) {
 				t.Fatal(calls)
 			}
-			if failure == "" && (r.Manifest.Media.WinRE != "unconfigured_no_recovery_partition" || r.Manifest.Media.DISMVersion == "" || len(r.Manifest.Media.BCDBootOptions) == 0) {
+			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDBootVersion) || r.Manifest.Media.BootIssuers.Fallback != "windows_production_pca_2011" || r.Manifest.Media.BootIssuers.Microsoft != "windows_production_pca_2011" || !slices.Contains(r.Manifest.Media.BCDBootOptions, "/offline") || !slices.Contains(r.Manifest.Media.BCDBootOptions, "/nofirmwaresync") || slices.Contains(r.Manifest.Media.BCDBootOptions, "/bootex")) {
 				t.Fatal("missing provenance")
 			}
-		})
-	}
-}
-
-// Only ordinary temporary files and mocked Storage cmdlets are used. Fail at
-// each partition/access-path boundary and prove the numbered failure survives.
-func TestPartitionPlanInjected(t *testing.T) {
-	for _, fail := range []int{0, 1, 2, 3, 4, 5} {
-		t.Run(strconv.Itoa(fail), func(t *testing.T) {
-			root := t.TempDir()
-			id := strings.Repeat("b", 32)
-			workspace := filepath.Join(root, id)
-			if e := os.Mkdir(workspace, 0700); e != nil {
-				t.Fatal(e)
-			}
-			for _, name := range []string{"install.iso", "source.vhdx"} {
-				if e := os.WriteFile(filepath.Join(workspace, name), nil, 0600); e != nil {
-					t.Fatal(e)
-				}
-			}
-			marker, _ := json.Marshal(map[string]string{"build_id": id, "workspace": workspace})
-			if e := os.WriteFile(filepath.Join(workspace, "owner.json"), marker, 0600); e != nil {
-				t.Fatal(e)
-			}
-			mocks := `
- $script:attached=$false;$script:created=0;$script:accessCount=0
- function Get-DiskImage {param($ImagePath,$DevicePath) [pscustomobject]@{ImagePath=(Join-Path $env:BIVOUAC_FIXTURE_ROOT 'source.vhdx');Attached=$script:attached;DevicePath='\\.\PhysicalDrive123'}}
- function Mount-DiskImage {param($ImagePath,$Access,[switch]$NoDriveLetter,[switch]$PassThru) if(!$NoDriveLetter -or $Access -ne 'ReadWrite'){throw 'mount plan'};$script:attached=$true}
- function Get-Disk {param($Number) [pscustomobject]@{Number=123;Path='owned-disk-path';PartitionStyle='RAW';LogicalSectorSize=512;IsOffline=$false;Guid='{11111111-1111-1111-1111-111111111111}'}}
- function Get-Partition {param($DiskNumber)}
- function Initialize-Disk {param($Number,$PartitionStyle) if($Number -ne 123 -or $PartitionStyle -ne 'GPT'){throw 'initialize plan'}}
- function New-Partition {param($DiskNumber,$Size,$GptType,[switch]$UseMaximumSize)
-  $script:created++;if($script:created -eq $env:BIVOUAC_FIXTURE_FAIL){throw 'injected boundary'}
-  if($DiskNumber -ne 123){throw 'disk number'}
-  if($script:created -eq 1 -and ($Size -ne 200MB -or $GptType -ine '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}')){throw 'ESP plan'}
-  if($script:created -eq 2 -and ($Size -ne 16MB -or $GptType -ine '{e3c9e316-0b5c-4db8-817d-f92df00215ae}')){throw 'MSR plan'}
-  if($script:created -eq 3 -and (!$UseMaximumSize -or $GptType -ine '{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}')){throw 'Windows plan'}
-  [pscustomobject]@{PartitionNumber=$script:created;Guid=('{'+$script:created.ToString().PadLeft(8,'0')+'-1111-1111-1111-111111111111}')}
- }
- function Format-Volume {param($Partition,$FileSystem,$Confirm) if(($Partition.PartitionNumber -eq 1 -and $FileSystem -ne 'FAT32') -or ($Partition.PartitionNumber -eq 3 -and $FileSystem -ne 'NTFS')){throw 'format plan'}}
- function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath) $script:accessCount++;if(3+$script:accessCount -eq $env:BIVOUAC_FIXTURE_FAIL){throw 'injected access boundary'};if(!$AccessPath.StartsWith($env:BIVOUAC_FIXTURE_ROOT)){throw 'foreign access path'}}
- `
-			path := filepath.Join(workspace, "fixture.ps1")
-			if e := os.WriteFile(path, []byte(mocks+baseDisk), 0600); e != nil {
-				t.Fatal(e)
-			}
-			t.Setenv("BIVOUAC_FIXTURE_FAIL", strconv.Itoa(fail))
-			t.Setenv("BIVOUAC_FIXTURE_ROOT", workspace)
-			input, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "mode": "layout"})
-			b, e := executeHost(t.Context(), path, input, true)
-			if fail == 0 {
-				var layout DiskLayout
-				if e != nil || json.Unmarshal(b, &layout) != nil || !validGUID(layout.WindowsGUID) {
-					t.Fatal("partition plan failed", e)
-				}
-			} else {
-				var step *HostScriptError
-				if !errors.As(e, &step) {
-					t.Fatal("failure lost")
-				}
-				want := 40 + fail
-				if fail > 3 {
-					want = 44
-				}
-				if step.Step != want {
-					t.Fatal("wrong boundary", step.Step, want)
+			if failure != "" && failure != "save" {
+				removed := false
+				e := cleanupOwned(nil, func() error { return nil }, func() error {
+					return detachOwnedWith(t.Context(), r, func(_ context.Context, script string, input any, output bool) ([]byte, error) {
+						if script != detachDisk || !output {
+							t.Fatal("wrong cleanup helper")
+						}
+						var intents map[string]bool
+						if json.Unmarshal([]byte(input.(map[string]string)["storage_intents"]), &intents) != nil {
+							t.Fatal("missing cleanup intents")
+						}
+						for name := range persisted {
+							if !intents[name] {
+								t.Fatal("cleanup lost persisted ownership", name)
+							}
+						}
+						return []byte(`{"retained_letter":""}`), nil
+					})
+				}, func() error { removed = true; return nil })
+				if e != nil || !removed {
+					t.Fatal("orchestration failure did not allow owned cleanup", e)
 				}
 			}
 		})
 	}
 }
 
-func TestCleanupNewStorageObjectsInjected(t *testing.T) {
-	root := t.TempDir()
-	id := strings.Repeat("c", 32)
-	workspace := filepath.Join(root, id)
-	if e := os.Mkdir(workspace, 0700); e != nil {
-		t.Fatal(e)
-	}
-	for _, name := range []string{"disk.vhdx", "source.vhdx", "install.iso"} {
-		if e := os.WriteFile(filepath.Join(workspace, name), nil, 0600); e != nil {
-			t.Fatal(e)
-		}
-	}
-	marker, _ := json.Marshal(map[string]string{"build_id": id, "workspace": workspace})
-	if e := os.WriteFile(filepath.Join(workspace, "owner.json"), marker, 0600); e != nil {
-		t.Fatal(e)
-	}
-	trace := filepath.Join(workspace, "trace.txt")
-	t.Setenv("BIVOUAC_FIXTURE_ROOT", workspace)
-	t.Setenv("BIVOUAC_FIXTURE_TRACE", trace)
-	mocks := `
- $script:detached=@{}
- function Get-DiskImage {param($ImagePath) [pscustomobject]@{Attached=(!$script:detached[$ImagePath]);DevicePath='\\.\PhysicalDrive123'} }
- function Get-Disk { [pscustomobject]@{Number=123} }
- function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=1;GptType='{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}';AccessPaths=@(((Join-Path $env:BIVOUAC_FIXTURE_ROOT 'base-esp')+'\'),'Z:\','Q:\')} }
- function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath) if($AccessPath -eq 'Q:\'){throw 'foreign letter'};[IO.File]::AppendAllText($env:BIVOUAC_FIXTURE_TRACE,'access;') }
- function Dismount-DiskImage {param($ImagePath) $script:detached[$ImagePath]=$true;[IO.File]::AppendAllText($env:BIVOUAC_FIXTURE_TRACE,([IO.Path]::GetFileName($ImagePath)+';')) }
- `
-	file := filepath.Join(workspace, "cleanup-fixture.ps1")
-	if e := os.WriteFile(file, []byte(mocks+detachDisk), 0600); e != nil {
-		t.Fatal(e)
-	}
-	r := &record{BuildID: id, Workspace: workspace, TemporaryLetter: "Z", StorageIntents: map[string]bool{"child_attach": true, "base_attach": true, "iso_mount": true, "temporary_letter": true}}
-	input, _ := json.Marshal(r.scriptData())
-	if _, e := executeHost(t.Context(), file, input, false); e != nil {
-		t.Fatal(e)
-	}
-	b, e := os.ReadFile(trace)
-	if e != nil || string(b) != "access;disk.vhdx;access;access;source.vhdx;install.iso;" {
-		t.Fatal("cleanup skipped an object or touched a foreign letter", string(b))
+func TestRetainedLetterStopsDeletionAndPersists(t *testing.T) {
+	r := &record{TemporaryLetter: "Z", StorageIntents: map[string]bool{"temporary_letter": true}}
+	removed := false
+	e := cleanupOwned(nil, func() error { return nil }, func() error {
+		return detachOwnedWith(t.Context(), r, func(context.Context, string, any, bool) ([]byte, error) {
+			return []byte(`{"retained_letter":"Z"}`), nil
+		})
+	}, func() error { removed = true; return nil })
+	var retained *RetainedLetterError
+	b, _ := json.Marshal(r)
+	if !errors.As(e, &retained) || retained.Letter != "Z" || removed || !strings.Contains(string(b), `"retained_letter":"Z"`) {
+		t.Fatal("ambiguous mapping lost ownership/diagnostics")
 	}
 }

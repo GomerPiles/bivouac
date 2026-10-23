@@ -32,3 +32,15 @@ func TestPublishedImageCleanupWarning(t *testing.T) {
 		t.Fatal("failed unpublished build printed image values")
 	}
 }
+
+func TestImageCleanupRetainedLetterOutput(t *testing.T) {
+	var out bytes.Buffer
+	cause := &imagefactory.RetainedLetterError{Letter: "Z"}
+	if e := writeImageCleanupResult(&out, "test-build", cause); !errors.Is(e, cause) || !strings.Contains(out.String(), `"retained_letter":"Z"`) {
+		t.Fatal("cleanup operator output lost retained letter")
+	}
+	out.Reset()
+	if e := writeImageCleanupResult(&out, "test-build", nil); e != nil || out.Len() != 0 {
+		t.Fatal("successful cleanup changed output")
+	}
+}

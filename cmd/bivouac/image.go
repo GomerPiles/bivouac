@@ -37,7 +37,7 @@ func imageCmd(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	if args[0] == "cleanup" {
-		return imagefactory.Cleanup(ctx, c, *id)
+		return writeImageCleanupResult(out, *id, imagefactory.Cleanup(ctx, c, *id))
 	}
 	log := slog.New(slog.NewTextHandler(redact.NewWriter(os.Stderr), nil))
 	if args[0] == "inspect" {
@@ -45,6 +45,14 @@ func imageCmd(ctx context.Context, args []string, out io.Writer) error {
 	}
 	m, err := imagefactory.Build(ctx, c, log)
 	return writeImageResult(out, os.Stderr, m, err)
+}
+
+func writeImageCleanupResult(out io.Writer, id string, err error) error {
+	var retained *imagefactory.RetainedLetterError
+	if errors.As(err, &retained) {
+		return errors.Join(err, json.NewEncoder(out).Encode(map[string]string{"build_id": id, "retained_letter": retained.Letter}))
+	}
+	return err
 }
 
 func writeImageResult(out, warnings io.Writer, m imagefactory.Manifest, buildErr error) error {

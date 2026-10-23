@@ -1,5 +1,12 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+function Test-RecordedLetterMapping([string]$Letter){
+ # Read only: a detached mount-manager mapping cannot safely be deleted by
+ # letter alone. Keep the record/workspace for the operator if it still exists.
+ $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
+ if(!$key){throw 'mount-manager state unavailable'}
+ try{return ('\DosDevices\'+$Letter+':') -in $key.GetValueNames()}finally{$key.Dispose()}
+}
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){exit 1}
@@ -17,12 +24,22 @@ try{
   if($image.Attached){
    if($entry[0] -ne 'install.iso'){
     $disks=@($image|Get-Disk);if($disks.Count -ne 1 -or $image.DevicePath -ine ('\\.\PhysicalDrive'+$disks[0].Number)){exit 1}
-    foreach($part in @(Get-Partition -DiskNumber $disks[0].Number)){
+    $parts=@()
+    if($disks[0].PartitionStyle -ne 'RAW' -and $disks[0].NumberOfPartitions -ne 0){$parts=@(Get-Partition -DiskNumber $disks[0].Number)}
+    foreach($part in $parts){
      foreach($access in @($part.AccessPaths)){
       $owned=$false
-      foreach($name in @('base-windows','base-esp','inspect-mount','setup-private\mount')){if($access -ieq ((Join-Path $child $name)+'\')){$owned=$true}}
+      $paths=@()
+      if($entry[0] -eq 'source.vhdx'){
+       if($intents.windows_access){$paths+='base-windows'}
+       if($intents.esp_access){$paths+='base-esp'}
+      }else{
+       if($intents.inspection_access){$paths+='inspect-mount'}
+       if($intents.staging_access){$paths+='setup-private\mount'}
+      }
+      foreach($name in $paths){if($access -ieq ((Join-Path $child $name)+'\')){$owned=$true}}
       if($entry[0] -eq 'source.vhdx' -and $intents.temporary_letter -and $data.temporary_letter -cmatch '^[D-Z]$' -and $access -ieq ($data.temporary_letter+':\')){
-       if($part.GptType -ine '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'){exit 1};$owned=$true
+       if(!$data.esp_guid -or $part.Guid -ine $data.esp_guid -or $part.GptType -ine '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'){exit 1};$owned=$true
       }
       if($owned){$null=Remove-PartitionAccessPath -DiskNumber $disks[0].Number -PartitionNumber $part.PartitionNumber -AccessPath $access}
      }
@@ -32,5 +49,12 @@ try{
   }
   if((Get-DiskImage -ImagePath $path).Attached){exit 1}
  }
+ $retained=''
+ if($intents.temporary_letter){
+  if($data.temporary_letter -cnotmatch '^[D-Z]$'){exit 1}
+  try{if(Test-RecordedLetterMapping $data.temporary_letter){$retained=$data.temporary_letter}}catch{$retained=$data.temporary_letter}
+ }
+ [Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
+ [Console]::Out.WriteLine((@{retained_letter=$retained}|ConvertTo-Json -Compress))
  exit 0
 }catch{exit 1}
