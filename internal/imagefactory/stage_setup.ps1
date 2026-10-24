@@ -52,20 +52,21 @@ public static class SpikeOfflineAnswer {
   $partition=$partitions[0]
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   $phaseCode=40
-  foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM')){
+  foreach($relative in @('Windows','Windows\Setup','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Program Files','ProgramData')){
    $path=Join-Path $mount $relative
-   if(!(Test-Path -LiteralPath $path) -or ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Expected child Windows path unavailable'}
+   if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Expected child Windows path unavailable'}
   }
   $phaseCode=50
   $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
   if((Get-Item -LiteralPath $system).Length -gt 256MB -or ![SpikeOfflineAnswer]::NoExplicitAnswer($system)){throw 'Offline explicit answer pointer must be absent'}
   # Only an absent or empty embedded answer directory is accepted;
-  # the parent stays pinned.
+  # any existing parent must be ordinary before examining its children.
   $phaseCode=60
   $answerDirectory=Join-Path $mount 'Windows\Panther\Unattend'
+  Assert-OfflinePath $mount $answerDirectory
   Assert-EmptyAnswerDirectory $answerDirectory
   $phaseCode=61
-  if(!(Test-Path -LiteralPath $answerDirectory)){New-Item -ItemType Directory -Path $answerDirectory | Out-Null}
+  Initialize-OfflineSetupDirectories $mount
   $phaseCode=62
   # Apply only the protected DACL; PowerShell Set-Acl can also touch audit/owner
   # sections inherited from the guest image, which are outside this operation.

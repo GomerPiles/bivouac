@@ -351,6 +351,17 @@ about final installed WinRE state. Effective firmware trust and boot remain live
      (`TASK_DONT_ADD_PRINCIPAL_ACE`). Preparation
      and publication self-tests check both task definitions and the runner
      task's current security descriptor. A matching contract-2 image is required.
+     Fresh media may omit `Windows\Panther`, `Windows\Setup\Scripts` and
+     `Windows\System32\HostDriverStore\FileRepository`. Staging creates each
+     missing parent as an ordinary directory with the guest parent's owner
+     and inherited DACL, refusing links and files. `Panther\Unattend` keeps
+     its protected SYSTEM/Administrators DACL; the agent and ProgramData
+     image directories keep their explicit installation policies.
+     Existing ordinary parents retain their ACLs. Only an absent/empty
+     Unattend is accepted and answer files use CreateNew; an existing agent
+     installation or driver target refuses. These child-disk directories
+     require no host cleanup records. Setup\Scripts is empty; media scripts
+     and RUNNER.ZIP stay on the setup ISO until FirstLogon.
    - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
      removes VDD nodes/packages and the entire legacy component directory,
      uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
@@ -412,8 +423,9 @@ about final installed WinRE state. Effective firmware trust and boot remain live
 3. Build inspects its freshly applied child by the recorded Windows partition
    GUID. It requires generalized-to-OOBE setup state, no answer-file pointer,
    an empty/absent `Windows\Panther\Unattend`, no runner, agent installation,
-   either guest task or `ProgramData\Bivouac\Guest`. Reference-media pristine hive
-   and path checks pass; a live apply/boot is separately required. Records
+   either guest task or `ProgramData\Bivouac\Guest`. An absent Panther is clean;
+   an existing Panther must be an ordinary directory. Reference-media
+   pristine hive and path checks pass; live staging/boot is separately required. Records
    contain bounded public facts, never answer-file values or hive contents.
 4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
    agent, checks hardware rendering with the probe, removes setup files and agent logs,
@@ -467,11 +479,14 @@ about final installed WinRE state. Effective firmware trust and boot remain live
 Before a separately authorized live build, compare `bcdedit /enum firmware`
 before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
-Require no firmware-entry change. Build 6 must prove explicit-store BCDEdit
-accepts the scratch-store recipe, the generated store boots after both letters
-are removed, and offreg verifies the real GPT device encodings.
-Also prove the 2011-signed ESP loaders, Secure Boot/TPM in the guest and interrupted-apply
-cleanup, including retry from another session and after a host reboot.
+Require no firmware-entry change. The install-media lab reached a complete
+base disk: layout/apply, scratch BCDEdit store, real GPT offreg verification,
+2011 signatures, both temporary letters removed and firmware entries unchanged.
+It stopped at the preboot inspection's former Panther-existence requirement.
+The next live gate must prove inspection/staging on the fresh child, guest
+ownership/ACLs, boot after both letters are removed, no-NIC setup and guest
+Secure Boot/TPM. Interrupted-apply cleanup, including retry from another session
+and after a host reboot, also remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
 GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.
 The SWM wildcard remains a live gate. An optical ISO volume has no ordinary Storage

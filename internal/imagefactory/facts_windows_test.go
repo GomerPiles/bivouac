@@ -153,11 +153,11 @@ function Mount-DiskImage {param($ImagePath,$Access,[switch]$NoDriveLetter,[switc
 function Get-Disk {[pscustomobject]@{Number=123}}
 function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100;Guid='{11111111-1111-1111-1111-111111111111}'}}
 function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
- foreach($part in @('Windows\Panther','Windows\System32\config')){$null=New-Item -ItemType Directory -Path (Join-Path $AccessPath $part) -Force}
+ foreach($part in @('Windows\System32\config')){$null=New-Item -ItemType Directory -Path (Join-Path $AccessPath $part) -Force}
  foreach($part in @('SYSTEM','SOFTWARE','SAM')){[IO.File]::WriteAllText((Join-Path $AccessPath ('Windows\System32\config\'+$part)),'public-placeholder')}
 }
 function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
- foreach($part in @('Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE','Windows\System32\config\SAM','Windows\System32\config','Windows\System32','Windows\Panther','Windows')){$null=Remove-Item -LiteralPath (Join-Path $AccessPath $part)}
+ foreach($part in @('Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE','Windows\System32\config\SAM','Windows\System32\config','Windows\System32','Windows')){$null=Remove-Item -LiteralPath (Join-Path $AccessPath $part)}
 }
 function Dismount-DiskImage {param($ImagePath)}
 `
