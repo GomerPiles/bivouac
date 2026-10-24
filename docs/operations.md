@@ -292,12 +292,26 @@ inherit element are added: required values are set directly rather than
 reconstructing template settings. The loader uses the image locale, nx OptIn,
 Standard menu, recovery disabled, isolatedcontext Yes and
 allowedinmemorysettings 0x15000075. Bootmgr uses it as default and sole
-displayorder, timeout zero. Two recorded temporary letters give the documented
-ESP/Windows partition references and are removed on success/failure.
+displayorder, timeout zero. BCDEdit sets no device element: when a VHD is
+attached on the host, its partition syntax encodes the host's VHD file path,
+which cannot resolve inside the guest. Offreg instead creates three REG_BINARY
+device elements containing exact 88-byte plain GPT partition devices from the
+recorded disk and ESP/Windows partition GUIDs. Existing device keys or a saved
+sibling refuse. It saves a new hive beside the store, closes the source and
+atomically replaces it on the owned ESP. All paths use workspace volume access
+paths; no temporary drive letters are selected, recorded or assigned.
+The fresh-file save follows Microsoft's [ORSaveHive contract](https://learn.microsoft.com/en-us/windows/win32/devnotes/orsavehive);
+replacement uses same-volume [MoveFileEx](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+with REPLACE_EXISTING and WRITE_THROUGH, without a cross-volume copy fallback.
+Boot helper steps are 61 copy, 62 BCDEdit, 63 device write, 64 artifacts/signatures
+and 65 complete verification. A `bcd_write` failure code is 1 open, 2 occupied
+sibling, 3 missing parent, 4 existing device key, 5 create, 6 value, 7 save,
+8 replace, 9 invalid identity or 10 unexpected failure; no hive bytes are reported.
 Both ESP loaders and the applied source boot manager require valid signatures
 from the expected 2011 issuer. Read-only offreg checks the resulting store's
 exact object set/types, descriptions, default, displayorder, timeout, locales,
-all loader settings and GPT device GUID bytes before either letter is removed.
+all loader settings and exact complete plain-device bytes. GUID substring
+matches are insufficient: nested VHD devices refuse.
 Class-4 merge directives and any other unexpected elements refuse.
 The manifest records scratch-store method, loader GUID,
 verification, issuer names and BCDEdit/DISM versions.
@@ -466,32 +480,24 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
    ```
 
-   Cleanup also releases recorded ISO/base attachments, access paths and any
-   temporary letters after native absence. It refuses a surviving host-worker
+   Cleanup also releases recorded ISO/base attachments and access paths
+   after native absence. It refuses a surviving host-worker
    job or a build that is still running, and never removes a published image.
    Host-worker jobs cover the helper/DISM/BCDEdit processes, not WMI providers or
    storage-service operations; uncertain detach retains the workspace.
-   Temporary-letter selection skips live letters and all MountedDevices
-   reservations, including absent devices; boot checks reservations again.
-   After detach or reboot, cleanup retains the workspace only for a GPT mapping
-   whose data is exactly `DMIO:ID:` plus the corresponding recorded ESP or Windows partition GUID's binary
-   bytes, or when mount-manager state cannot be read. Foreign mappings remain
-   untouched and do not retain the workspace.
-   The build record and cleanup JSON contain the `retained_letters` array.
-   The operator must verify each mapping against its recorded partition GUID before
-   resolving it, then retry cleanup; do not delete a letter based on its name.
 
 Before a separately authorized live build, compare `bcdedit /enum firmware`
 before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
-Require no firmware-entry change. The install-media lab reached a complete
-base disk: layout/apply, scratch BCDEdit store, real GPT offreg verification,
-2011 signatures, both temporary letters removed and firmware entries unchanged.
-It stopped at the preboot inspection's former Panther-existence requirement.
-The next live gate must prove inspection/staging on the fresh child, guest
-ownership/ACLs, boot after both letters are removed, no-NIC setup and guest
-Secure Boot/TPM. Interrupted-apply cleanup, including retry from another session
-and after a host reboot, also remains a live gate.
+Require no firmware-entry change. Install-media lab runs reached base layout,
+apply, ESP files, scratch store and child staging, with unchanged firmware
+entries. The guest exited before Windows started: BCDEdit had encoded nested
+host VHD devices and the former GUID-substring check accepted them.
+The next live gate must prove plain GPT device resolution, effective firmware
+trust, Windows setup/no-NIC boot, guest ownership/ACLs and Secure Boot/TPM.
+The 2011 boot-file choice remains unchanged; selecting another signing
+generation requires a separate decision. Interrupted-apply cleanup, including
+retry from another session and after a host reboot, remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
 GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.
 The SWM wildcard remains a live gate. An optical ISO volume has no ordinary Storage

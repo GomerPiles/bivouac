@@ -72,6 +72,7 @@ func bootShape(b []byte) error {
 		Exit      *int64 `json:"bcdedit_exit"`
 		Command   uint32 `json:"bcdedit_command"`
 		Verify    uint32 `json:"bcd_verify"`
+		Write     uint32 `json:"bcd_write"`
 		Fallback  uint32 `json:"fallback_issuer"`
 		Microsoft uint32 `json:"microsoft_issuer"`
 		Source    uint32 `json:"source_issuer"`
@@ -88,6 +89,9 @@ func bootShape(b []byte) error {
 	}
 	if shape.Verify != 0 {
 		return fmt.Errorf("offline BCD refused: code=%d", shape.Verify)
+	}
+	if shape.Write != 0 {
+		return fmt.Errorf("offline BCD device write refused: code=%d", shape.Write)
 	}
 	return fmt.Errorf("boot loaders refused: fallback_issuer=%d microsoft_issuer=%d source_issuer=%d", shape.Fallback, shape.Microsoft, shape.Source)
 }

@@ -258,14 +258,6 @@ type PublishedError struct {
 	Err     error
 }
 
-// RetainedLettersError keeps cleanup from deleting the ownership record needed
-// to resolve an ambiguous persistent mount-manager mapping after a reboot.
-type RetainedLettersError struct{ Letters []string }
-
-func (e *RetainedLettersError) Error() string {
-	return "workspace retained: temporary letters " + strings.Join(e.Letters, ",") + ": require operator mapping verification"
-}
-
 func (e *PublishedError) Error() string {
 	return "image is published (build " + e.BuildID + "); workspace cleanup or record update failed: " + e.Err.Error()
 }

@@ -3,15 +3,20 @@
 package imagefactory
 
 import (
-	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
 // Exercise the production offreg reader against ordinary synthetic hive files.
 // Neither registry mounting, bcdedit, storage APIs nor elevation is involved.
 func TestBootRegistryVerification(t *testing.T) {
-	input, _ := json.Marshal(map[string]string{"root": t.TempDir()})
+	start := strings.Index(bootHelpers, "@\"\n") + 3
+	end := strings.Index(bootHelpers[start:], "\n\"@") + start
+	if start < 3 || end < start {
+		t.Fatal("offline boot bindings absent")
+	}
+	input, _ := json.Marshal(map[string]string{"root": t.TempDir(), "bindings": bootHelpers[start:end]})
 	script := bootHelpers + "\ntry{\n" + `
 $ErrorActionPreference='Stop'
 $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
@@ -41,7 +46,7 @@ public static class BootHiveFixture {
  static void Object(IntPtr h,string id,uint type){Value(h,"Objects\\"+id+"\\Description","Type",4,BitConverter.GetBytes(type));}
  static byte[] Device(string part){
   byte[] b=new byte[88];b[16]=6;
-  new Guid(Disk).ToByteArray().CopyTo(b,32);new Guid(part).ToByteArray().CopyTo(b,56);return b;
+  b[24]=0x48;new Guid(part).ToByteArray().CopyTo(b,32);new Guid(Disk).ToByteArray().CopyTo(b,56);return b;
  }
  public static void Seed(string path,int fault){
   IntPtr h;Check(ORCreateHive(out h));
@@ -54,7 +59,7 @@ public static class BootHiveFixture {
    if(fault!=2){
     Text(h,Manager,"23000003",fault==3?ESP:Loader);
     Text(h,Manager,"12000002",fault==4?@"\other.efi":@"\EFI\Microsoft\Boot\bootmgfw.efi");
-    Element(h,Manager,"11000001",3,Device(fault==8?Windows:ESP));
+    if(fault<44 || fault>47)Element(h,Manager,"11000001",3,Device(fault==8?Windows:ESP));
     Text(h,Manager,"12000004",fault==23?"Other":"Windows Boot Manager");
     Text(h,Manager,"12000005",fault==17?"fr-FR":"en-US");
     List(h,Manager,"24000001",fault==15?Loader+"\0"+ESP:Loader);
@@ -67,8 +72,8 @@ public static class BootHiveFixture {
    if(fault!=5){
     Text(h,Loader,"12000002",fault==6?@"\wrong.efi":@"\Windows\system32\winload.efi");
     Text(h,Loader,"22000002",fault==7?@"\Other":@"\Windows");
-    Element(h,Loader,"11000001",3,Device(fault==9?ESP:Windows));
-    Element(h,Loader,"21000001",3,Device(fault==10?ESP:Windows));
+    if(fault<44 || fault>47)Element(h,Loader,"11000001",3,Device(fault==9?ESP:Windows));
+    if(fault<44 || fault>47)Element(h,Loader,"21000001",3,Device(fault==10?ESP:Windows));
     Element(h,Loader,"16000009",3,new byte[]{fault==11?(byte)1:(byte)0});
     Text(h,Loader,"12000004",fault==24?"Other":"Windows");
     Text(h,Loader,"12000005",fault==18?"fr-FR":"en-US");
@@ -83,6 +88,12 @@ public static class BootHiveFixture {
    if(fault>=28 && fault<=35){string[] ids={"42000002","45000001","47000005","47000006"};Number(h,fault<32?Manager:Loader,ids[(fault-28)%4],1);}
    if(fault==36)Number(h,Manager,"4fffffff",1);
    if(fault==43)Number(h,Manager,"invalid",1);
+   if(fault>=45 && fault<=47){int i=fault-45;Element(h,i==0?Manager:Loader,i==2?"21000001":"11000001",3,Device(i==0?ESP:Windows));}
+   if(fault==48){byte[] nested=new byte[374];Device(ESP).CopyTo(nested,100);Element(h,Manager,"11000001",3,nested);}
+   if(fault>=100 && fault<364){
+    int i=(fault-100)/88,offset=(fault-100)%88;byte[] changed=Device(i==0?ESP:Windows);changed[offset]^=1;
+    Element(h,i==0?Manager:Loader,i==2?"21000001":"11000001",3,changed);
+   }
    Check(ORSaveHive(h,path,6,1));
   }finally{ORCloseHive(h);}
  }
@@ -101,26 +112,85 @@ for($code=0;$code -le 43;$code++){
  if($result -ne $expected){throw ('code={0} got={1}' -f $expected,$result)}
  if($code -ne 1 -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'hive changed'}
 }
+for($code=100;$code -lt 364;$code++){
+ $path=Join-Path $data.root ('changed'+$code);[BootHiveFixture]::Seed($path,$code)
+ $result=[FactoryBoot]::Verify($path,'{66666666-6666-4666-8666-666666666666}','{00112233-4455-6677-8899-aabbccddeeff}','{01234567-89ab-cdef-8012-3456789abcde}','{fedcba98-7654-3210-8123-456789abcdef}','en-US')
+ if($result -ne (8+[int][math]::Floor(($code-100)/88))){throw 'device byte mutation accepted'}
+}
+$nested=Join-Path $data.root 'nested';[BootHiveFixture]::Seed($nested,48)
+if([FactoryBoot]::Verify($nested,'{66666666-6666-4666-8666-666666666666}','{00112233-4455-6677-8899-aabbccddeeff}','{01234567-89ab-cdef-8012-3456789abcde}','{fedcba98-7654-3210-8123-456789abcdef}','en-US') -ne 8){throw 'nested VHD-like device accepted'}
+# Actual offline mutation/save/atomic replacement on ordinary fixture files.
+$loader='{66666666-6666-4666-8666-666666666666}';$disk='{00112233-4455-6677-8899-aabbccddeeff}';$esp='{01234567-89ab-cdef-8012-3456789abcde}';$windows='{fedcba98-7654-3210-8123-456789abcdef}'
+foreach($mode in @('success','missing','sibling file','sibling directory','missing parent','manager exists','device exists','osdevice exists','identity')){
+ $path=Join-Path $data.root $mode
+ $seed=44;$expected=0;$diskArgument=$disk
+ switch($mode){
+  'missing' {$expected=1}
+  'sibling file' {$expected=2;[IO.File]::WriteAllText(($path+'.plain-gpt'),'preserve')}
+  'sibling directory' {$expected=2;$null=New-Item -ItemType Directory -Path ($path+'.plain-gpt')}
+  'missing parent' {$expected=3;$seed=2}
+  'manager exists' {$expected=4;$seed=45}
+  'device exists' {$expected=4;$seed=46}
+  'osdevice exists' {$expected=4;$seed=47}
+  'identity' {$expected=9;$diskArgument='invalid'}
+ }
+ if($mode -ne 'missing'){[BootHiveFixture]::Seed($path,$seed)}
+ $before='';if(Test-Path -LiteralPath $path){$before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
+ $result=[FactoryBoot]::WriteDevices($path,$loader,$diskArgument,$esp,$windows)
+ if($result -ne $expected){throw ('write expected={0} got={1}' -f $expected,$result)}
+ if($mode -eq 'success'){
+  if([FactoryBoot]::Verify($path,$loader,$disk,$esp,$windows,'en-US') -ne 0 -or (Test-Path -LiteralPath ($path+'.plain-gpt'))){throw 'write verification or rename'}
+  $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+  if([FactoryBoot]::WriteDevices($path,$loader,$disk,$esp,$windows) -ne 4){throw 'write repeated existing elements'}
+ }
+ if($before -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'refusal changed source store'}
+ if($mode -eq 'sibling file' -and [IO.File]::ReadAllText(($path+'.plain-gpt')) -ne 'preserve'){throw 'sibling overwritten'}
+}
+foreach($code in @(5,6,7,8,10)){
+ $name='FactoryBootFault'+$code
+ $binding=$data.bindings.Replace('public static class FactoryBoot {',('public static class '+$name+' {'))
+ $helpers=' static uint FailValue(){return 5;} static bool FailMove(){return false;} static uint FailCreate(out IntPtr key,out uint disposition){key=IntPtr.Zero;disposition=0;return 5;} static uint ThrowValue(){throw new InvalidOperationException();} '
+ $binding=$binding.Replace(('public static class '+$name+' {'),('public static class '+$name+' {'+$helpers))
+ switch($code){
+  5 {$binding=$binding.Replace('ORCreateKey(parent,names[i],null,0,IntPtr.Zero,out key,out disposition)','FailCreate(out key,out disposition)')}
+  6 {$binding=$binding.Replace('ORSetValue(key,"Element",3,value,(uint)value.Length)','FailValue()')}
+  7 {$binding=$binding.Replace('ORSaveHive(h,next,6,1)','FailValue()')}
+  8 {$binding=$binding.Replace('MoveFileEx(next,path,9)','FailMove()')}
+  10 {$binding=$binding.Replace('ORSetValue(key,"Element",3,value,(uint)value.Length)','ThrowValue()')}
+ }
+ $null=Add-Type -TypeDefinition $binding
+ $path=Join-Path $data.root ('write-failure'+$code);[BootHiveFixture]::Seed($path,44)
+ $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+ $type=[type]$name
+ $result=$type::WriteDevices($path,$loader,$disk,$esp,$windows)
+ if($result -ne $code -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'native write failure changed source'}
+ if($code -eq 8 -and [FactoryBoot]::Verify(($path+'.plain-gpt'),$loader,$disk,$esp,$windows,'en-US') -ne 0){throw 'failed replacement lost saved store'}
+}
 [Console]::Out.Write('verified')
-}catch{[Console]::Out.Write(('fixture_line={0}' -f $_.InvocationInfo.ScriptLineNumber))}
+}catch{[Console]::Out.Write(('fixture_line={0} expected={1} result={2} case={3} compiler={4}' -f $_.InvocationInfo.ScriptLineNumber,[int]$expected,[int]$result,[int]$code,([regex]::Match($_.Exception.Message,'CS(\d+)').Groups[1].Value)))}
 `
 	if got := runTestPS(t, script, input); got != "verified" {
 		t.Fatal("offline hive verification", got)
 	}
 }
 
-func TestCleanupRejectsUnrecordedLetters(t *testing.T) {
-	for _, frame := range []string{
-		`{"retained_letters":["X"]}`,
-		`{"retained_letters":["Z","Z"]}`,
-		`{"retained_letters":["Z","Y","X"]}`,
-		`{"retained_letters":null}`,
-	} {
-		r := &record{TemporaryLetter: "Z", WindowsTemporaryLetter: "Y", StorageIntents: fixtureCleanupIntents()}
-		if e := detachOwnedWith(t.Context(), r, func(_ context.Context, _ string, _ any, _ bool) ([]byte, error) {
-			return []byte(frame), nil
-		}); e == nil {
-			t.Fatal("unrecorded cleanup letter accepted")
-		}
+func TestPlainGPTDeviceGolden(t *testing.T) {
+	// Independent golden Windows GUID byte order and all required zero bytes.
+	expected := strings.Repeat("00", 16) + "06000000000000004800000000000000" +
+		"67452301ab89efcd80123456789abcde" + strings.Repeat("00", 8) +
+		"33221100554477668899aabbccddeeff" + strings.Repeat("00", 16)
+	input, _ := json.Marshal(map[string]string{"golden": expected})
+	script := bootHelpers + `
+$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
+Initialize-BootRegistry
+$b=[FactoryBoot]::PartitionDevice([Guid]'{00112233-4455-6677-8899-aabbccddeeff}',[Guid]'{01234567-89ab-cdef-8012-3456789abcde}')
+if($b.Length -ne 88 -or [BitConverter]::ToString($b).Replace('-','').ToLowerInvariant() -cne $d.golden){throw 'partition golden differs'}
+$refused=$false;try{$null=[FactoryBoot]::PartitionDevice([Guid]::Empty,[Guid]::NewGuid())}catch{$refused=$true}
+if(!$refused){throw 'empty disk accepted'}
+$refused=$false;try{$null=[FactoryBoot]::PartitionDevice([Guid]::NewGuid(),[Guid]::Empty)}catch{$refused=$true}
+if(!$refused){throw 'empty partition accepted'}
+[Console]::Out.Write('golden')`
+	if got := runTestPS(t, script, input); got != "golden" {
+		t.Fatal("plain GPT device golden")
 	}
 }
