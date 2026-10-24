@@ -36,6 +36,8 @@ public static class BootHiveFixture {
  }
  static void Element(IntPtr h,string id,string element,uint type,byte[] value){Value(h,"Objects\\"+id+"\\Elements\\"+element,"Element",type,value);}
  static void Text(IntPtr h,string id,string element,string value){Element(h,id,element,1,Encoding.Unicode.GetBytes(value+"\0"));}
+ static void Number(IntPtr h,string id,string element,ulong value){Element(h,id,element,3,BitConverter.GetBytes(value));}
+ static void List(IntPtr h,string id,string element,string value){Element(h,id,element,7,Encoding.Unicode.GetBytes(value+"\0\0"));}
  static void Object(IntPtr h,string id,uint type){Value(h,"Objects\\"+id+"\\Description","Type",4,BitConverter.GetBytes(type));}
  static byte[] Device(string part){
   byte[] b=new byte[88];b[16]=6;
@@ -44,19 +46,23 @@ public static class BootHiveFixture {
  public static void Seed(string path,int fault){
   IntPtr h;Check(ORCreateHive(out h));
   try{
-   if(fault!=2)Object(h,Manager,0x10100002);
-   if(fault!=5)Object(h,Loader,0x10200003);
-   Object(h,"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}",0x20200003);
-   if(fault==12)Object(h,"{77777777-7777-4777-8777-777777777777}",0x10200003);
-   if(fault==16)Object(h,"malformed",0);
+   if(fault!=2)Object(h,Manager,fault==25?(uint)0x10200003:(uint)0x10100002);
+   if(fault!=5)Object(h,Loader,fault==26?(uint)0x10200004:(uint)0x10200003);
+   if(fault==13)Object(h,"{77777777-7777-4777-8777-777777777777}",0x10200004);
+   if(fault==37)Object(h,"malformed",0);
    // Missing objects must not be reintroduced through their element keys.
    if(fault!=2){
     Text(h,Manager,"23000003",fault==3?ESP:Loader);
     Text(h,Manager,"12000002",fault==4?@"\other.efi":@"\EFI\Microsoft\Boot\bootmgfw.efi");
     Element(h,Manager,"11000001",3,Device(fault==8?Windows:ESP));
-    if(fault==13)Element(h,Manager,"11000001",3,new byte[4097]);
-    if(fault==14){byte[] wrong=Device(ESP);wrong[32]^=1;Element(h,Manager,"11000001",3,wrong);}
-    if(fault==15)Element(h,Manager,"11000001",1,Device(ESP));
+    Text(h,Manager,"12000004",fault==23?"Other":"Windows Boot Manager");
+    Text(h,Manager,"12000005",fault==17?"fr-FR":"en-US");
+    List(h,Manager,"24000001",fault==15?Loader+"\0"+ESP:Loader);
+    Number(h,Manager,"25000004",fault==16?(ulong)1:(ulong)0);
+    if(fault==38)Element(h,Manager,"11000001",1,Device(ESP));
+    if(fault==39)Element(h,Manager,"11000001",3,new byte[4097]);
+    if(fault==40){byte[] wrong=Device(ESP);wrong[32]^=1;Element(h,Manager,"11000001",3,wrong);}
+    if(fault==41)Text(h,Manager,"24000001",Loader);
    }
    if(fault!=5){
     Text(h,Loader,"12000002",fault==6?@"\wrong.efi":@"\Windows\system32\winload.efi");
@@ -64,21 +70,35 @@ public static class BootHiveFixture {
     Element(h,Loader,"11000001",3,Device(fault==9?ESP:Windows));
     Element(h,Loader,"21000001",3,Device(fault==10?ESP:Windows));
     Element(h,Loader,"16000009",3,new byte[]{fault==11?(byte)1:(byte)0});
+    Text(h,Loader,"12000004",fault==24?"Other":"Windows");
+    Text(h,Loader,"12000005",fault==18?"fr-FR":"en-US");
+    Number(h,Loader,"25000020",fault==19?(ulong)1:(ulong)0);
+    Number(h,Loader,"250000c2",fault==20?(ulong)0:(ulong)1);
+    Element(h,Loader,"16000060",3,new byte[]{fault==21?(byte)0:(byte)1});
+    Number(h,Loader,"17000077",fault==22?(ulong)0x15000076:(ulong)0x15000075);
+    if(fault==42)Element(h,Loader,"17000077",3,new byte[16]);
    }
+   if(fault==14)Number(h,Manager,"45000001",1);
+   if(fault==27)List(h,Loader,"14000006",ESP);
+   if(fault>=28 && fault<=35){string[] ids={"42000002","45000001","47000005","47000006"};Number(h,fault<32?Manager:Loader,ids[(fault-28)%4],1);}
+   if(fault==36)Number(h,Manager,"4fffffff",1);
+   if(fault==43)Number(h,Manager,"invalid",1);
    Check(ORSaveHive(h,path,6,1));
   }finally{ORCloseHive(h);}
  }
 }
 "@
-for($code=0;$code -le 16;$code++){
+for($code=0;$code -le 43;$code++){
  $path=Join-Path $data.root ('bcd'+$code)
  if($code -ne 1){[BootHiveFixture]::Seed($path,$code)}
  $before='';if($code -ne 1){$before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
- $result=[FactoryBoot]::Verify($path,'{66666666-6666-4666-8666-666666666666}','{00112233-4455-6677-8899-aabbccddeeff}','{01234567-89ab-cdef-8012-3456789abcde}','{fedcba98-7654-3210-8123-456789abcdef}')
- $expected=$code;if($code -eq 12){$expected=5}
- if($code -in @(13,14,15)){$expected=8};if($code -eq 16){$expected=12}
+ $disk='{00112233-4455-6677-8899-aabbccddeeff}';if($code -eq 12){$disk='invalid'}
+ $result=[FactoryBoot]::Verify($path,'{66666666-6666-4666-8666-666666666666}',$disk,'{01234567-89ab-cdef-8012-3456789abcde}','{fedcba98-7654-3210-8123-456789abcdef}','en-US')
+ $expected=$code
+ if($code -ge 28 -and $code -le 36){$expected=14}
+ if($code -eq 37){$expected=13};if($code -in @(38,39,40)){$expected=8}
+ if($code -eq 41){$expected=15};if($code -eq 42){$expected=22};if($code -eq 43){$expected=27}
  if($result -ne $expected){throw ('code={0} got={1}' -f $expected,$result)}
- if($code -eq 0){if([FactoryBoot]::TemplateLoaders($path)[0] -ne '{66666666-6666-4666-8666-666666666666}'){throw 'template'}}
  if($code -ne 1 -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'hive changed'}
 }
 [Console]::Out.Write('verified')

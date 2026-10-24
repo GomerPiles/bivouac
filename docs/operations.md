@@ -284,20 +284,30 @@ boot.pnd.stl to boot.stl and creates the empty EFI\Microsoft\Recovery directory.
 EFI_EX is excluded, and bounded traversal refuses links.
 BCDBoot is not invoked: lab runs copied boot files but collided with the host's
 BCD00000000 hive while creating the target store.
-Instead, BCDEdit edits a copy of the image's BCD-Template. Every command names
-the owned ESP store with `/store`; no system-store or firmware objects are used.
-Template OS loaders are removed by their offreg-discovered GUIDs. The recorded
-new loader uses the image locale, bootloadersettings inheritance, nx OptIn,
-Standard menu and recovery disabled. Bootmgr uses that loader as default and
+Instead, BCDEdit `/createstore <owned ESP BCD path>` creates an empty non-system
+store. Every later command names that file with `/store`; no system-store or
+firmware objects are used. BCD-Template is not an input.
+Only bootmgr and the recorded loader are created. No inheritance groups or
+inherit element are added: required values are set directly rather than
+reconstructing template settings. The loader uses the image locale, nx OptIn,
+Standard menu, recovery disabled, isolatedcontext Yes and
+allowedinmemorysettings 0x15000075. Bootmgr uses it as default and sole
 displayorder, timeout zero. Two recorded temporary letters give the documented
 ESP/Windows partition references and are removed on success/failure.
 Both ESP loaders and the applied source boot manager require valid signatures
 from the expected 2011 issuer. Read-only offreg checks the resulting store's
-default, paths, systemroot, recovery flag, unique loader and GPT device GUID
-bytes before either letter is removed. The manifest records method, loader GUID,
+exact object set/types, descriptions, default, displayorder, timeout, locales,
+all loader settings and GPT device GUID bytes before either letter is removed.
+Class-4 merge directives and any other unexpected elements refuse.
+The manifest records scratch-store method, loader GUID,
 verification, issuer names and BCDEdit/DISM versions.
 See Microsoft's [UEFI BCD settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi)
 and [boot option values](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set).
+Store creation, object creation and the displayorder/default/timeout commands
+follow the [BCDEdit command reference](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdedit-command-line-options).
+There is no resume or memdiag object. PR 3 must explicitly disable hibernation
+and fast startup in the image; disposable CI guests never hibernate. That guest
+policy is not implemented by this host-only change.
 The Recovery directory is a sibling of Boot, matching Microsoft's
 [EFI recovery location](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/add-a-hardware-recovery-button-to-start-windows-re);
 the copy log names its creation without spelling out the path. No recovery
@@ -458,7 +468,7 @@ Before a separately authorized live build, compare `bcdedit /enum firmware`
 before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
 Require no firmware-entry change. Build 6 must prove explicit-store BCDEdit
-accepts the copied template, the generated store boots after both letters
+accepts the scratch-store recipe, the generated store boots after both letters
 are removed, and offreg verifies the real GPT device encodings.
 Also prove the 2011-signed ESP loaders, Secure Boot/TPM in the guest and interrupted-apply
 cleanup, including retry from another session and after a host reboot.

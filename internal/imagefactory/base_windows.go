@@ -127,7 +127,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return errors.New("boot loader identity generation failed")
 	}
 	r.Manifest.Media.LoaderGUID = strings.ToLower(loader.String())
-	r.Manifest.Media.BootMethod = "image_template_bcdedit_uefi_2011"
+	r.Manifest.Media.BootMethod = "scratch_bcdedit_uefi_2011"
 	data["loader_guid"] = r.Manifest.Media.LoaderGUID
 	r.Manifest.Media.WinRE = "apply_time_no_recovery_partition_not_registered_by_factory"
 	if err = save(); err != nil {

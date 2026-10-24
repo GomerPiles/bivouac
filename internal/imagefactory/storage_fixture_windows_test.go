@@ -121,7 +121,11 @@ const storageFixturePS = `
   $tool='dism';if($Path.EndsWith('bcdedit.exe')){$tool='bcdedit'}
   $state.tool_args=$Arguments;$state.tool_calls+=,@($Arguments);Save-Fixture;Trace ('tool_'+$tool)
   if($tool -eq 'bcdedit' -and $fixture.bcd_fail -eq $state.tool_calls.Count){return 17}
-  if($fixture.refuse -eq 'tool_exit'){return 5};return 0
+  if($fixture.refuse -eq 'tool_exit'){return 5}
+  if($tool -eq 'bcdedit' -and $Arguments[0] -eq '/createstore'){
+   if($Arguments.Count -ne 2 -or $Arguments[1] -cne (Join-Path $fixture.workspace 'base-esp\EFI\Microsoft\Boot\BCD')){throw 'foreign store creation'}
+   [IO.File]::WriteAllText($Arguments[1],'scratch-store')
+  };return 0
  }
  function Get-AuthenticodeSignature {param($LiteralPath)
   $status='Valid';$issuer='CN=Microsoft Windows Production PCA 2011, O=Microsoft Corporation'
@@ -138,7 +142,6 @@ const storageFixturePS = `
   if($owned -or $fixture.stale_mapping){return ,([byte[]]([Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+([Guid]$fixture.guids[$index]).ToByteArray()))}
   return $null
  }
- function Get-TemplateLoaders([string]$Store){if($fixture.refuse -eq 'template'){throw 'template refused'};'{9f25ee7a-e7b7-11db-94b5-f7e662935912}';'{77777777-7777-4777-8777-777777777777}';'{88888888-8888-4888-8888-888888888888}';'{99999999-9999-4999-8999-999999999999}'}
  function Test-BootStore([string]$Store,$Data){return [uint32]$fixture.verify}
 `
 
@@ -434,7 +437,7 @@ func TestBaseApplyArgumentsAndMediaChange(t *testing.T) {
 	}
 }
 func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
-	for _, refuse := range []string{"", "letter_collision", "tool_exit", "template", "missing_artifact", "unsigned", "invalid_signature", "issuer2023", "unknown_issuer", "source_unsigned"} {
+	for _, refuse := range []string{"", "letter_collision", "tool_exit", "missing_artifact", "unsigned", "invalid_signature", "issuer2023", "unknown_issuer", "source_unsigned"} {
 		t.Run(refuse, func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["refuse"] = refuse
@@ -448,7 +451,7 @@ func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
 					t.Fatal("invalid signed boot result", e)
 				}
 			} else {
-				step := map[string]int{"letter_collision": 60, "tool_exit": 63, "template": 63, "missing_artifact": 64}[refuse]
+				step := map[string]int{"letter_collision": 60, "tool_exit": 63, "missing_artifact": 64}[refuse]
 				if step == 0 {
 					step = 64
 				}
