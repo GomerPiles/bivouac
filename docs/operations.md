@@ -293,8 +293,13 @@ Bounded traversal refuses links.
 BCDBoot is not invoked: lab runs copied boot files but collided with the host's
 BCD00000000 hive while creating the target store.
 Instead, BCDEdit `/createstore <owned ESP BCD path>` creates an empty non-system
-store. Every later command names that file with `/store`; no system-store or
-firmware objects are used. BCD-Template is not an input.
+store. Every later command names that file with `/store`; no host system-store
+commands or firmware objects are used. The existing offreg device pass marks
+this owned ESP hive as the guest's system store by setting Description\System
+to DWORD 1 and deleting Description\FirmwareModified. Before modification it
+accepts only exact REG_SZ KeyName=BCD00000000 and optional DWORD-1 System
+and/or FirmwareModified values. Windows specialize's BCD provider otherwise
+refuses the non-system store. BCD-Template is not an input.
 Only bootmgr and the recorded loader are created. No inheritance groups or
 inherit element are added: required values are set directly rather than
 reconstructing template settings. The loader uses the image locale, nx OptIn,
@@ -314,7 +319,11 @@ with REPLACE_EXISTING and WRITE_THROUGH, without a cross-volume copy fallback.
 Boot helper steps are 61 copy, 62 BCDEdit, 63 device write, 64 artifacts/signatures
 and 65 complete verification. A `bcd_write` failure code is 1 open, 2 occupied
 sibling, 3 missing parent, 4 existing device key, 5 create, 6 value, 7 save,
-8 replace, 9 invalid identity or 10 unexpected failure; no hive bytes are reported.
+8 replace, 9 invalid identity, 10 unexpected failure, 11 Description schema,
+12 System write or 13 FirmwareModified deletion; no hive bytes are reported.
+Complete verification code 28 means Description differs from the exact
+two-value system-store schema (KeyName REG_SZ including its terminator,
+System DWORD 1), including any extra value/subkey.
 Both ESP loaders and the selected source require valid primary embedded
 signatures and byte-for-byte identity. Host catalogs are not consulted.
 The bounded PE certificate-table/SignedCms reader records primary issuer and
@@ -513,14 +522,14 @@ before and after ESP/store preparation. Compare entry counts and identifier sets
 record only the unchanged boolean/counts, never the raw firmware enumeration.
 Require no firmware-entry change. Install-media lab runs reached base layout,
 apply, ESP files, scratch store and child staging, with unchanged firmware
-entries. The guest exited before Windows started: BCDEdit had encoded nested
-host VHD devices and the former GUID-substring check accepted them.
-The next live gate must prove plain GPT device resolution, effective firmware
-trust, Windows setup/no-NIC boot, guest ownership/ACLs and Secure Boot/TPM.
-The default now selects the image's embedded-signed 2023 EX boot manager,
-falling back to embedded-signed 2011 only when EX is absent. Builds 7–9 never
-reached OS boot; their firmware path does not distinguish the old device
-encoding issue from trust of the 2011 loader. Build 10 has not run.
+entries.
+The default selects the image's embedded-signed 2023 EX boot manager,
+falling back to embedded-signed 2011 only when EX is absent. Build 10 reached
+OS boot/ExitBootServices 1.4 seconds after start, powered on GPU-PV and started
+specialize, proving the 2023/plain-GPT boot path. Specialize then rejected the
+unmarked non-system BCD store before RunSynchronous. The next live build must
+prove the system-store marker lets specialize proceed; remaining setup,
+guest-state/security diagnostics and publication gates still apply.
 Interrupted-apply cleanup, including
 retry from another session and after a host reboot, remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume

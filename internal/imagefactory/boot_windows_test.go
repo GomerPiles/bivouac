@@ -259,7 +259,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 }
 
 func TestBCDWriteFailureCleanup(t *testing.T) {
-	for code := 1; code <= 10; code++ {
+	for code := 1; code <= 13; code++ {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["write"] = code
@@ -299,7 +299,7 @@ func TestBootHasNoTemporaryLetterPlan(t *testing.T) {
 }
 
 func TestBCDVerificationFailureCleanup(t *testing.T) {
-	for code := 1; code <= 27; code++ {
+	for code := 1; code <= 28; code++ {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["verify"] = code
