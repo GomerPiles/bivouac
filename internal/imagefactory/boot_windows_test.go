@@ -20,7 +20,7 @@ func bootFixtureSources() []string {
 		`Windows\Boot\EFI\en-US\bootmgfw.efi.mui`,
 		`Windows\Boot\Fonts\wgl4_boot.ttf`, `Windows\Boot\Resources\bootres.dll`,
 		`Windows\Boot\Resources\en-US\bootres.dll.mui`,
-		`Windows\System32\config\BCD-Template`, `Windows\System32\winload.efi`,
+		`Windows\System32\winload.efi`,
 		`Windows\Boot\EFI_EX\bootmgfw.efi`,
 	}
 }
@@ -58,20 +58,20 @@ func TestBootCopySet(t *testing.T) {
 		t.Fatal(e)
 	}
 	want := map[string]string{
-		`EFI\Boot\bootx64.efi`:   `Windows\Boot\EFI\bootmgfw.efi`,
-		`EFI\Microsoft\Boot\BCD`: `Windows\System32\config\BCD-Template`,
+		`EFI\Boot\bootx64.efi`:   `image:Windows\Boot\EFI\bootmgfw.efi`,
+		`EFI\Microsoft\Boot\BCD`: "scratch-store",
 	}
 	for _, name := range bootFixtureSources() {
 		if strings.HasPrefix(name, `Windows\Boot\EFI\`) {
-			want[`EFI\Microsoft\Boot\`+strings.TrimPrefix(name, `Windows\Boot\EFI\`)] = name
+			want[`EFI\Microsoft\Boot\`+strings.TrimPrefix(name, `Windows\Boot\EFI\`)] = "image:" + name
 		}
 		for _, tree := range []string{"Fonts", "Resources"} {
 			if strings.HasPrefix(name, `Windows\Boot\`+tree+`\`) {
-				want[`EFI\Microsoft\Boot\`+strings.TrimPrefix(name, `Windows\Boot\`)] = name
+				want[`EFI\Microsoft\Boot\`+strings.TrimPrefix(name, `Windows\Boot\`)] = "image:" + name
 			}
 		}
 	}
-	want[`EFI\Microsoft\Boot\boot.stl`] = `Windows\Boot\EFI\boot.pnd.stl`
+	want[`EFI\Microsoft\Boot\boot.stl`] = `image:Windows\Boot\EFI\boot.pnd.stl`
 	files := 0
 	e := filepath.WalkDir(filepath.Join(f.workspace, "base-esp"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -83,7 +83,7 @@ func TestBootCopySet(t *testing.T) {
 		files++
 		relative, _ := filepath.Rel(filepath.Join(f.workspace, "base-esp"), path)
 		b, err := os.ReadFile(path)
-		if err != nil || want[relative] == "" || string(b) != "image:"+want[relative] {
+		if err != nil || want[relative] == "" || string(b) != want[relative] {
 			t.Fatal("wrong boot copy", relative)
 		}
 		return nil
@@ -144,35 +144,33 @@ func TestBootCopyRefusals(t *testing.T) {
 func expectedBCDCommands(f *storageFixture) [][]string {
 	loader := f.data("boot")["loader_guid"]
 	commands := [][]string{
+		{"/create", "{bootmgr}", "/d", "Windows Boot Manager"},
 		{"/create", loader, "/d", "Windows", "/application", "osloader"},
 		{"/set", "{bootmgr}", "device", "partition=Z:"},
 		{"/set", "{bootmgr}", "path", `\EFI\Microsoft\Boot\bootmgfw.efi`},
 		{"/set", "{bootmgr}", "locale", "en-US"},
-		{"/set", "{bootmgr}", "timeout", "0"},
-		{"/set", "{bootmgr}", "displayorder", loader},
-		{"/set", "{bootmgr}", "default", loader},
+		{"/timeout", "0"},
+		{"/displayorder", loader},
+		{"/default", loader},
 		{"/set", loader, "device", "partition=Y:"},
 		{"/set", loader, "osdevice", "partition=Y:"},
 		{"/set", loader, "path", `\Windows\system32\winload.efi`},
 		{"/set", loader, "systemroot", `\Windows`},
 		{"/set", loader, "locale", "en-US"},
-		{"/set", loader, "inherit", "{bootloadersettings}"},
 		{"/set", loader, "nx", "OptIn"},
 		{"/set", loader, "bootmenupolicy", "Standard"},
 		{"/set", loader, "recoveryenabled", "No"},
-		{"/delete", "{9f25ee7a-e7b7-11db-94b5-f7e662935912}"},
-		{"/delete", "{77777777-7777-4777-8777-777777777777}"},
-		{"/delete", "{88888888-8888-4888-8888-888888888888}"},
-		{"/delete", "{99999999-9999-4999-8999-999999999999}"},
+		{"/set", loader, "isolatedcontext", "Yes"},
+		{"/set", loader, "allowedinmemorysettings", "0x15000075"},
 	}
 	for i := range commands {
 		commands[i] = append([]string{"/store", filepath.Join(f.workspace, `base-esp\EFI\Microsoft\Boot\BCD`)}, commands[i]...)
 	}
-	return commands
+	return append([][]string{{"/createstore", filepath.Join(f.workspace, `base-esp\EFI\Microsoft\Boot\BCD`)}}, commands...)
 }
 
 func TestBCDCommandsAndFailures(t *testing.T) {
-	for fail := 0; fail <= 20; fail++ {
+	for fail := 0; fail <= 19; fail++ {
 		t.Run(strconv.Itoa(fail), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["bcd_fail"] = fail
@@ -192,7 +190,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 			if json.Unmarshal(raw, &calls) != nil {
 				t.Fatal("invalid tool calls")
 			}
-			count := 20
+			count := 19
 			if fail != 0 {
 				count = fail
 			}
@@ -200,7 +198,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 				t.Fatal("continued after failed BCD command")
 			}
 			for i, call := range calls {
-				if !slices.Equal(call, expectedBCDCommands(f)[i]) || call[0] != "/store" || slices.Contains(call, "{fwbootmgr}") {
+				if !slices.Equal(call, expectedBCDCommands(f)[i]) || (i != 0 && call[0] != "/store") || slices.Contains(call, "{fwbootmgr}") || slices.Contains(call, "inherit") {
 					t.Fatal("unsafe or wrong BCD argument array", i)
 				}
 			}
@@ -213,7 +211,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 }
 
 func TestBCDVerificationFailureCleanup(t *testing.T) {
-	for code := 1; code <= 12; code++ {
+	for code := 1; code <= 27; code++ {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["verify"] = code

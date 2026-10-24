@@ -1132,13 +1132,21 @@ ACL and deny-write handles, not hashed per job.
   never come from the host. BCDBoot is not used: on the tested Windows host it
   copied files but collided with the host's BCD00000000 hive when creating
   the target store.
-  A copy of the image's BCD-Template preserves inheritance objects. Every
-  BCDEdit command has an explicit `/store` naming that copy on the ESP.
-  A new loader GUID is recorded before boot preparation; template OS loaders
-  are removed by GUID using offreg object types, leaving exactly one loader.
-  The loader uses the image's default locale, standard boot menu, nx OptIn,
-  bootloadersettings inheritance and recovery disabled. The boot manager
-  selects it by default/displayorder with timeout zero.
+  BCDEdit `/createstore` explicitly names a new owned ESP BCD file; every
+  subsequent command uses `/store` naming that file. BCD-Template is a merge
+  input, not a finished store, and is neither required nor copied.
+  Only bootmgr and one Windows loader are created. The loader GUID is recorded
+  before boot preparation. All required settings are direct: image default
+  locale, standard boot menu, nx OptIn, isolatedcontext Yes,
+  allowedinmemorysettings 0x15000075 and recovery disabled. No inheritance
+  objects or inherit element are created; no partially reconstructed template
+  settings remain. Bootmgr selects the loader by default/displayorder with
+  timeout zero. The minimal objects and direct settings follow Microsoft's
+  [BCDEdit commands](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdedit-command-line-options)
+  and [UEFI settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi).
+  No resume object is created: disposable CI guests always cold boot and never
+  hibernate. PR 3 must explicitly disable hibernation and fast startup in the
+  guest. No memdiag object is created.
   Two journalled temporary letters provide documented `partition=X:`
   references for ESP and Windows; both are removed on success and failure.
   No firmware objects or system-store commands are used.
@@ -1150,10 +1158,12 @@ ACL and deny-write handles, not hashed per job.
   MiB offsets and sizes, GUID matches). The fallback EFI loader, Microsoft loader and BCD store
   must exist. Both ESP loaders and the applied source boot manager must have
   valid Authenticode signatures from the expected 2011 issuer.
-  Read-only offreg verification checks the default loader, paths, systemroot,
-  recovery flag, unique OS loader and both disk/partition GUID byte identities
-  in all three device elements. Failures expose numeric codes, never hive
-  data. The manifest records the method, loader GUID, verified flag, fixed
+  Read-only offreg verification requires exactly those two objects and checks
+  their types, descriptions, every set element, single-loader displayorder,
+  zero timeout, locales and both disk/partition GUID byte identities in all
+  three device elements. Class-4 template elements and every unknown element
+  refuse, including inherit/resume references. Failures expose numeric codes,
+  never hive data. The manifest records the scratch-store method, loader GUID, verified flag, fixed
   issuer names and BCDEdit/DISM versions.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on

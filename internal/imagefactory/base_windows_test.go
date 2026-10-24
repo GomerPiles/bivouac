@@ -90,7 +90,7 @@ func TestBaseFailureIntents(t *testing.T) {
 			if failure == "" && !slices.Equal(calls, []string{"media", "create", "layout", "apply", "boot", "detach"}) {
 				t.Fatal(calls)
 			}
-			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "image_template_bcdedit_uefi_2011" || !r.Manifest.Media.BCDVerified) {
+			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "scratch_bcdedit_uefi_2011" || !r.Manifest.Media.BCDVerified) {
 				t.Fatal("missing provenance")
 			}
 			if failure != "" && failure != "save" {
