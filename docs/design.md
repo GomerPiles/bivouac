@@ -1120,6 +1120,10 @@ ACL and deny-write handles, not hashed per job.
   Embedded PKCS#7 parsing identifies the primary signer and counts signatures;
   WinVerifyTrust validates that primary file signature with no UI, revocation
   or network retrieval. Catalog answers are never used.
+  The owned ESP's BCD hive is marked as the guest's system store:
+  Description\KeyName is REG_SZ BCD00000000 and Description\System is DWORD 1,
+  with no FirmwareModified value. Windows specialize's BCD provider rejects
+  the non-system store initially produced by /createstore.
 - **Disk layout:** the factory creates a dynamic VHDX (default 127 GiB,
   bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
   cross-checks the mounted image's physical device, Storage disk path and
@@ -1162,7 +1166,9 @@ ACL and deny-write handles, not hashed per job.
   references encode a nested host VHD path that cannot resolve in the guest.
   Offreg writes the three device elements as exact 88-byte plain GPT
   partition devices using the recorded partition/disk GUIDs in Windows byte
-  order. It requires absent element keys, saves a new sibling hive, closes
+  order. That same offreg pass validates the Description whitelist, sets
+  System=1 and deletes FirmwareModified. It requires absent element keys,
+  saves a new sibling hive, closes
   the source and atomically replaces it on the owned ESP. No temporary
   drive letters, firmware objects or system-store commands are used.
   The final table must be exactly three partitions in offset order with the
@@ -1180,6 +1186,9 @@ ACL and deny-write handles, not hashed per job.
   their types, descriptions, every set element, single-loader displayorder,
   zero timeout, locales and byte-for-byte equality of all three complete plain
   GPT device elements, including their type, length and reserved zero bytes.
+  Description must contain exactly KeyName (the NUL-terminated UTF-16LE
+  BCD00000000) and System (four-byte DWORD 1), with exact types and bytes;
+  unexpected Description values or subkeys refuse.
   Nested VHD devices refuse even if they contain the recorded GUIDs.
   Class-4 template elements and every unknown element
   refuse, including inherit/resume references. Failures expose numeric codes,

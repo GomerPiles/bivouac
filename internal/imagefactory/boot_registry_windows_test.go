@@ -51,6 +51,18 @@ public static class BootHiveFixture {
  public static void Seed(string path,int fault){
   IntPtr h;Check(ORCreateHive(out h));
   try{
+   if(fault!=68){
+    if(fault!=50){
+     string name=fault==51?"OTHER":fault==67?"bcd00000000":"BCD00000000";
+     byte[] bytes=Encoding.Unicode.GetBytes(name+(fault==65?"\0\0":"\0"));
+     Value(h,"Description","KeyName",fault==52?(uint)2:(uint)1,bytes);
+    }
+    if(fault!=53 && fault!=60)Value(h,"Description","System",fault==55?(uint)3:(uint)4,fault==56?new byte[8]:BitConverter.GetBytes(fault==54?(uint)0:fault==64?(uint)2:(uint)1));
+    if(fault==57 || fault==60 || (fault>=61 && fault<=63))Value(h,"Description","FirmwareModified",fault==62?(uint)3:(uint)4,fault==63?new byte[8]:BitConverter.GetBytes(fault==61?(uint)0:(uint)1));
+    if(fault==58)Value(h,"Description","Unexpected",4,BitConverter.GetBytes((uint)1));
+    if(fault==59)Value(h,"Description\\Unexpected","Value",4,BitConverter.GetBytes((uint)1));
+   }
+   bool noDevices=(fault>=44 && fault<=47) || fault==53 || fault==57 || fault==60;
    if(fault!=2)Object(h,Manager,fault==25?(uint)0x10200003:(uint)0x10100002);
    if(fault!=5)Object(h,Loader,fault==26?(uint)0x10200004:(uint)0x10200003);
    if(fault==13)Object(h,"{77777777-7777-4777-8777-777777777777}",0x10200004);
@@ -59,7 +71,7 @@ public static class BootHiveFixture {
    if(fault!=2){
     Text(h,Manager,"23000003",fault==3?ESP:Loader);
     Text(h,Manager,"12000002",fault==4?@"\other.efi":@"\EFI\Microsoft\Boot\bootmgfw.efi");
-    if(fault<44 || fault>47)Element(h,Manager,"11000001",3,Device(fault==8?Windows:ESP));
+    if(!noDevices)Element(h,Manager,"11000001",3,Device(fault==8?Windows:ESP));
     Text(h,Manager,"12000004",fault==23?"Other":"Windows Boot Manager");
     Text(h,Manager,"12000005",fault==17?"fr-FR":"en-US");
     List(h,Manager,"24000001",fault==15?Loader+"\0"+ESP:Loader);
@@ -72,8 +84,8 @@ public static class BootHiveFixture {
    if(fault!=5){
     Text(h,Loader,"12000002",fault==6?@"\wrong.efi":@"\Windows\system32\winload.efi");
     Text(h,Loader,"22000002",fault==7?@"\Other":@"\Windows");
-    if(fault<44 || fault>47)Element(h,Loader,"11000001",3,Device(fault==9?ESP:Windows));
-    if(fault<44 || fault>47)Element(h,Loader,"21000001",3,Device(fault==10?ESP:Windows));
+    if(!noDevices)Element(h,Loader,"11000001",3,Device(fault==9?ESP:Windows));
+    if(!noDevices)Element(h,Loader,"21000001",3,Device(fault==10?ESP:Windows));
     Element(h,Loader,"16000009",3,new byte[]{fault==11?(byte)1:(byte)0});
     Text(h,Loader,"12000004",fault==24?"Other":"Windows");
     Text(h,Loader,"12000005",fault==18?"fr-FR":"en-US");
@@ -93,6 +105,11 @@ public static class BootHiveFixture {
    if(fault>=100 && fault<364){
     int i=(fault-100)/88,offset=(fault-100)%88;byte[] changed=Device(i==0?ESP:Windows);changed[offset]^=1;
     Element(h,i==0?Manager:Loader,i==2?"21000001":"11000001",3,changed);
+   }
+   if(fault>=2000 && fault<2028){
+    int index=fault-2000;byte[] bytes=index<24?Encoding.Unicode.GetBytes("BCD00000000\0"):new byte[]{1,0,0,0};
+    bytes[index<24?index:index-24]^=1;
+    Value(h,"Description",index<24?"KeyName":"System",index<24?(uint)1:(uint)4,bytes);
    }
    Check(ORSaveHive(h,path,6,1));
   }finally{ORCloseHive(h);}
@@ -121,6 +138,23 @@ $nested=Join-Path $data.root 'nested';[BootHiveFixture]::Seed($nested,48)
 if([FactoryBoot]::Verify($nested,'{66666666-6666-4666-8666-666666666666}','{00112233-4455-6677-8899-aabbccddeeff}','{01234567-89ab-cdef-8012-3456789abcde}','{fedcba98-7654-3210-8123-456789abcdef}','en-US') -ne 8){throw 'nested VHD-like device accepted'}
 # Actual offline mutation/save/atomic replacement on ordinary fixture files.
 $loader='{66666666-6666-4666-8666-666666666666}';$disk='{00112233-4455-6677-8899-aabbccddeeff}';$esp='{01234567-89ab-cdef-8012-3456789abcde}';$windows='{fedcba98-7654-3210-8123-456789abcdef}'
+foreach($fault in (@(50..65)+@(67..68)+@(2000..2027))){
+ $path=Join-Path $data.root ('description'+$fault);[BootHiveFixture]::Seed($path,$fault)
+ $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+ $expected=28;$result=[FactoryBoot]::Verify($path,$loader,$disk,$esp,$windows,'en-US')
+ if($result -ne $expected){throw 'invalid Description verification accepted'}
+ if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'verification changed Description'}
+}
+foreach($fault in @(44,53,57,60,50,51,52,54,55,56,58,59,61,62,63,64,65,67,68)){
+ $path=Join-Path $data.root ('description-write'+$fault);[BootHiveFixture]::Seed($path,$fault)
+ $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+ $expected=11;if($fault -in @(44,53,57,60)){$expected=0}
+ $result=[FactoryBoot]::WriteDevices($path,$loader,$disk,$esp,$windows)
+ if($result -ne $expected){throw ('description write case={0} expected={1} result={2}' -f $fault,$expected,$result)}
+ if($expected -eq 0){
+  if([FactoryBoot]::Verify($path,$loader,$disk,$esp,$windows,'en-US') -ne 0){throw 'system marking not verified'}
+ }elseif((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before -or (Test-Path -LiteralPath ($path+'.plain-gpt'))){throw 'Description refusal changed store'}
+}
 foreach($mode in @('success','missing','sibling file','sibling directory','missing parent','manager exists','device exists','osdevice exists','identity')){
  $path=Join-Path $data.root $mode
  $seed=44;$expected=0;$diskArgument=$disk
@@ -146,7 +180,7 @@ foreach($mode in @('success','missing','sibling file','sibling directory','missi
  if($before -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'refusal changed source store'}
  if($mode -eq 'sibling file' -and [IO.File]::ReadAllText(($path+'.plain-gpt')) -ne 'preserve'){throw 'sibling overwritten'}
 }
-foreach($code in @(5,6,7,8,10)){
+foreach($code in @(5,6,7,8,10,12,13)){
  $name='FactoryBootFault'+$code
  $binding=$data.bindings.Replace('public static class FactoryBoot {',('public static class '+$name+' {'))
  $helpers=' static uint FailValue(){return 5;} static bool FailMove(){return false;} static uint FailCreate(out IntPtr key,out uint disposition){key=IntPtr.Zero;disposition=0;return 5;} static uint ThrowValue(){throw new InvalidOperationException();} '
@@ -157,6 +191,8 @@ foreach($code in @(5,6,7,8,10)){
   7 {$binding=$binding.Replace('ORSaveHive(h,next,6,1)','FailValue()')}
   8 {$binding=$binding.Replace('MoveFileEx(next,path,9)','FailMove()')}
   10 {$binding=$binding.Replace('ORSetValue(key,"Element",3,value,(uint)value.Length)','ThrowValue()')}
+  12 {$binding=$binding.Replace('ORSetValue(description,"System",4,new byte[]{1,0,0,0},4)','FailValue()')}
+  13 {$binding=$binding.Replace('ORDeleteValue(description,"FirmwareModified")','FailValue()')}
  }
  $null=Add-Type -TypeDefinition $binding
  $path=Join-Path $data.root ('write-failure'+$code);[BootHiveFixture]::Seed($path,44)
@@ -167,7 +203,7 @@ foreach($code in @(5,6,7,8,10)){
  if($code -eq 8 -and [FactoryBoot]::Verify(($path+'.plain-gpt'),$loader,$disk,$esp,$windows,'en-US') -ne 0){throw 'failed replacement lost saved store'}
 }
 [Console]::Out.Write('verified')
-}catch{[Console]::Out.Write(('fixture_line={0} expected={1} result={2} case={3} compiler={4}' -f $_.InvocationInfo.ScriptLineNumber,[int]$expected,[int]$result,[int]$code,([regex]::Match($_.Exception.Message,'CS(\d+)').Groups[1].Value)))}
+}catch{[Console]::Out.Write(('fixture_line={0} expected={1} result={2} case={3} fault={4} compiler={5}' -f $_.InvocationInfo.ScriptLineNumber,[int]$expected,[int]$result,[int]$code,[int]$fault,([regex]::Match($_.Exception.Message,'CS(\d+)').Groups[1].Value)))}
 `
 	if got := runTestPS(t, script, input); got != "verified" {
 		t.Fatal("offline hive verification", got)

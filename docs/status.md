@@ -413,20 +413,19 @@ Open:
   restart with HCS guests.
 - Install-media lab runs passed owned VHDX layout, DISM WIM apply through
   the ISO volume-GUID path, image-sourced ESP files, scratch BCDEdit store,
-  child staging and unchanged host firmware entries. Builds 7–9 reached no
-  operating-system boot/ExitBootServices event; nested host VHD devices and
-  firmware trust of the old 2011 loader remain possible causes. Catalog
-  signature results did not prove the embedded EFI signer.
-  Exact plain GPT devices, embedded 2023 selection with 2011 fallback, and
-  offline encryption prevention are unit-tested. Build 10 has not run;
-  their bootability,
-  guest ownership/ACLs, firmware trust, no-NIC setup, guest Secure Boot/TPM,
+  child staging and unchanged host firmware entries. Build 10 reached
+  operating-system boot/ExitBootServices in 1.4 seconds, powered on GPU-PV
+  and entered specialize: the embedded 2023/plain-GPT boot path works.
+  Specialize refused the non-system BCD store before RunSynchronous.
+  System-store marking/strict verification and offline encryption prevention
+  are unit-tested; completing specialize, guest ownership/ACLs, no-NIC setup,
+  guest Secure Boot/TPM,
   a failed build's cleanup and `image cleanup`, and the lab batch on a
   factory-built image remain open. Admission does not compare the host GPU
   driver with the image's.
 - The warm spare.
-- Agent images built by this branch contain no legacy guest components and have
-  not been built or validated live. Offline ownership/ACLs, specialize service/MSI
+- No install-media agent image has completed setup and publication live.
+  Offline ownership/ACLs, specialize service/MSI
   removal, logon task/session readiness, error-43 recovery, sanitation and the
   lab's granted/ungranted agent checks remain live gates. The provider in this branch does not run images built
   before it; rollback uses the previous manager/service/image trio.

@@ -106,6 +106,8 @@ public static class FactoryBoot {
  [DllImport("offreg.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORCloseKey(IntPtr key);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORGetValue(IntPtr hive,string key,string value,out uint type,byte[] data,ref uint size);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint OREnumKey(IntPtr key,uint index,StringBuilder name,ref uint length,IntPtr cls,IntPtr clsLength,IntPtr time);
+ [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint OREnumValue(IntPtr key,uint index,StringBuilder name,ref uint length,out uint type,byte[] data,ref uint size);
+ [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORDeleteValue(IntPtr key,string name);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORCreateKey(IntPtr key,string sub,string cls,uint options,IntPtr security,out IntPtr created,out uint disposition);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORSetValue(IntPtr key,string name,uint type,byte[] value,uint size);
  [DllImport("offreg.dll",CharSet=CharSet.Unicode),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern uint ORSaveHive(IntPtr hive,string path,uint major,uint minor);
@@ -128,10 +130,30 @@ public static class FactoryBoot {
   part.ToByteArray().CopyTo(b,0x20);disk.ToByteArray().CopyTo(b,0x38);return b;
  }
  static bool Device(byte[] b,Guid disk,Guid part) {return Same(b,PartitionDevice(disk,part));}
+ static bool Description(IntPtr h,bool final) {
+  IntPtr key=IntPtr.Zero;
+  try{
+   if(Names(h,"Description").Length!=0)return false;
+   IntPtr opened;if(OROpenKey(h,"Description",out opened)!=0)return false;key=opened;
+   bool hasName=false,hasSystem=false;int count=0;
+   for(uint i=0;i<4;i++){
+    StringBuilder name=new StringBuilder(64);uint length=64,type,size=32;byte[] value=new byte[32];
+    uint error=OREnumValue(key,i,name,ref length,out type,value,ref size);
+    if(error==259)return hasName && (!final || (hasSystem && count==2));
+    if(error!=0 || size>32)return false;
+    count++;Array.Resize(ref value,(int)size);
+    if(name.ToString()=="KeyName"){if(type!=1 || !Same(value,Encoding.Unicode.GetBytes("BCD00000000\0")))return false;hasName=true;}
+    else if(name.ToString()=="System"){if(type!=4 || !Same(value,new byte[]{1,0,0,0}))return false;hasSystem=true;}
+    else if(!final && name.ToString()=="FirmwareModified"){if(type!=4 || !Same(value,new byte[]{1,0,0,0}))return false;}
+    else return false;
+   }return false;
+  }catch{return false;}finally{if(key!=IntPtr.Zero)ORCloseKey(key);}
+ }
  // Mutations affect the in-memory offline hive only until the complete new
  // hive is saved to a fresh sibling and atomically replaces the owned store.
  // Codes: 1 open, 2 occupied sibling, 3 missing parent, 4 existing element,
- // 5 create, 6 value, 7 save, 8 replace, 9 identity, 10 unexpected failure.
+ // 5 create, 6 value, 7 save, 8 replace, 9 identity, 10 unexpected failure,
+ // 11 Description schema, 12 System value, 13 FirmwareModified deletion.
  public static uint WriteDevices(string path,string loader,string disk,string esp,string windows) {
   string next=path+".plain-gpt";IntPtr h=IntPtr.Zero;
   try{
@@ -139,6 +161,7 @@ public static class FactoryBoot {
    if(!Guid.TryParse(disk,out d) || !Guid.TryParse(esp,out e) || !Guid.TryParse(windows,out w) || !Guid.TryParse(loader,out l) || d==Guid.Empty || e==Guid.Empty || w==Guid.Empty || l==Guid.Empty || e==w || l==new Guid("{9dea862c-5cdd-4e70-acc1-f32b344d4795}"))return 9;
    if(System.IO.File.Exists(next) || System.IO.Directory.Exists(next))return 2;
    IntPtr opened;if(OROpenHive(path,out opened)!=0)return 1;h=opened;
+   if(!Description(h,false))return 11;
    string[] ids={"{9dea862c-5cdd-4e70-acc1-f32b344d4795}",loader,loader};
    string[] names={"11000001","11000001","21000001"};
    // Preflight every absence before making any in-memory change.
@@ -148,6 +171,13 @@ public static class FactoryBoot {
      if(error==0){ORCloseKey(existing);return 4;}if(error!=2)return 4;
     }finally{ORCloseKey(parent);}
    }
+   // Mark only this offline ESP hive as the guest's system store; specialize's
+   // BCD provider rejects the non-system store produced by /createstore.
+   IntPtr description;if(OROpenKey(h,"Description",out description)!=0)return 11;
+   try{
+    if(ORSetValue(description,"System",4,new byte[]{1,0,0,0},4)!=0)return 12;
+    uint deleted=ORDeleteValue(description,"FirmwareModified");if(deleted!=0 && deleted!=2)return 13;
+   }finally{ORCloseKey(description);}
    for(int i=0;i<3;i++){
     IntPtr parent;if(OROpenKey(h,"Objects\\"+ids[i]+"\\Elements",out parent)!=0)return 3;
     try{IntPtr key;uint disposition;
@@ -194,6 +224,7 @@ public static class FactoryBoot {
  public static uint Verify(string path,string loader,string disk,string esp,string windows,string locale) {
   IntPtr h;if(OROpenHive(path,out h)!=0)return 1;
   try{
+   if(!Description(h,true))return 28;
    string manager="{9dea862c-5cdd-4e70-acc1-f32b344d4795}";
    if(!Exists(h,manager))return 2;
    if(!Exists(h,loader))return 5;
