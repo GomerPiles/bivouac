@@ -24,26 +24,27 @@ import (
 )
 
 type record struct {
-	StorageIntents   map[string]bool   `json:"storage_intents,omitempty"`
-	TemporaryLetter  string            `json:"temporary_letter,omitempty"`
-	RetainedLetter   string            `json:"retained_letter,omitempty"`
-	BuildID          string            `json:"build_id"`
-	Workspace        string            `json:"workspace"`
-	Name             string            `json:"name"`
-	Owner            string            `json:"owner"`
-	RuntimeID        string            `json:"runtime_id,omitempty"`
-	Phase            string            `json:"phase"`
-	Inspection       *Inspection       `json:"inspection,omitempty"`
-	Retained         bool              `json:"retained"`
-	Published        bool              `json:"published"`
-	Manifest         Manifest          `json:"manifest"`
-	HostSteps        map[string]int    `json:"host_steps,omitempty"`
-	GuestSetupStep   uint32            `json:"guest_setup_step,omitempty"`
-	GuestSetupFailed bool              `json:"guest_setup_failed,omitempty"`
-	GuestSetupVideo  *SetupVideoStatus `json:"guest_setup_video,omitempty"`
-	NativeAttempted  bool              `json:"native_attempted"`
-	GuestCompleted   bool              `json:"guest_completed"`
-	SpaceChecks      []SpaceCheck      `json:"space_checks,omitempty"`
+	StorageIntents         map[string]bool   `json:"storage_intents,omitempty"`
+	TemporaryLetter        string            `json:"temporary_letter,omitempty"`
+	WindowsTemporaryLetter string            `json:"windows_temporary_letter,omitempty"`
+	RetainedLetters        []string          `json:"retained_letters,omitempty"`
+	BuildID                string            `json:"build_id"`
+	Workspace              string            `json:"workspace"`
+	Name                   string            `json:"name"`
+	Owner                  string            `json:"owner"`
+	RuntimeID              string            `json:"runtime_id,omitempty"`
+	Phase                  string            `json:"phase"`
+	Inspection             *Inspection       `json:"inspection,omitempty"`
+	Retained               bool              `json:"retained"`
+	Published              bool              `json:"published"`
+	Manifest               Manifest          `json:"manifest"`
+	HostSteps              map[string]int    `json:"host_steps,omitempty"`
+	GuestSetupStep         uint32            `json:"guest_setup_step,omitempty"`
+	GuestSetupFailed       bool              `json:"guest_setup_failed,omitempty"`
+	GuestSetupVideo        *SetupVideoStatus `json:"guest_setup_video,omitempty"`
+	NativeAttempted        bool              `json:"native_attempted"`
+	GuestCompleted         bool              `json:"guest_completed"`
+	SpaceChecks            []SpaceCheck      `json:"space_checks,omitempty"`
 }
 
 func (r *record) setupFailure(facts *Inspection) error {
@@ -66,7 +67,7 @@ func (r *record) setupFailure(facts *Inspection) error {
 func (r *record) disk() string { return filepath.Join(r.Workspace, "disk.vhdx") }
 func (r *record) scriptData() map[string]string {
 	intents, _ := json.Marshal(r.StorageIntents)
-	return map[string]string{"root": filepath.Dir(r.Workspace), "instance_id": r.BuildID, "disk": r.disk(), "windows_guid": r.Manifest.Media.Layout.WindowsGUID, "esp_guid": r.Manifest.Media.Layout.ESPGUID, "temporary_letter": r.TemporaryLetter, "storage_intents": string(intents)}
+	return map[string]string{"root": filepath.Dir(r.Workspace), "instance_id": r.BuildID, "disk": r.disk(), "windows_guid": r.Manifest.Media.Layout.WindowsGUID, "esp_guid": r.Manifest.Media.Layout.ESPGUID, "temporary_letter": r.TemporaryLetter, "windows_temporary_letter": r.WindowsTemporaryLetter, "storage_intents": string(intents)}
 }
 func (r *record) save() error {
 	return replaceJSON(filepath.Join(filepath.Dir(r.Workspace), r.BuildID+".json"), r)

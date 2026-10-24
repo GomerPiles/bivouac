@@ -92,7 +92,7 @@ func TestReferenceOfflineState(t *testing.T) {
 		}
 	}
 	temp := t.TempDir()
-	for _, name := range []string{"SYSTEM", "SOFTWARE", "bootmgfw.efi"} {
+	for _, name := range []string{"SYSTEM", "SOFTWARE", "BCD-Template", "bootmgfw.efi"} {
 		relative := `Windows\System32\config\` + name
 		if name == "bootmgfw.efi" {
 			relative = `Windows\Boot\EFI\bootmgfw.efi`
@@ -119,13 +119,15 @@ func TestReferenceOfflineState(t *testing.T) {
 	}
 	start := strings.Index(inspectDisk, "@\"\n") + 3
 	end := strings.Index(inspectDisk[start:], "\n\"@") + start
-	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=Add-Type -TypeDefinition @"` + "\n" + inspectDisk[start:end] + "\n\"@\n" + `
+	script := bootHelpers + "\n" + `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=Add-Type -TypeDefinition @"` + "\n" + inspectDisk[start:end] + "\n\"@\n" + `
  $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $data.root 'bootmgfw.efi')
  $f=@{boot_signature_valid=($signature.Status -eq 'Valid');boot_signer_2011=($signature.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*');boot_signer_2023=($signature.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*');runner_state='absent';answer_directory_empty=$true};$h=[IntPtr]::Zero
  $f.system_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SYSTEM'),[ref]$h)
  if($f.system_hive_error -eq 0){try{$f.system_setup_in_progress=[FactoryInspection]::Number($h,'Setup','SystemSetupInProgress');$f.oobe_in_progress=[FactoryInspection]::Number($h,'Setup','OOBEInProgress');$f.setup_phase=[FactoryInspection]::Number($h,'Setup','SetupPhase');$f.unattend_pointer_kind=[FactoryInspection]::Pointer($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
  $f.software_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SOFTWARE'),[ref]$h)
  if($f.software_hive_error -eq 0){try{$f.image_state_kind=[FactoryInspection]::State($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
+ $loaders=@(Get-TemplateLoaders (Join-Path $data.root 'BCD-Template'))
+ $f.boot_template_valid=($loaders.Count -gt 0);$f.boot_template_loaders=$loaders.Count
  [Console]::Out.Write(($f|ConvertTo-Json -Compress))`
 	input, _ := json.Marshal(map[string]string{"root": temp})
 	output := runTestPS(t, script, input)
@@ -134,11 +136,12 @@ func TestReferenceOfflineState(t *testing.T) {
 		t.Fatal("invalid offline reference facts")
 	}
 	var boot struct {
-		Valid  bool `json:"boot_signature_valid"`
-		Legacy bool `json:"boot_signer_2011"`
-		Modern bool `json:"boot_signer_2023"`
+		Valid    bool `json:"boot_signature_valid"`
+		Legacy   bool `json:"boot_signer_2011"`
+		Modern   bool `json:"boot_signer_2023"`
+		Template bool `json:"boot_template_valid"`
 	}
-	if json.Unmarshal([]byte(output), &boot) != nil || !boot.Valid || !boot.Legacy || boot.Modern {
+	if json.Unmarshal([]byte(output), &boot) != nil || !boot.Valid || !boot.Legacy || boot.Modern || !boot.Template {
 		t.Fatal("reference boot signing requires design review")
 	}
 	t.Log(output)

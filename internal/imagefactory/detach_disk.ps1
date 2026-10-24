@@ -51,8 +51,12 @@ try{
        if($intents.staging_access){$paths+='setup-private\mount'}
       }
       foreach($name in $paths){if($access -ieq ((Join-Path $child $name)+'\')){$owned=$true}}
-      if($entry[0] -eq 'source.vhdx' -and $intents.temporary_letter -and $data.temporary_letter -cmatch '^[D-Z]$' -and $access -ieq ($data.temporary_letter+':\')){
-       if(!$data.esp_guid -or $part.Guid -ine $data.esp_guid -or $part.GptType -ine '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'){exit 1};$owned=$true
+      if($entry[0] -eq 'source.vhdx'){
+       foreach($mapping in @(@('temporary_letter',$data.temporary_letter,$data.esp_guid,'{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'),@('windows_temporary_letter',$data.windows_temporary_letter,$data.windows_guid,'{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'))){
+        if($intents.($mapping[0]) -and $mapping[1] -cmatch '^[D-Z]$' -and $access -ieq ($mapping[1]+':\')){
+         if(!$mapping[2] -or $part.Guid -ine $mapping[2] -or $part.GptType -ine $mapping[3]){exit 1};$owned=$true
+        }
+       }
       }
       if($owned){$null=Remove-PartitionAccessPath -DiskNumber $disks[0].Number -PartitionNumber $part.PartitionNumber -AccessPath $access}
      }
@@ -62,12 +66,13 @@ try{
   }
   if((Get-DiskImage -ImagePath $path).Attached){exit 1}
  }
- $retained=''
- if($intents.temporary_letter){
-  if($data.temporary_letter -cnotmatch '^[D-Z]$'){exit 1}
-  try{if(Test-RecordedLetterMapping $data.temporary_letter $data.esp_guid){$retained=$data.temporary_letter}}catch{$retained=$data.temporary_letter}
+ $retained=@()
+ foreach($mapping in @(@('temporary_letter',$data.temporary_letter,$data.esp_guid),@('windows_temporary_letter',$data.windows_temporary_letter,$data.windows_guid))){
+  if(!$intents.($mapping[0])){continue}
+  if($mapping[1] -cnotmatch '^[D-Z]$'){exit 1}
+  try{if(Test-RecordedLetterMapping $mapping[1] $mapping[2]){$retained+=$mapping[1]}}catch{$retained+=$mapping[1]}
  }
  [Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
- [Console]::Out.WriteLine((@{retained_letter=$retained}|ConvertTo-Json -Compress))
+ [Console]::Out.WriteLine((@{retained_letters=$retained}|ConvertTo-Json -Compress))
  exit 0
 }catch{exit 1}

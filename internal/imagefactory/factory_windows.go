@@ -420,14 +420,21 @@ func detachOwnedWith(ctx context.Context, r *record, run func(context.Context, s
 		return err
 	}
 	var result struct {
-		RetainedLetter string `json:"retained_letter"`
+		RetainedLetters []string `json:"retained_letters"`
 	}
-	if json.Unmarshal(b, &result) != nil || (result.RetainedLetter != "" && (result.RetainedLetter != r.TemporaryLetter || len(result.RetainedLetter) != 1 || result.RetainedLetter[0] < 'D' || result.RetainedLetter[0] > 'Z')) {
+	if json.Unmarshal(b, &result) != nil || result.RetainedLetters == nil || len(result.RetainedLetters) > 2 {
 		return errors.New("invalid storage cleanup result")
 	}
-	r.RetainedLetter = result.RetainedLetter
-	if r.RetainedLetter != "" {
-		return &RetainedLetterError{Letter: r.RetainedLetter}
+	seen := map[string]bool{}
+	for _, letter := range result.RetainedLetters {
+		if !validTemporaryLetter(letter) || seen[letter] || (letter != r.TemporaryLetter && letter != r.WindowsTemporaryLetter) {
+			return errors.New("invalid storage cleanup letter")
+		}
+		seen[letter] = true
+	}
+	r.RetainedLetters = result.RetainedLetters
+	if len(r.RetainedLetters) != 0 {
+		return &RetainedLettersError{Letters: r.RetainedLetters}
 	}
 	return nil
 }

@@ -146,7 +146,7 @@ func TestScriptConstantsMatchLF(t *testing.T) {
 	if err != nil || string(b) != offlineFiles || strings.ContainsRune(offlineFiles, '\r') {
 		t.Fatal("regenerate LF offline facts script")
 	}
-	for name, content := range map[string]string{"base_disk.ps1": baseDisk, "offline_payload.ps1": offlinePayload, "make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
+	for name, content := range map[string]string{"boot_helpers.ps1": bootHelpers, "base_disk.ps1": baseDisk, "offline_payload.ps1": offlinePayload, "make_iso.ps1": makeISO, "runner_extract.ps1": runnerExtract, "guest_setup.ps1": guestSetup, "guest_video.ps1": guestVideo, "video_facts.ps1": videoFacts, "stage_setup.ps1": stageSetup, "guest_specialize.ps1": guestSpecialize, "guest_validate.ps1": guestValidate, "image_sanitize.ps1": imageSanitize, "autologon_secret.ps1": autologonSecret, "inspect_disk.ps1": inspectDisk, "detach_disk.ps1": detachDisk, "runner_check.ps1": runnerCheck} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -177,7 +177,7 @@ func TestManifestPublicFields(t *testing.T) {
 		}
 	}
 	media := fields["media"].(map[string]any)
-	for _, required := range []string{"iso_sha256", "install_kind", "image", "host_dism_version", "host_bcdboot_version", "boot_issuers", "bcdboot_options", "winre", "layout"} {
+	for _, required := range []string{"iso_sha256", "install_kind", "image", "host_dism_version", "host_bcdedit_version", "boot_method", "loader_guid", "bcd_verified", "boot_issuers", "winre", "layout"} {
 		if _, ok := media[required]; !ok {
 			t.Fatal("missing media field", required)
 		}

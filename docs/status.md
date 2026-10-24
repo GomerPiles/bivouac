@@ -441,8 +441,9 @@ Open:
   - Host interface changes while a guest runs.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
-- Install-media factory paths not yet live: owned VHDX identity, partition/apply,
-  BCDBoot/firmware trust, no-NIC setup, guest Secure Boot/TPM, a failed build's
+- Install-media lab runs passed owned VHDX layout and DISM WIM apply through
+  the ISO volume-GUID path. ESP preparation now uses image boot files and an
+  explicit BCDEdit store; its boot/firmware trust, no-NIC setup, guest Secure Boot/TPM, a failed build's
   cleanup and `image cleanup`, and the lab batch on a factory-built
   image. Admission does not compare the host GPU driver with the image's.
 - The warm spare.

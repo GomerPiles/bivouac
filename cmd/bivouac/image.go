@@ -48,9 +48,9 @@ func imageCmd(ctx context.Context, args []string, out io.Writer) error {
 }
 
 func writeImageCleanupResult(out io.Writer, id string, err error) error {
-	var retained *imagefactory.RetainedLetterError
+	var retained *imagefactory.RetainedLettersError
 	if errors.As(err, &retained) {
-		return errors.Join(err, json.NewEncoder(out).Encode(map[string]string{"build_id": id, "retained_letter": retained.Letter}))
+		return errors.Join(err, json.NewEncoder(out).Encode(map[string]any{"build_id": id, "retained_letters": retained.Letters}))
 	}
 	return err
 }

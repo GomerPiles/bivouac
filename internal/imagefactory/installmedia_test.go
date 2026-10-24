@@ -176,13 +176,13 @@ func TestLayoutShapeNumbersOnly(t *testing.T) {
 }
 
 func TestBootShapeNumbersOnly(t *testing.T) {
-	if e := bootShape([]byte(`{"boot_failure":true,"bcdboot_exit":-1073741819}`)); e == nil || e.Error() != "bcdboot refused: exit=-1073741819" {
+	if e := bootShape([]byte(`{"boot_failure":true,"bcdedit_exit":-1073741819}`)); e == nil || e.Error() != "bcdedit refused: command=0 exit=-1073741819" {
 		t.Fatalf("unexpected exit shape: %v", e)
 	}
 	if e := bootShape([]byte(`{"boot_failure":true,"fallback_issuer":3,"microsoft_issuer":3,"source_issuer":3}`)); e == nil || e.Error() != "boot loaders refused: fallback_issuer=3 microsoft_issuer=3 source_issuer=3" {
 		t.Fatalf("unexpected issuer shape: %v", e)
 	}
-	for _, b := range [][]byte{nil, []byte(`{}`), []byte(`{"bcdboot_version":"1.2.3.4"}`)} {
+	for _, b := range [][]byte{nil, []byte(`{}`), []byte(`{"bcdedit_version":"1.2.3.4"}`)} {
 		if bootShape(b) != nil {
 			t.Fatal("shape reported without a boot failure frame")
 		}

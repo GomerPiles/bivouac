@@ -38,8 +38,10 @@ type MediaRecord struct {
 	Kind           string      `json:"install_kind"`
 	Image          MediaImage  `json:"image"`
 	DISMVersion    string      `json:"host_dism_version"`
-	BCDBootOptions []string    `json:"bcdboot_options"`
-	BCDBootVersion string      `json:"host_bcdboot_version"`
+	BootMethod     string      `json:"boot_method"`
+	BCDEditVersion string      `json:"host_bcdedit_version"`
+	LoaderGUID     string      `json:"loader_guid"`
+	BCDVerified    bool        `json:"bcd_verified"`
 	BootIssuers    BootIssuers `json:"boot_issuers"`
 	WinRE          string      `json:"winre"`
 	Layout         DiskLayout  `json:"layout"`
@@ -48,6 +50,7 @@ type MediaRecord struct {
 type BootIssuers struct {
 	Fallback  string `json:"fallback"`
 	Microsoft string `json:"microsoft"`
+	Source    string `json:"source"`
 }
 
 type DiskLayout struct {
@@ -60,13 +63,15 @@ type DiskLayout struct {
 	AutomaticMSRRemoved bool `json:"automatic_msr_removed"`
 }
 
-// bootShape describes a refused BCDBoot step with numbers only: BCDBoot's exit
+// bootShape describes a refused boot step with numbers only: bcdedit's exit
 // code, or issuer codes for the ESP loaders and the applied image's own boot
 // manager (0 invalid, 1 PCA 2011, 2 UEFI CA 2023, 3 PCA 2026, 4 other).
 func bootShape(b []byte) error {
 	var shape struct {
 		Failure   bool   `json:"boot_failure"`
-		Exit      *int64 `json:"bcdboot_exit"`
+		Exit      *int64 `json:"bcdedit_exit"`
+		Command   uint32 `json:"bcdedit_command"`
+		Verify    uint32 `json:"bcd_verify"`
 		Fallback  uint32 `json:"fallback_issuer"`
 		Microsoft uint32 `json:"microsoft_issuer"`
 		Source    uint32 `json:"source_issuer"`
@@ -79,7 +84,10 @@ func bootShape(b []byte) error {
 		return nil
 	}
 	if shape.Exit != nil {
-		return fmt.Errorf("bcdboot refused: exit=%d", *shape.Exit)
+		return fmt.Errorf("bcdedit refused: command=%d exit=%d", shape.Command, *shape.Exit)
+	}
+	if shape.Verify != 0 {
+		return fmt.Errorf("offline BCD refused: code=%d", shape.Verify)
 	}
 	return fmt.Errorf("boot loaders refused: fallback_issuer=%d microsoft_issuer=%d source_issuer=%d", shape.Fallback, shape.Microsoft, shape.Source)
 }

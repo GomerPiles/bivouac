@@ -1160,27 +1160,44 @@ ACL and deny-write handles, not hashed per job.
   WinRE at apply time and creates no recovery partition; Windows setup may
   subsequently register WinRE on the Windows volume. The manifest records
   this apply-time policy, not the installed guest's final WinRE state.
-  BCDBoot uses `/s` with a journalled temporary ESP letter, `/f UEFI`,
-  `/offline` and `/nofirmwaresync` to select boot files explicitly and disable
-  host firmware synchronization;
-  `/bootex` is omitted for the existing MicrosoftWindows firmware template;
-  the reference image's normal EFI boot manager has a 2011-PCA signer.
+  The factory copies the applied image's normal 2011 EFI boot tree, fonts and
+  resources to the owned ESP; EFI_EX is excluded. It installs the fallback
+  loader and promotes the pending boot revocation policy to boot.stl, creating
+  an empty EFI\Microsoft\Recovery directory without registering WinRE.
+  Traversal refuses links and bounds depth, entries and bytes. Boot files
+  never come from the host. BCDBoot is not used: on the tested Windows host it
+  copied files but collided with the host's BCD00000000 hive when creating
+  the target store.
+  A copy of the image's BCD-Template preserves inheritance objects. Every
+  BCDEdit command has an explicit `/store` naming that copy on the ESP.
+  A new loader GUID is recorded before boot preparation; template OS loaders
+  are removed by GUID using offreg object types, leaving exactly one loader.
+  The loader uses the image's default locale, standard boot menu, nx OptIn,
+  bootloadersettings inheritance and recovery disabled. The boot manager
+  selects it by default/displayorder with timeout zero.
+  Two journalled temporary letters provide documented `partition=X:`
+  references for ESP and Windows; both are removed on success and failure.
+  No firmware objects or system-store commands are used.
   The final table must be exactly three partitions in offset order with the
   recorded GUIDs, ESP/MSR/basic-data types and expected sizes. If GPT
   initialization creates its own MSR, the factory removes that one partition
   before building the layout and records it; any other initial or extra
   partition refuses. A refused table is reported as numbers only (type codes,
   MiB offsets and sizes, GUID matches). The fallback EFI loader, Microsoft loader and BCD store
-  must exist. Both loaders must have valid Authenticode signatures from the
-  expected 2011 issuer. The manifest records fixed issuer names and BCDBoot's
-  version alongside DISM's version.
+  must exist. Both ESP loaders and the applied source boot manager must have
+  valid Authenticode signatures from the expected 2011 issuer.
+  Read-only offreg verification checks the default loader, paths, systemroot,
+  recovery flag, unique OS loader and both disk/partition GUID byte identities
+  in all three device elements. Failures expose numeric codes, never hive
+  data. The manifest records the method, loader GUID, verified flag, fixed
+  issuer names and BCDEdit/DISM versions.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
 - **Ownership and cleanup:** ISO mount, base/child attachment, access paths and
-  temporary letter have durable intents before creation. Partitions share the
+  both temporary letters have durable intents before creation. Partitions share the
   owned base attachment's lifetime; their GUIDs are recorded in the layout.
-  Fixed host helper processes and their DISM/BCDBoot descendants are atomically
+  Fixed host helper processes and their DISM/BCDEdit descendants are atomically
   assigned to a private kill-on-close job named in the Global namespace from
   the durable workspace identity. Cancellation joins those processes only;
   WMI providers and storage-service operations run outside that job and may
@@ -1191,8 +1208,8 @@ ACL and deny-write handles, not hashed per job.
   Temporary-letter selection excludes live letters and every mount-manager
   reservation, including absent devices; boot rechecks reservations before use.
   After detach/reboot, only a GPT mapping with the exact DMIO:ID: prefix and
-  recorded ESP GUID bytes retains the workspace for operator resolution.
-  Unreadable mount-manager state also retains it. Cleanup reports retained_letter;
+  corresponding recorded ESP or Windows GUID bytes retains the workspace for operator resolution.
+  Unreadable mount-manager state also retains it. Cleanup reports retained_letters;
   known foreign mappings remain untouched and do not retain the workspace.
   No provider service journal or CI mode is touched. Applied-image TOTALBYTES,
   ISO size and child/flatten headroom replace the template-copy space estimate.

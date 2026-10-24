@@ -42,7 +42,7 @@ func TestBaseFailureIntents(t *testing.T) {
 				data := input.(map[string]string)
 				mode := data["mode"]
 				calls = append(calls, mode)
-				if script != baseDisk || !output {
+				if script != bootHelpers+baseDisk || !output {
 					t.Fatal("unexpected operation")
 				}
 				if !persisted["iso_mount"] {
@@ -54,7 +54,7 @@ func TestBaseFailureIntents(t *testing.T) {
 							t.Fatal("unrecorded native object", name)
 						}
 					}
-					if r.TemporaryLetter != "Z" {
+					if r.TemporaryLetter != "Z" || r.WindowsTemporaryLetter != "Y" {
 						t.Fatal("temporary letter not recorded")
 					}
 				}
@@ -63,14 +63,14 @@ func TestBaseFailureIntents(t *testing.T) {
 				}
 				switch mode {
 				case "media":
-					return []byte(`{"volume":"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\","letter":"Z"}`), nil
+					return []byte(`{"volume":"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\","letter":"Z","windows_letter":"Y"}`), nil
 				case "layout":
 					return []byte(`{"disk_guid":"{11111111-1111-1111-1111-111111111111}","esp_guid":"{22222222-2222-2222-2222-222222222222}","msr_guid":"{33333333-3333-3333-3333-333333333333}","windows_guid":"{44444444-4444-4444-4444-444444444444}"}`), nil
 				case "boot":
-					if !persisted["temporary_letter"] {
+					if !persisted["temporary_letter"] || !persisted["windows_temporary_letter"] || !validGUID(r.Manifest.Media.LoaderGUID) {
 						t.Fatal("unrecorded temporary letter")
 					}
-					return []byte(`{"bcdboot_version":"10.0.26300.1","boot_issuers":{"fallback":"windows_production_pca_2011","microsoft":"windows_production_pca_2011"}}`), nil
+					return []byte(`{"bcdedit_version":"10.0.26300.1","bcd_verified":true,"boot_issuers":{"fallback":"windows_production_pca_2011","microsoft":"windows_production_pca_2011","source":"windows_production_pca_2011"}}`), nil
 				case "apply":
 					if !validGUID(r.Manifest.Media.Layout.WindowsGUID) {
 						t.Fatal("layout not persisted before apply")
@@ -90,7 +90,7 @@ func TestBaseFailureIntents(t *testing.T) {
 			if failure == "" && !slices.Equal(calls, []string{"media", "create", "layout", "apply", "boot", "detach"}) {
 				t.Fatal(calls)
 			}
-			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDBootVersion) || r.Manifest.Media.BootIssuers.Fallback != "windows_production_pca_2011" || r.Manifest.Media.BootIssuers.Microsoft != "windows_production_pca_2011" || !slices.Contains(r.Manifest.Media.BCDBootOptions, "/offline") || !slices.Contains(r.Manifest.Media.BCDBootOptions, "/nofirmwaresync") || slices.Contains(r.Manifest.Media.BCDBootOptions, "/bootex")) {
+			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "image_template_bcdedit_uefi_2011" || !r.Manifest.Media.BCDVerified) {
 				t.Fatal("missing provenance")
 			}
 			if failure != "" && failure != "save" {
@@ -109,7 +109,7 @@ func TestBaseFailureIntents(t *testing.T) {
 								t.Fatal("cleanup lost persisted ownership", name)
 							}
 						}
-						return []byte(`{"retained_letter":""}`), nil
+						return []byte(`{"retained_letters":[]}`), nil
 					})
 				}, func() error { removed = true; return nil })
 				if e != nil || !removed {
@@ -121,16 +121,16 @@ func TestBaseFailureIntents(t *testing.T) {
 }
 
 func TestRetainedLetterStopsDeletionAndPersists(t *testing.T) {
-	r := &record{TemporaryLetter: "Z", StorageIntents: map[string]bool{"temporary_letter": true}}
+	r := &record{TemporaryLetter: "Z", WindowsTemporaryLetter: "Y", StorageIntents: map[string]bool{"temporary_letter": true, "windows_temporary_letter": true}}
 	removed := false
 	e := cleanupOwned(nil, func() error { return nil }, func() error {
 		return detachOwnedWith(t.Context(), r, func(context.Context, string, any, bool) ([]byte, error) {
-			return []byte(`{"retained_letter":"Z"}`), nil
+			return []byte(`{"retained_letters":["Z","Y"]}`), nil
 		})
 	}, func() error { removed = true; return nil })
-	var retained *RetainedLetterError
+	var retained *RetainedLettersError
 	b, _ := json.Marshal(r)
-	if !errors.As(e, &retained) || retained.Letter != "Z" || removed || !strings.Contains(string(b), `"retained_letter":"Z"`) {
+	if !errors.As(e, &retained) || !slices.Equal(retained.Letters, []string{"Z", "Y"}) || removed || !strings.Contains(string(b), `"retained_letters":["Z","Y"]`) {
 		t.Fatal("ambiguous mapping lost ownership/diagnostics")
 	}
 }
