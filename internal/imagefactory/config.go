@@ -284,6 +284,7 @@ type Manifest struct {
 	AutologonAccountMatches bool                 `json:"autologon_account_matches"`
 	AgentTask               guestagent.TaskFacts `json:"agent_task"`
 	RunnerTask              guestagent.TaskFacts `json:"runner_task"`
+	PreventDeviceEncryption bool                 `json:"prevent_device_encryption"`
 	Topology                *windesktop.Topology `json:"topology,omitempty"`
 	AgentSHA256             string               `json:"agent_sha256"`
 	WindowsContract         int                  `json:"windows_contract"`

@@ -42,7 +42,7 @@ func TestBaseFailureIntents(t *testing.T) {
 				data := input.(map[string]string)
 				mode := data["mode"]
 				calls = append(calls, mode)
-				if script != bootHelpers+baseDisk || !output {
+				if script != embeddedSignatures+bootHelpers+baseDisk || !output {
 					t.Fatal("unexpected operation")
 				}
 				if !persisted["iso_mount"] {
@@ -67,7 +67,7 @@ func TestBaseFailureIntents(t *testing.T) {
 					if !validGUID(r.Manifest.Media.LoaderGUID) {
 						t.Fatal("unrecorded loader identity")
 					}
-					return []byte(`{"bcdedit_version":"10.0.26300.1","bcd_verified":true,"boot_issuers":{"fallback":"windows_production_pca_2011","microsoft":"windows_production_pca_2011","source":"windows_production_pca_2011"}}`), nil
+					return []byte(`{"bcdedit_version":"10.0.26300.1","bcd_verified":true,"boot_generation":"pca_2011","boot_issuers":{"fallback":1,"microsoft":1,"source":1,"signature_counts":{"fallback":1,"microsoft":1,"source":1}}}`), nil
 				case "apply":
 					if !validGUID(r.Manifest.Media.Layout.WindowsGUID) {
 						t.Fatal("layout not persisted before apply")
@@ -87,7 +87,7 @@ func TestBaseFailureIntents(t *testing.T) {
 			if failure == "" && !slices.Equal(calls, []string{"media", "create", "layout", "apply", "boot", "detach"}) {
 				t.Fatal(calls)
 			}
-			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "scratch_bcdedit_offreg_plain_gpt_uefi_2011" || !r.Manifest.Media.BCDVerified) {
+			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || !validBootGeneration(r.Manifest.Media.BootGeneration, r.Manifest.Media.BootIssuers) || r.Manifest.Media.BootIssuers.Source != 1 || r.Manifest.Media.BootMethod != "scratch_bcdedit_offreg_plain_gpt" || !r.Manifest.Media.BCDVerified) {
 				t.Fatal("missing provenance")
 			}
 			if failure != "" && failure != "save" {

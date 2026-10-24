@@ -8,7 +8,34 @@ function Assert-BootPath([string]$Root,[string]$Path){
   if((Test-Path -LiteralPath $current) -and ((Get-Item -Force -LiteralPath $current).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'boot path link'}
  }
 }
-function Copy-BootFiles([string]$Windows,[string]$ESP){
+function Select-BootLoader([string]$Windows){
+ $source=Join-Path $Windows 'Windows\Boot\EFI_EX\bootmgfw_EX.efi';Assert-BootPath $Windows $source
+ $generation='uefi_ca_2023';$expected=2
+ if(!(Test-Path -LiteralPath $source)){
+  $source=Join-Path $Windows 'Windows\Boot\EFI\bootmgfw.efi';$generation='pca_2011';$expected=1
+ }
+ Assert-BootPath $Windows $source
+ $signature=Get-EmbeddedSignature $source
+ if($signature.issuer -ne $expected -or $signature.signatures -lt 1){
+  Emit-Result @{boot_failure=$true;source_issuer=[uint32]$signature.issuer;source_signatures=[uint32]$signature.signatures;expected_issuer=[uint32]$expected}
+  throw 'embedded boot source signature'
+ }
+ return @{source=$source;generation=$generation;issuer=$expected}
+}
+function Test-BootLoaderCopies([string]$Windows,[string]$ESP,$Selection){
+ $paths=@((Join-Path $ESP 'EFI\Boot\bootx64.efi'),(Join-Path $ESP 'EFI\Microsoft\Boot\bootmgfw.efi'),$Selection.source)
+ $signatures=@();$same=@()
+ foreach($path in $paths){$signatures+=,(Get-EmbeddedSignature $path)}
+ foreach($path in $paths[0..1]){
+  $same+=,(Test-BootFileMatch $path $Selection.source)
+ }
+ if(!$same[0] -or !$same[1] -or @($signatures|Where-Object {$_.issuer -ne $Selection.issuer -or $_.signatures -lt 1}).Count){
+  Emit-Result @{boot_failure=$true;fallback_issuer=[uint32]$signatures[0].issuer;microsoft_issuer=[uint32]$signatures[1].issuer;source_issuer=[uint32]$signatures[2].issuer;fallback_matches=[bool]$same[0];microsoft_matches=[bool]$same[1]}
+  throw 'embedded loader signature or source bytes'
+ }
+ return @{fallback=[uint32]$signatures[0].issuer;microsoft=[uint32]$signatures[1].issuer;source=[uint32]$signatures[2].issuer;signature_counts=@{fallback=[uint32]$signatures[0].signatures;microsoft=[uint32]$signatures[1].signatures;source=[uint32]$signatures[2].signatures}}
+}
+function Copy-BootFiles([string]$Windows,[string]$ESP,$Selection){
  $required=@('Windows\Boot\EFI\bootmgfw.efi','Windows\Boot\EFI\bootmgr.efi','Windows\Boot\EFI\memtest.efi','Windows\Boot\EFI\SecureBootRecovery.efi','Windows\Boot\EFI\boot.pnd.stl','Windows\Boot\Fonts\wgl4_boot.ttf','Windows\Boot\Resources\bootres.dll','Windows\System32\winload.efi')
  foreach($name in $required){$path=Join-Path $Windows $name;Assert-BootPath $Windows $path;if(!(Test-Path -LiteralPath $path -PathType Leaf)){throw 'required boot source absent'}}
  $plan=@();$dirs=@('EFI','EFI\Boot','EFI\Microsoft','EFI\Microsoft\Boot','EFI\Microsoft\Recovery')
@@ -33,16 +60,38 @@ function Copy-BootFiles([string]$Windows,[string]$ESP){
    }
   }
  }
+ # Map only the evidenced EX boot manager and its language resource. Fonts
+ # remain from Fonts, as the observed /bootex copy does; no Fonts_EX substitution.
+ if($Selection.generation -eq 'uefi_ca_2023'){
+  $mapped=@{}
+  $ex=Join-Path $Windows 'Windows\Boot\EFI_EX'
+  $languages=@(Get-ChildItem -Force -LiteralPath $ex)
+  if($languages.Count -gt 128){throw 'EX language count'}
+  foreach($language in $languages){
+   if($language.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'EX link'}
+   if(!$language.PSIsContainer){continue}
+   if($language.Name -cnotmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$'){throw 'EX language'}
+   $source=Join-Path $language.FullName 'bootmgfw_EX.efi.mui';Assert-BootPath $Windows $source
+   if(!(Test-Path -LiteralPath $source -PathType Leaf)){throw 'EX boot manager language source absent'}
+   $size=(Get-Item -LiteralPath $source).Length;$bytes+=$size
+   if($size -gt 4MB -or $bytes -gt 160MB){throw 'EX language bytes'}
+   $dirs+=('EFI\Microsoft\Boot\'+$language.Name)
+   $plan+=@{source=$source;target=('EFI\Microsoft\Boot\'+$language.Name+'\bootmgfw.efi.mui');length=$size;replace=$true}
+   $mapped[('EFI\Microsoft\Boot\'+$language.Name+'\bootmgfw.efi.mui')]=$true
+  }
+  foreach($file in $plan){if($file.target -like '*\bootmgfw.efi.mui' -and !$mapped.ContainsKey($file.target)){throw 'EX language mapping incomplete'}}
+ }
  $efi=Join-Path $ESP 'EFI';Assert-BootPath $ESP $efi
  if(Test-Path -LiteralPath $efi){throw 'boot destination already exists'}
  # Validate the entire source inventory before publishing any files.
  foreach($name in $dirs){$path=Join-Path $ESP $name;Assert-BootPath $ESP $path;$null=New-Item -ItemType Directory -Path $path -Force}
  foreach($file in $plan){
   Assert-BootPath $Windows $file.source;$target=Join-Path $ESP $file.target;Assert-BootPath $ESP $target
-  [IO.File]::Copy($file.source,$target,$false)
+  [IO.File]::Copy($file.source,$target,[bool]$file.replace)
   if((Get-Item -LiteralPath $target).Length -ne $file.length){throw 'boot copy incomplete'}
  }
- [IO.File]::Copy((Join-Path $Windows 'Windows\Boot\EFI\bootmgfw.efi'),(Join-Path $ESP 'EFI\Boot\bootx64.efi'),$false)
+ [IO.File]::Copy($Selection.source,(Join-Path $ESP 'EFI\Microsoft\Boot\bootmgfw.efi'),$true)
+ [IO.File]::Copy($Selection.source,(Join-Path $ESP 'EFI\Boot\bootx64.efi'),$false)
  # The ESP is new: the pending revocation policy becomes the active boot.stl.
  [IO.File]::Copy((Join-Path $Windows 'Windows\Boot\EFI\boot.pnd.stl'),(Join-Path $ESP 'EFI\Microsoft\Boot\boot.stl'),$true)
 }

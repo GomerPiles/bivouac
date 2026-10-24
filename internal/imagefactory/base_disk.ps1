@@ -17,18 +17,6 @@ function Get-LayoutShape($Parts,$Expected){
  }
  return [ordered]@{layout_failure=$true;partition_count=[uint32]$Parts.Count;partitions=$rows}
 }
-# Numbers only: 0 invalid or unsigned, 1 Windows Production PCA 2011,
-# 2 Windows UEFI CA 2023, 3 Windows Production PCA 2026, 4 other valid issuer.
-function Get-IssuerCode([string]$Path){
- if(!(Test-Path -LiteralPath $Path -PathType Leaf)){return 0}
- $signature=Get-AuthenticodeSignature -LiteralPath $Path
- if($signature.Status -ne 'Valid' -or !$signature.SignerCertificate){return 0}
- $issuer=$signature.SignerCertificate.Issuer
- if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2011(?:,|$)'){return 1}
- if($issuer -match '(?:^|,\s*)CN=Windows UEFI CA 2023(?:,|$)'){return 2}
- if($issuer -match '(?:^|,\s*)CN=Microsoft Windows Production PCA 2026\b'){return 3}
- return 4
-}
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){throw 'identity'}
@@ -125,7 +113,8 @@ try{
   $step=60
   if($data.loader_guid -cnotmatch '^\{[0-9a-f-]{36}\}$' -or $data.locale -cnotmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$'){throw 'boot configuration'}
   $step=61
-  Copy-BootFiles $win $esp
+  $selection=Select-BootLoader $win
+  Copy-BootFiles $win $esp $selection
   $step=62
   $store=Join-Path $esp 'EFI\Microsoft\Boot\BCD'
   Set-BootStore $store $data
@@ -135,9 +124,7 @@ try{
   if($written -ne 0){Emit-Result @{boot_failure=$true;bcd_write=[uint32]$written};throw 'offline boot device write'}
   $step=64
   foreach($name in @('EFI\Boot\bootx64.efi','EFI\Microsoft\Boot\bootmgfw.efi','EFI\Microsoft\Boot\BCD','EFI\Microsoft\Boot\boot.stl')){if(!(Test-Path -LiteralPath (Join-Path $esp $name) -PathType Leaf)){throw 'boot artifact absent'}}
-  $codes=@{fallback=(Get-IssuerCode (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-IssuerCode (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'));source=(Get-IssuerCode (Join-Path $win 'Windows\Boot\EFI\bootmgfw.efi'))}
-  if($codes.fallback -ne 1 -or $codes.microsoft -ne 1 -or $codes.source -ne 1){Emit-Result @{boot_failure=$true;fallback_issuer=$codes.fallback;microsoft_issuer=$codes.microsoft;source_issuer=$codes.source};throw 'boot issuer differs from 2011 selection'}
-  $issuers=@{fallback='windows_production_pca_2011';microsoft='windows_production_pca_2011';source='windows_production_pca_2011'}
+  $issuers=Test-BootLoaderCopies $win $esp $selection
   $step=65
   $verification=Test-BootStore $store $data
   if($verification -ne 0){Emit-Result @{boot_failure=$true;bcd_verify=[uint32]$verification};throw 'offline boot verification'}
@@ -145,7 +132,7 @@ try{
   $bootVersion=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)
   # Apply-time policy only: no recovery partition; the factory does not register
   # WinRE. Windows setup may subsequently configure it on the Windows volume.
-  Emit-Result @{bcdedit_version=$bootVersion;boot_issuers=$issuers;bcd_verified=$true};exit 0
+  Emit-Result @{bcdedit_version=$bootVersion;boot_generation=$selection.generation;boot_issuers=$issuers;bcd_verified=$true};exit 0
  }
  if($data.mode -eq 'detach'){
   $step=70

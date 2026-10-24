@@ -57,7 +57,7 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 	data["locale"] = r.Manifest.Media.Image.DefaultLanguage
 	invoke := func(mode string) ([]byte, error) {
 		data["mode"] = mode
-		b, e := run(ctx, bootHelpers+baseDisk, data, true)
+		b, e := run(ctx, embeddedSignatures+bootHelpers+baseDisk, data, true)
 		r.hostError("base_"+mode, e)
 		return b, e
 	}
@@ -115,13 +115,13 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return errors.New("invalid DISM version result")
 	}
 	r.Manifest.Media.DISMVersion = applied.DISMVersion
-	// Use the applied image's 2011 boot files and explicit private BCD store.
+	// The applied image selects its embedded-signed boot generation.
 	loader, err := windows.GenerateGUID()
 	if err != nil {
 		return errors.New("boot loader identity generation failed")
 	}
 	r.Manifest.Media.LoaderGUID = strings.ToLower(loader.String())
-	r.Manifest.Media.BootMethod = "scratch_bcdedit_offreg_plain_gpt_uefi_2011"
+	r.Manifest.Media.BootMethod = "scratch_bcdedit_offreg_plain_gpt"
 	data["loader_guid"] = r.Manifest.Media.LoaderGUID
 	r.Manifest.Media.WinRE = "apply_time_no_recovery_partition_not_registered_by_factory"
 	if err = save(); err != nil {
@@ -132,16 +132,18 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return errors.Join(err, bootShape(b))
 	}
 	var boot struct {
-		Version  string      `json:"bcdedit_version"`
-		Issuers  BootIssuers `json:"boot_issuers"`
-		Verified bool        `json:"bcd_verified"`
+		Version    string      `json:"bcdedit_version"`
+		Issuers    BootIssuers `json:"boot_issuers"`
+		Verified   bool        `json:"bcd_verified"`
+		Generation string      `json:"boot_generation"`
 	}
-	if json.Unmarshal(b, &boot) != nil || !numericVersion(boot.Version) || !boot.Verified || boot.Issuers.Fallback != "windows_production_pca_2011" || boot.Issuers.Microsoft != "windows_production_pca_2011" || boot.Issuers.Source != "windows_production_pca_2011" {
+	if json.Unmarshal(b, &boot) != nil || !numericVersion(boot.Version) || !boot.Verified || !validBootGeneration(boot.Generation, boot.Issuers) {
 		return errors.New("invalid offline boot signature result")
 	}
 	r.Manifest.Media.BCDEditVersion = boot.Version
 	r.Manifest.Media.BCDVerified = boot.Verified
 	r.Manifest.Media.BootIssuers = boot.Issuers
+	r.Manifest.Media.BootGeneration = boot.Generation
 	if err = save(); err != nil {
 		return err
 	}

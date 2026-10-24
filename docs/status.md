@@ -443,10 +443,13 @@ Open:
   restart with HCS guests.
 - Install-media lab runs passed owned VHDX layout, DISM WIM apply through
   the ISO volume-GUID path, image-sourced ESP files, scratch BCDEdit store,
-  2011 signatures, child staging and unchanged host firmware entries.
-  The guest exited gracefully before Windows ran: BCDEdit produced nested
-  host VHD devices, which the former GUID-substring check accepted.
-  Exact plain GPT device writing/verification is unit-tested; its bootability,
+  child staging and unchanged host firmware entries. Builds 7–9 reached no
+  operating-system boot/ExitBootServices event; nested host VHD devices and
+  firmware trust of the old 2011 loader remain possible causes. Catalog
+  signature results did not prove the embedded EFI signer.
+  Exact plain GPT devices, embedded 2023 selection with 2011 fallback, and
+  offline encryption prevention are unit-tested. Build 10 has not run;
+  their bootability,
   guest ownership/ACLs, firmware trust, no-NIC setup, guest Secure Boot/TPM,
   a failed build's cleanup and `image cleanup`, and the lab batch on a
   factory-built image remain open. Admission does not compare the host GPU

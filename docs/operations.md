@@ -279,9 +279,17 @@ An MSR that GPT initialization adds by itself is removed first and recorded
 as `automatic_msr_removed`.
 It verifies disk identity before initialization, applies the selected image
 with DISM integrity checking, then copies the applied image's normal EFI files,
-fonts and resources to the ESP. It creates the fallback bootx64.efi, promotes
+fonts and resources to the ESP. A valid embedded UEFI CA 2023
+EFI_EX\bootmgfw_EX.efi is preferred for both bootmgfw.efi and bootx64.efi,
+with bootmgfw.efi.mui mapped from each EFI_EX language's bootmgfw_EX.efi.mui.
+If the EX file is absent, the normal embedded PCA 2011 loader is used.
+A present EX file with an invalid or different signer refuses. Every normal
+boot-manager language must have its EX counterpart for the 2023 selection.
+Other EFI files, Fonts (not Fonts_EX) and Resources retain their mapping.
+The observed /bootex log explicitly used normal Fonts; further EX remappings
+could not be confirmed and are not inferred. The factory promotes
 boot.pnd.stl to boot.stl and creates the empty EFI\Microsoft\Recovery directory.
-EFI_EX is excluded, and bounded traversal refuses links.
+Bounded traversal refuses links.
 BCDBoot is not invoked: lab runs copied boot files but collided with the host's
 BCD00000000 hive while creating the target store.
 Instead, BCDEdit `/createstore <owned ESP BCD path>` creates an empty non-system
@@ -307,14 +315,20 @@ Boot helper steps are 61 copy, 62 BCDEdit, 63 device write, 64 artifacts/signatu
 and 65 complete verification. A `bcd_write` failure code is 1 open, 2 occupied
 sibling, 3 missing parent, 4 existing device key, 5 create, 6 value, 7 save,
 8 replace, 9 invalid identity or 10 unexpected failure; no hive bytes are reported.
-Both ESP loaders and the applied source boot manager require valid signatures
-from the expected 2011 issuer. Read-only offreg checks the resulting store's
+Both ESP loaders and the selected source require valid primary embedded
+signatures and byte-for-byte identity. Host catalogs are not consulted.
+The bounded PE certificate-table/SignedCms reader records primary issuer and
+signature count; [WinVerifyTrust](https://learn.microsoft.com/en-us/windows/win32/api/wintrust/ns-wintrust-wintrust_data)
+uses FILE choice, primary signature index zero, no UI/revocation and cache-only
+URL retrieval. Issuer codes: 0 invalid/unsigned, 1 PCA 2011, 2 UEFI CA 2023,
+3 PCA 2026, 4 other. Read-only offreg checks the resulting store's
 exact object set/types, descriptions, default, displayorder, timeout, locales,
 all loader settings and exact complete plain-device bytes. GUID substring
 matches are insufficient: nested VHD devices refuse.
 Class-4 merge directives and any other unexpected elements refuse.
 The manifest records scratch-store method, loader GUID,
-verification, issuer names and BCDEdit/DISM versions.
+verification, generation (`uefi_ca_2023` or `pca_2011`), numeric issuer codes
+and signature counts, and BCDEdit/DISM versions.
 See Microsoft's [UEFI BCD settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi)
 and [boot option values](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set).
 Store creation, object creation and the displayorder/default/timeout commands
@@ -376,6 +390,14 @@ about final installed WinRE state. Effective firmware trust and boot remain live
      installation or driver target refuses. These child-disk directories
      require no host cleanup records. Setup\Scripts is empty; media scripts
      and RUNNER.ZIP stay on the setup ISO until FirstLogon.
+     Child staging step 66 also sets the current control set's offline
+     BitLocker PreventDeviceEncryption DWORD to 1 before first boot, following
+     Microsoft's [automatic encryption prevention](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/oem-bitlocker).
+     An existing DWORD 1 is accepted without rewriting; other values/types
+     refuse. A fresh saved hive inherits the original owner/DACL before
+     atomic replacement. The manifest records successful prevention.
+     Guest C: conversion/protection statuses are numeric diagnostics only;
+     4294967295 means unavailable. They do not gate publication this round.
    - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
      removes VDD nodes/packages and the entire legacy component directory,
      uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
@@ -495,8 +517,11 @@ entries. The guest exited before Windows started: BCDEdit had encoded nested
 host VHD devices and the former GUID-substring check accepted them.
 The next live gate must prove plain GPT device resolution, effective firmware
 trust, Windows setup/no-NIC boot, guest ownership/ACLs and Secure Boot/TPM.
-The 2011 boot-file choice remains unchanged; selecting another signing
-generation requires a separate decision. Interrupted-apply cleanup, including
+The default now selects the image's embedded-signed 2023 EX boot manager,
+falling back to embedded-signed 2011 only when EX is absent. Builds 7–9 never
+reached OS boot; their firmware path does not distinguish the old device
+encoding issue from trust of the 2011 loader. Build 10 has not run.
+Interrupted-apply cleanup, including
 retry from another session and after a host reboot, remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
 GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.

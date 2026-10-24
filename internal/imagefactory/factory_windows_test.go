@@ -77,7 +77,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 		case makeISO:
 			phases = append(phases, "iso")
 			answer = data["unattend"]
-		case offlinePayload + stageSetup:
+		case offlineEncryption + offlinePayload + stageSetup:
 			phases = append(phases, "answer")
 			if answer != data["unattend"] {
 				t.Fatal("answer file differs from ISO")
@@ -96,7 +96,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 	if !reflect.DeepEqual(phases, []string{"iso", "answer"}) || len(copied) != len(c.SetupAssets)+2 {
 		t.Fatal("media preparation order")
 	}
-	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract {
+	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract || !r.Manifest.PreventDeviceEncryption {
 		t.Fatal("agent manifest pin missing")
 	}
 	for name, script := range mediaScripts() {
@@ -115,7 +115,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 // of their mount, service, guest or HCS operations.
 func TestPowerShellSyntax(t *testing.T) {
 	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($text in $data){$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){exit 1}};[Console]::Out.Write('parsed')`
-	texts := []string{bootHelpers, baseDisk, bootHelpers + baseDisk, makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, offlinePayload, guestBootstrap}
+	texts := []string{embeddedSignatures, offlineEncryption, embeddedSignatures + bootHelpers + baseDisk, offlineEncryption + offlinePayload + stageSetup, bootHelpers, baseDisk, bootHelpers + baseDisk, makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, offlinePayload, guestBootstrap}
 	texts = append(texts, guestVideo+guestSpecialize+disableFirstLogonAnimation)
 	b, _ := json.Marshal(texts)
 	if got := runTestPS(t, script, b); got != "parsed" {

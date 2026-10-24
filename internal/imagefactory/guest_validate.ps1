@@ -3,6 +3,18 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $rotated=$false
 $step=17
+function Read-BitLockerDiagnostics {
+ $result=@{conversion=[uint32]::MaxValue;protection=[uint32]::MaxValue}
+ try{
+  $volumes=@(Get-CimInstance -Namespace 'root\CIMV2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Filter "DriveLetter='C:'" -OperationTimeoutSec 10)
+  if($volumes.Count -ne 1){return $result}
+  $conversion=Invoke-CimMethod -InputObject $volumes[0] -MethodName GetConversionStatus -OperationTimeoutSec 10
+  $protection=Invoke-CimMethod -InputObject $volumes[0] -MethodName GetProtectionStatus -OperationTimeoutSec 10
+  if($conversion.ReturnValue -eq 0 -and $conversion.ConversionStatus -ge 0 -and $conversion.ConversionStatus -le 5){$result.conversion=[uint32]$conversion.ConversionStatus}
+  if($protection.ReturnValue -eq 0 -and $protection.ProtectionStatus -ge 0 -and $protection.ProtectionStatus -le 2){$result.protection=[uint32]$protection.ProtectionStatus}
+ }catch{}
+ return $result
+}
 try {
  if($env:COMPUTERNAME -ine $data.name -or $env:USERNAME -ine $data.user) {exit 11}
  $step=19
@@ -357,7 +369,10 @@ public static class DesktopProbe {
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
   $secureBoot=[bool](Confirm-SecureBootUEFI)
   $tpm=Get-Tpm
+  $bitlocker=Read-BitLockerDiagnostics
   $report=[ordered]@{secure_boot=$secureBoot;tpm_present=[bool]$tpm.TpmPresent;tpm_ready=[bool]$tpm.TpmReady;credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code}
+  $report.bitlocker_conversion_status=$bitlocker.conversion
+  $report.bitlocker_protection_status=$bitlocker.protection
   foreach($field in @('topology_valid','virtual_equals_primary','hyperv_video_enabled','hyperv_video_started','probe_foreground','probe_on_primary','probe_input_received','security_window_found','security_on_primary')){
    if($topology.$field -isnot [bool]){exit 29}
    $report[$field]=[bool]$topology.$field

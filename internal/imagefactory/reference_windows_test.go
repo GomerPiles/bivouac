@@ -59,10 +59,18 @@ func TestReferenceOfflineState(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// Reset metadata traversal through the image root before each directory:
+	// go-winio's cached cursor can drift after a short forward metadata seek.
+	readDirectory := func(directory *wim.File) ([]*wim.File, error) {
+		if _, err := wr.Image[5].Open(); err != nil {
+			return nil, err
+		}
+		return directory.Readdir()
+	}
 	find := func(relative string) *wim.File {
 		current := root
 		for _, name := range strings.Split(relative, `\`) {
-			entries, err := current.Readdir()
+			entries, err := readDirectory(current)
 			if err != nil {
 				t.Fatal("WIM directory read failed")
 			}
@@ -116,7 +124,7 @@ func TestReferenceOfflineState(t *testing.T) {
 			if path != `Windows\Panther\Unattend` {
 				t.Fatal("reference clean-install path gate refused")
 			}
-			entries, err := entry.Readdir()
+			entries, err := readDirectory(entry)
 			if err != nil || len(entries) != 0 {
 				t.Fatal("reference answer directory not empty")
 			}
@@ -127,17 +135,43 @@ func TestReferenceOfflineState(t *testing.T) {
 	if ex == nil {
 		t.Fatal("reference EFI_EX absent")
 	}
-	entries, e := ex.Readdir()
+	entries, e := readDirectory(ex)
 	if e != nil {
 		t.Fatal("reference EFI_EX inventory")
 	}
 	var exFiles []string
+	languages := 0
 	for _, entry := range entries {
+		if entry.Attributes&0x10 != 0 {
+			if entry.Name != filepath.Base(entry.Name) || strings.ContainsAny(entry.Name, `\/:`) {
+				t.Fatal("EX language path")
+			}
+			for _, file := range []string{"bootmgfw_EX.efi.mui", "bootmgr_EX.efi.mui"} {
+				if find(`Windows\Boot\EFI_EX\`+entry.Name+`\`+file) == nil {
+					t.Fatal("reference EX language mapping")
+				}
+			}
+			languages++
+		}
 		if strings.EqualFold(filepath.Ext(entry.Name), ".efi") {
 			if entry.Name != filepath.Base(entry.Name) || strings.ContainsAny(entry.Name, `\/:`) || len(entry.Name) > 80 {
 				t.Fatal("reference EFI_EX filename")
 			}
 			exFiles = append(exFiles, entry.Name)
+		}
+	}
+	t.Logf("EFI_EX languages=%d; both EX MUI source names present", languages)
+	normalEntries, err := readDirectory(find(`Windows\Boot\EFI`))
+	if err != nil {
+		t.Fatal("normal EFI language inventory")
+	}
+	for _, entry := range normalEntries {
+		if !entry.IsDir() {
+			continue
+		}
+		normal := find(`Windows\Boot\EFI\` + entry.Name + `\bootmgfw.efi.mui`)
+		if normal != nil && find(`Windows\Boot\EFI_EX\`+entry.Name+`\bootmgfw_EX.efi.mui`) == nil {
+			t.Fatal("normal boot-manager language lacks EX counterpart")
 		}
 	}
 	names := []string{"SYSTEM", "SOFTWARE", "bootmgfw.efi"}
@@ -151,6 +185,12 @@ func TestReferenceOfflineState(t *testing.T) {
 		}
 		if strings.HasPrefix(name, "ex-") {
 			relative = `Windows\Boot\EFI_EX\` + strings.TrimPrefix(name, "ex-")
+		}
+		if name == "bootmgfw.efi" || strings.HasPrefix(name, "ex-") {
+			entry := find(relative)
+			if entry != nil {
+				t.Logf("embedded source %s bytes=%d", name, entry.Size)
+			}
 		}
 		entry := find(relative)
 		if entry == nil || entry.Size < 1 || entry.Size > 256<<20 {
@@ -174,25 +214,28 @@ func TestReferenceOfflineState(t *testing.T) {
 	}
 	start := strings.Index(inspectDisk, "@\"\n") + 3
 	end := strings.Index(inspectDisk[start:], "\n\"@") + start
-	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=Add-Type -TypeDefinition @"` + "\n" + inspectDisk[start:end] + "\n\"@\n" + `
+	script := embeddedSignatures + offlineEncryption + offlinePayload + `
+$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=Add-Type -TypeDefinition @"` + "\n" + inspectDisk[start:end] + "\n\"@\n" + `
  $exIssuers=@{}
  foreach($name in $data.ex_files){
-  $s=Get-AuthenticodeSignature -LiteralPath (Join-Path $data.root ('ex-'+$name))
-  $issuer=0
-  if($s.SignerCertificate){
-   if($s.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*'){$issuer=2}
-   elseif($s.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*'){$issuer=1}
-   elseif($s.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2026*'){$issuer=3}
-   else{$issuer=4}
-  }
-  $exIssuers[$name]=@{issuer=$issuer;valid=($s.Status -eq 'Valid')}
+  $s=Get-EmbeddedSignature (Join-Path $data.root ('ex-'+$name))
+  if($s.issuer -ne 2 -or $s.signatures -lt 1){throw 'reference EX embedded signature'}
+  $exIssuers[$name]=$s
  }
- $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $data.root 'bootmgfw.efi')
- $f=@{efi_ex=$exIssuers;boot_signature_valid=($signature.Status -eq 'Valid');boot_signer_2011=($signature.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*');boot_signer_2023=($signature.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*');runner_state='absent';answer_directory_empty=$true};$h=[IntPtr]::Zero
+ $signature=Get-EmbeddedSignature (Join-Path $data.root 'bootmgfw.efi')
+ $f=@{efi_ex=$exIssuers;normal_signature_count=$signature.signatures;boot_signature_valid=($signature.issuer -eq 1);boot_signer_2011=($signature.issuer -eq 1);boot_signer_2023=($signature.issuer -eq 2);runner_state='absent';answer_directory_empty=$true};$h=[IntPtr]::Zero
  $f.system_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SYSTEM'),[ref]$h)
  if($f.system_hive_error -eq 0){try{$f.system_setup_in_progress=[FactoryInspection]::Number($h,'Setup','SystemSetupInProgress');$f.oobe_in_progress=[FactoryInspection]::Number($h,'Setup','OOBEInProgress');$f.setup_phase=[FactoryInspection]::Number($h,'Setup','SetupPhase');$f.unattend_pointer_kind=[FactoryInspection]::Pointer($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
  $f.software_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SOFTWARE'),[ref]$h)
  if($f.software_hive_error -eq 0){try{$f.image_state_kind=[FactoryInspection]::State($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
+ # The ISO and pristine extracted hive stay unchanged. Exercise the actual
+ # policy writer only on an additional owned temporary copy.
+ $policyRoot=Join-Path $data.root 'policy-child'
+ $config=Join-Path $policyRoot 'Windows\System32\config'
+ $null=New-Item -ItemType Directory -Path $config
+ [IO.File]::Copy((Join-Path $data.root 'SYSTEM'),(Join-Path $config 'SYSTEM'),$false)
+ $f.reference_encryption_policy_code=Set-OfflineEncryptionPolicy $policyRoot
+ if($f.reference_encryption_policy_code -ne 0){throw 'reference encryption policy refused'}
  [Console]::Out.Write(($f|ConvertTo-Json -Compress))`
 	input, _ := json.Marshal(map[string]any{"root": temp, "ex_files": exFiles})
 	output := runTestPS(t, script, input)

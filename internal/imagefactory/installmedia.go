@@ -43,14 +43,31 @@ type MediaRecord struct {
 	LoaderGUID     string      `json:"loader_guid"`
 	BCDVerified    bool        `json:"bcd_verified"`
 	BootIssuers    BootIssuers `json:"boot_issuers"`
+	BootGeneration string      `json:"boot_generation"`
 	WinRE          string      `json:"winre"`
 	Layout         DiskLayout  `json:"layout"`
 }
 
 type BootIssuers struct {
-	Fallback  string `json:"fallback"`
-	Microsoft string `json:"microsoft"`
-	Source    string `json:"source"`
+	Fallback        uint32              `json:"fallback"`
+	Microsoft       uint32              `json:"microsoft"`
+	Source          uint32              `json:"source"`
+	SignatureCounts BootSignatureCounts `json:"signature_counts"`
+}
+type BootSignatureCounts struct {
+	Fallback  uint32 `json:"fallback"`
+	Microsoft uint32 `json:"microsoft"`
+	Source    uint32 `json:"source"`
+}
+
+func validBootGeneration(generation string, issuers BootIssuers) bool {
+	expected := uint32(1)
+	if generation == "uefi_ca_2023" {
+		expected = 2
+	} else if generation != "pca_2011" {
+		return false
+	}
+	return issuers.Fallback == expected && issuers.Microsoft == expected && issuers.Source == expected && issuers.SignatureCounts.Fallback >= 1 && issuers.SignatureCounts.Fallback <= 16 && issuers.SignatureCounts.Microsoft >= 1 && issuers.SignatureCounts.Microsoft <= 16 && issuers.SignatureCounts.Source >= 1 && issuers.SignatureCounts.Source <= 16
 }
 
 type DiskLayout struct {
@@ -68,14 +85,16 @@ type DiskLayout struct {
 // manager (0 invalid, 1 PCA 2011, 2 UEFI CA 2023, 3 PCA 2026, 4 other).
 func bootShape(b []byte) error {
 	var shape struct {
-		Failure   bool   `json:"boot_failure"`
-		Exit      *int64 `json:"bcdedit_exit"`
-		Command   uint32 `json:"bcdedit_command"`
-		Verify    uint32 `json:"bcd_verify"`
-		Write     uint32 `json:"bcd_write"`
-		Fallback  uint32 `json:"fallback_issuer"`
-		Microsoft uint32 `json:"microsoft_issuer"`
-		Source    uint32 `json:"source_issuer"`
+		Failure          bool   `json:"boot_failure"`
+		Exit             *int64 `json:"bcdedit_exit"`
+		Command          uint32 `json:"bcdedit_command"`
+		Verify           uint32 `json:"bcd_verify"`
+		Write            uint32 `json:"bcd_write"`
+		Fallback         uint32 `json:"fallback_issuer"`
+		Microsoft        uint32 `json:"microsoft_issuer"`
+		Source           uint32 `json:"source_issuer"`
+		FallbackMatches  *bool  `json:"fallback_matches"`
+		MicrosoftMatches *bool  `json:"microsoft_matches"`
 	}
 	if !json.Valid(b) {
 		return nil
@@ -92,6 +111,16 @@ func bootShape(b []byte) error {
 	}
 	if shape.Write != 0 {
 		return fmt.Errorf("offline BCD device write refused: code=%d", shape.Write)
+	}
+	if shape.FallbackMatches != nil && shape.MicrosoftMatches != nil {
+		fallback, microsoft := 0, 0
+		if *shape.FallbackMatches {
+			fallback = 1
+		}
+		if *shape.MicrosoftMatches {
+			microsoft = 1
+		}
+		return fmt.Errorf("boot loaders refused: fallback_issuer=%d microsoft_issuer=%d source_issuer=%d fallback_matches=%d microsoft_matches=%d", shape.Fallback, shape.Microsoft, shape.Source, fallback, microsoft)
 	}
 	return fmt.Errorf("boot loaders refused: fallback_issuer=%d microsoft_issuer=%d source_issuer=%d", shape.Fallback, shape.Microsoft, shape.Source)
 }
