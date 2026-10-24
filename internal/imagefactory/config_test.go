@@ -241,3 +241,11 @@ func TestEligibleRefusesTemplateRunnerState(t *testing.T) {
 		}
 	}
 }
+
+func TestExitTypeNameAllowList(t *testing.T) {
+	for in, want := range map[string]string{"GracefulExit": "GracefulExit", "UnexpectedExit": "UnexpectedExit", "ForcedExit": "ForcedExit", "": "other", "guest text": "other"} {
+		if got := exitTypeName(in); got != want {
+			t.Fatalf("%q: got %q", in, got)
+		}
+	}
+}

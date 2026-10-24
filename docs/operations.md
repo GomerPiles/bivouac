@@ -405,6 +405,11 @@ about final installed WinRE state. Effective firmware trust and boot remain live
 
    Both print the build's facts or result as JSON. A Group Policy execution
    policy overrides the factory's own and can stop its scripts.
+   A guest that exits before preparation completes reports HCS's exit type
+   and status. For lab diagnosis, `image build --retain-failed` keeps a
+   failed build's workspace (guest absent, disks detached) so its child disk
+   can be inspected offline; remove it afterwards with
+   `bivouac image cleanup --config ... --build <id>`.
    Build script stdout contains only deliberate UTF-8 Console writes; the
    bootstrap discards incidental pipeline/host output and suppresses progress.
    Topology JSON is decoded strictly, without byte repair or substring recovery.

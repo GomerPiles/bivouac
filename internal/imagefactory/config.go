@@ -40,6 +40,8 @@ type Config struct {
 	Drivers        []string   `json:"drivers"`
 	ImageRoot      string     `json:"image_root"`
 	TimeoutSeconds int        `json:"timeout_seconds"`
+	// RetainFailed comes from the command line only (--retain-failed).
+	RetainFailed bool `json:"-"`
 }
 
 // DecodeConfig rejects unknown fields and trailing input without returning
@@ -326,4 +328,13 @@ func cleanupOwned(terminate func() error, absent func() error, detach func() err
 		return errors.Join(errors.New("build workspace retained: disk detach unconfirmed"), err)
 	}
 	return remove()
+}
+
+// exitTypeName passes only HCS's documented exit types into errors.
+func exitTypeName(t string) string {
+	switch t {
+	case "None", "GracefulExit", "ForcedExit", "UnexpectedExit", "Unknown":
+		return t
+	}
+	return "other"
 }
