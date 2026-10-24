@@ -1157,7 +1157,10 @@ ACL and deny-write handles, not hashed per job.
   use bounded agent commands with fixed PowerShell argument arrays and framed
   stdin, exclusively during build/lab work. Their bootstrap discards incidental
   pipeline and host streams and suppresses progress; deliberate Console writes
-  use UTF-8 without a BOM. Validation decodes the entire bounded stdout as one
+  use UTF-8 without a BOM. Guest script exit codes become the PowerShell process
+  exit code; terminating errors remain step 18. Without an explicit exit, the
+  last native exit code is propagated, or zero if none was set.
+  Validation decodes the entire bounded stdout as one
   JSON value with the expected types, without extracting or repairing bytes.
   Decode errors contain only numeric shape facts, never guest text.
   The build checks hardware D3D11, presentation and pixel readback, requires

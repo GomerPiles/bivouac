@@ -51,6 +51,13 @@ func localAgent(t *testing.T) guestagent.Dialer {
 	t.Setenv("PSModuleAnalysisCachePath", filepath.Join(temp, "ModuleAnalysisCache"))
 	t.Setenv("TEMP", temp)
 	t.Setenv("TMP", temp)
+	// A PowerShell 7 host can omit Windows PowerShell's module directory,
+	// hiding functions such as Get-FileHash from the 5.1 child.
+	system, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal("system directory unavailable")
+	}
+	t.Setenv("PSModulePath", filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"))
 	ctx, cancel := context.WithCancel(t.Context())
 	l := &localAgentListener{connections: make(chan io.ReadWriteCloser), closed: make(chan struct{})}
 	done := make(chan error, 1)
@@ -198,7 +205,7 @@ func TestGuestBootstrapSyntax(t *testing.T) {
 
 func TestGuestBootstrapExitContracts(t *testing.T) {
 	dial := localAgent(t)
-	for _, code := range []int{1, 11, 14, 18, 25, 29, 37, 255} {
+	for _, code := range []int{1, 11, 14, 16, 18, 25, 29, 37, 255} {
 		_, err := guestRun(t.Context(), dial, fmt.Sprintf("exit %d", code), nil)
 		if err == nil || err.Error() != fmt.Sprintf("fixed guest operation exited at step %d", code) {
 			t.Fatal("exit contract changed")
@@ -215,6 +222,92 @@ func TestGuestBootstrapExitContracts(t *testing.T) {
 		if !errors.As(err, &exit) || exit.Code != 18 || out.Len() != 0 {
 			t.Fatal("frame rejection changed")
 		}
+	}
+}
+
+func TestGuestBootstrapPinnedExitContracts(t *testing.T) {
+	dial := localAgent(t)
+	const entry = `param($data);if((Get-FileHash -LiteralPath $data.path -Algorithm SHA256).Hash -ine $data.sha256){exit 14};& $data.path $data`
+	const nativeFailure = `& (Join-Path $PSHOME 'powershell.exe') @('-NoProfile','-NonInteractive','-Command','exit 3');`
+	for _, tc := range []struct {
+		name, script, output string
+		code                 int
+	}{
+		{"pinned-exit-16", `exit 16`, "", 16},
+		{"pinned-exit-1", `exit 1`, "", 1},
+		{"pinned-exit-255", `exit 255`, "", 255},
+		{"pinned-catch-exit", `try{throw 'private-error'}catch{exit 29}`, "", 29},
+		{"pinned-throw", `throw 'private-error'`, "", 18},
+		{"pinned-explicit-success", nativeFailure + `exit 0`, "", 0},
+		{"pinned-native-tail", nativeFailure, "", 3},
+		{"pinned-no-exit", `[Console]::Out.Write('ok')`, "ok", 0},
+		{"inline-exit-14", `exit 14`, "", 14},
+		{"inline-no-exit", `[Console]::Out.Write('ok')`, "ok", 0},
+		{"inline-no-output", ``, "", 0},
+		{"inline-explicit-success", nativeFailure + `exit 0`, "", 0},
+		{"inline-native-tail", nativeFailure, "", 3},
+		{"inline-throw", `throw 'private-error'`, "", 18},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pinned.ps1")
+			if err := os.WriteFile(path, []byte(tc.script), 0600); err != nil {
+				t.Fatal(err)
+			}
+			data := map[string]string{"path": path, "sha256": hashBytes([]byte(tc.script))}
+			invoked := entry
+			if strings.HasPrefix(tc.name, "inline-") {
+				invoked = tc.script
+			}
+			output, err := runBootstrap(t, dial, guestBootstrap, invoked, data)
+			code := 0
+			if err != nil {
+				var exit *guestagent.ExitError
+				if !errors.As(err, &exit) {
+					t.Fatal("real bootstrap did not return an exit status")
+				}
+				code = exit.Code
+			}
+			if code != tc.code || string(output) != tc.output {
+				t.Fatalf("process exit=%d want=%d stdout_len=%d want_len=%d", code, tc.code, len(output), len(tc.output))
+			}
+			// Replay the real status and bytes through framing and guestRun's
+			// production error mapping, including fragmented exit-frame bytes.
+			fake := fakeFactoryAgentFrames(func([]string, []byte) ([]byte, int) { return output, code }, 1, 3)
+			got, err := guestRun(t.Context(), fake, invoked, data)
+			if code == 0 {
+				if err != nil || !bytes.Equal(got, output) {
+					t.Fatal("successful pinned script changed in framing")
+				}
+			} else if got != nil || err == nil || err.Error() != fmt.Sprintf("fixed guest operation exited at step %d", code) {
+				t.Fatal("pinned script failure lost in framing")
+			}
+			if tc.code == 16 {
+				// The old bootstrap turns this exact pinned failure into the
+				// successful empty output seen by the topology decoder.
+				unpropagated := strings.Replace(guestBootstrap, ";$global:LASTEXITCODE=0", "", 1)
+				unpropagated = strings.Replace(unpropagated, ";exit [int]$global:LASTEXITCODE", "", 1)
+				b, err := runBootstrap(t, dial, unpropagated, entry, data)
+				if err != nil || len(b) != 0 {
+					t.Fatal("old bootstrap did not reproduce successful empty output")
+				}
+				t.Log("unpropagated process_exit=0 stdout_len=0; fixed process_exit=16 stdout_len=0")
+				fake = fakeFactoryAgent(func(_ []string, input []byte) ([]byte, int) {
+					if len(input) == 0 {
+						return nil, 0
+					} // version proof
+					return output, code
+				})
+				err = prepareGuestWithDial(t.Context(), testConfig(), &record{}, fake)
+				if err == nil || !strings.Contains(err.Error(), "fixed guest operation exited at step 16") || strings.Contains(err.Error(), "invalid topology report") {
+					t.Fatal("empty failure was misreported as malformed topology")
+				}
+			}
+		})
+	}
+	// A no-exit script must not inherit a native result from bootstrap setup.
+	b, err := runBootstrap(t, dial, nativeFailure+guestBootstrap, ``, nil)
+	if err != nil || len(b) != 0 {
+		t.Fatal("bootstrap retained a stale native status")
 	}
 }
 
