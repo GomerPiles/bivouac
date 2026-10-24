@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Every host helper and its DISM/BCDBoot descendants are atomically born in a
+// Every host helper and its DISM/BCDEdit descendants are atomically born in a
 // private kill-on-close job. The creating process owns the only job handle;
 // cancellation and factory death cannot leave an apply running independently.
 // A deterministic name prevents cleanup overtaking an older job's termination.

@@ -278,14 +278,30 @@ The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
 An MSR that GPT initialization adds by itself is removed first and recorded
 as `automatic_msr_removed`.
 It verifies disk identity before initialization, applies the selected image
-with DISM integrity checking, and runs BCDBoot for UEFI on the owned ESP.
-BCDBoot's `/s` uses a recorded temporary letter, removed on success/failure
-when its ownership can be proved. `/offline /nofirmwaresync` make boot-file
-selection explicit and disable host firmware synchronization;
-`/bootex` is omitted for the existing MicrosoftWindows HCS firmware template.
-The reference image's normal EFI boot manager has a 2011-PCA signer.
-Both ESP loaders require valid Authenticode signatures from the expected 2011
-issuer; fixed issuer names and BCDBoot/DISM versions are recorded.
+with DISM integrity checking, then copies the applied image's normal EFI files,
+fonts and resources to the ESP. It creates the fallback bootx64.efi, promotes
+boot.pnd.stl to boot.stl and creates the empty EFI\Microsoft\Recovery directory.
+EFI_EX is excluded, and bounded traversal refuses links.
+BCDBoot is not invoked: lab runs copied boot files but collided with the host's
+BCD00000000 hive while creating the target store.
+Instead, BCDEdit edits a copy of the image's BCD-Template. Every command names
+the owned ESP store with `/store`; no system-store or firmware objects are used.
+Template OS loaders are removed by their offreg-discovered GUIDs. The recorded
+new loader uses the image locale, bootloadersettings inheritance, nx OptIn,
+Standard menu and recovery disabled. Bootmgr uses that loader as default and
+displayorder, timeout zero. Two recorded temporary letters give the documented
+ESP/Windows partition references and are removed on success/failure.
+Both ESP loaders and the applied source boot manager require valid signatures
+from the expected 2011 issuer. Read-only offreg checks the resulting store's
+default, paths, systemroot, recovery flag, unique loader and GPT device GUID
+bytes before either letter is removed. The manifest records method, loader GUID,
+verification, issuer names and BCDEdit/DISM versions.
+See Microsoft's [UEFI BCD settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi)
+and [boot option values](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set).
+The Recovery directory is a sibling of Boot, matching Microsoft's
+[EFI recovery location](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/add-a-hardware-recovery-button-to-start-windows-re);
+the copy log names its creation without spelling out the path. No recovery
+BCD or WinRE registration is created by the factory.
 At apply time there is no recovery partition and the factory does not register
 WinRE. Setup may register it on the OS volume; the manifest makes no claim
 about final installed WinRE state. Effective firmware trust and boot remain live gates.
@@ -398,7 +414,7 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records ISO identity,
-   selected image metadata, host DISM/BCDBoot versions and options, verified boot
+   selected image metadata, host DISM/BCDEdit versions, boot method/loader GUID, verified boot
    issuer generations, apply-time WinRE policy,
    disk/partition GUIDs and guest Secure Boot/TPM presence/readiness, plus
    asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and
@@ -424,30 +440,31 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    ```
 
    Cleanup also releases recorded ISO/base attachments, access paths and any
-   temporary letter after native absence. It refuses a surviving host-worker
+   temporary letters after native absence. It refuses a surviving host-worker
    job or a build that is still running, and never removes a published image.
-   Host-worker jobs cover the helper/DISM processes, not WMI providers or
+   Host-worker jobs cover the helper/DISM/BCDEdit processes, not WMI providers or
    storage-service operations; uncertain detach retains the workspace.
    Temporary-letter selection skips live letters and all MountedDevices
    reservations, including absent devices; boot checks reservations again.
    After detach or reboot, cleanup retains the workspace only for a GPT mapping
-   whose data is exactly `DMIO:ID:` plus the recorded ESP GUID's Windows binary
+   whose data is exactly `DMIO:ID:` plus the corresponding recorded ESP or Windows partition GUID's binary
    bytes, or when mount-manager state cannot be read. Foreign mappings remain
    untouched and do not retain the workspace.
-   The build record and cleanup JSON contain `retained_letter`.
-   The operator must verify that mapping against the recorded ESP GUID before
+   The build record and cleanup JSON contain the `retained_letters` array.
+   The operator must verify each mapping against its recorded partition GUID before
    resolving it, then retry cleanup; do not delete a letter based on its name.
 
 Before a separately authorized live build, compare `bcdedit /enum firmware`
-before and after BCDBoot. Compare entry counts and identifier sets in memory;
+before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
-Require no firmware-entry change and successful use of both `/offline` and
-`/nofirmwaresync` together. Also prove the exact three-partition layout,
-2011-signed ESP loaders, Secure Boot/TPM in the guest and interrupted-apply
+Require no firmware-entry change. Build 6 must prove explicit-store BCDEdit
+accepts the copied template, the generated store boots after both letters
+are removed, and offreg verifies the real GPT device encodings.
+Also prove the 2011-signed ESP loaders, Secure Boot/TPM in the guest and interrupted-apply
 cleanup, including retry from another session and after a host reboot.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
-GUID paths (`\\?\Volume{GUID}\...`); their acceptance by DISM, including the
-SWM wildcard, is a live gate. An optical ISO volume has no ordinary Storage
+GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.
+The SWM wildcard remains a live gate. An optical ISO volume has no ordinary Storage
 partition access-path interface; a folder mount would require another native
 mount API and lifetime record, so this round keeps the volume path.
 

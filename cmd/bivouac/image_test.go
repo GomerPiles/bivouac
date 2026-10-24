@@ -35,8 +35,8 @@ func TestPublishedImageCleanupWarning(t *testing.T) {
 
 func TestImageCleanupRetainedLetterOutput(t *testing.T) {
 	var out bytes.Buffer
-	cause := &imagefactory.RetainedLetterError{Letter: "Z"}
-	if e := writeImageCleanupResult(&out, "test-build", cause); !errors.Is(e, cause) || !strings.Contains(out.String(), `"retained_letter":"Z"`) {
+	cause := &imagefactory.RetainedLettersError{Letters: []string{"Z", "Y"}}
+	if e := writeImageCleanupResult(&out, "test-build", cause); !errors.Is(e, cause) || !strings.Contains(out.String(), `"retained_letters":["Z","Y"]`) {
 		t.Fatal("cleanup operator output lost retained letter")
 	}
 	out.Reset()
