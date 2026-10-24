@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"os"
 	"os/exec"
@@ -58,6 +59,28 @@ func labValidationBootstrapOutput(t *testing.T, shell string) {
 	}
 	if string(output.pending) != `{"guest_ready":true}` || len(output.steps) != 4 {
 		t.Fatal("lab bootstrap contaminated report or lost numeric markers")
+	}
+	// A pinned file's exit must reach the lab as a failure, alongside only the
+	// bootstrap's intentional numeric markers and no report bytes.
+	pinned := filepath.Join(temp, "pinned.ps1")
+	if err := os.WriteFile(pinned, []byte("exit 16"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err = json.Marshal(map[string]any{"script": `param($data);& $data.path`, "data": map[string]any{"require_setup": false, "path": pinned}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input = append(binary.LittleEndian.AppendUint32(nil, uint32(len(payload))), payload...) // #nosec G115 -- fixed small fixture.
+	failed := exec.CommandContext(ctx, path, cmd.Args[1:]...)
+	failed.Env, failed.SysProcAttr, failed.Stdin = cmd.Env, cmd.SysProcAttr, bytes.NewReader(input)
+	b, err = failed.Output()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 16 {
+		t.Fatal("lab bootstrap lost pinned script exit")
+	}
+	output = &validationOutput{steps: map[string]int64{}, begun: time.Now()}
+	if _, err := output.Write(b); err != nil || len(output.pending) != 0 || len(output.steps) != 4 {
+		t.Fatal("failed lab validation emitted report bytes or lost markers")
 	}
 }
 

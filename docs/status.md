@@ -192,6 +192,11 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
+The guest bootstrap used to discard a pinned script's nonzero exit code, so a
+validation step failure surfaced as an empty, invalid topology report.
+PowerShell 5.1 tests reproduce that and cover the fix, which propagates script
+exit codes; it has local coverage only.
+
 The runtime and factory agent switch is code-complete with fake-agent, offline-copy and relay tests;
 live validation is pending a matching image. Tests cover exact receive metadata,
 readiness ordering, command/output bounds, terminal protocol refusal, transient
