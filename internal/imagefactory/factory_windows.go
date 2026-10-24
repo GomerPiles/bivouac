@@ -429,29 +429,9 @@ func detachOwnedWith(ctx context.Context, r *record, run func(context.Context, s
 	if len(r.StorageIntents) == 0 {
 		return nil
 	}
-	b, err := run(ctx, detachDisk, r.scriptData(), true)
+	_, err := run(ctx, detachDisk, r.scriptData(), false)
 	r.hostError("detach", err)
-	if err != nil {
-		return err
-	}
-	var result struct {
-		RetainedLetters []string `json:"retained_letters"`
-	}
-	if json.Unmarshal(b, &result) != nil || result.RetainedLetters == nil || len(result.RetainedLetters) > 2 {
-		return errors.New("invalid storage cleanup result")
-	}
-	seen := map[string]bool{}
-	for _, letter := range result.RetainedLetters {
-		if !validTemporaryLetter(letter) || seen[letter] || (letter != r.TemporaryLetter && letter != r.WindowsTemporaryLetter) {
-			return errors.New("invalid storage cleanup letter")
-		}
-		seen[letter] = true
-	}
-	r.RetainedLetters = result.RetainedLetters
-	if len(r.RetainedLetters) != 0 {
-		return &RetainedLettersError{Letters: r.RetainedLetters}
-	}
-	return nil
+	return err
 }
 func removeOwned(r *record) error {
 	if err := checkWorkspace(r); err != nil {

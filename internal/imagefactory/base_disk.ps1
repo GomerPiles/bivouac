@@ -5,14 +5,6 @@ function Emit-Result($Value){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[C
 # Windows PowerShell 5.1 turns a native tool's stderr into a terminating error
 # under Stop, before its exit code can be read. The exit code is the contract.
 function Invoke-ImageTool([string]$Path,[string[]]$Arguments){$ErrorActionPreference='Continue';& $Path @Arguments *> $null;return [int]$LASTEXITCODE}
-function Get-MountedDeviceNames{
- $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
- if(!$key){throw 'mount-manager state unavailable'}
- try{return $key.GetValueNames()}finally{$key.Dispose()}
-}
-function Get-ReservedDriveLetters{
- foreach($name in @(Get-MountedDeviceNames)){if($name -match '^\\DosDevices\\([D-Z]):$'){$Matches[1]}}
-}
 $espType='{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}';$msrType='{e3c9e316-0b5c-4db8-817d-f92df00215ae}';$basicType='{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'
 # Numbers only: partition type codes (1 ESP, 2 MSR, 3 basic data, 0 other),
 # MiB offsets/sizes and whether each GUID is the one created in that slot.
@@ -51,12 +43,7 @@ try{
   $image=Mount-DiskImage -ImagePath $iso -Access ReadOnly -NoDriveLetter -PassThru
   $volumes=@($image|Get-Volume)
   if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){throw 'media volume'}
-  $used=@(Get-Volume|Where-Object DriveLetter|ForEach-Object {[string]$_.DriveLetter})
-  $used+=@(Get-PSDrive -PSProvider FileSystem|ForEach-Object {$_.Name})
-  $used+=@(Get-ReservedDriveLetters)
-  $letters=@();foreach($candidate in [char[]]'ZYXWVUTSRQPONMLKJIHGFED'){if([string]$candidate -notin $used){$letters+=[string]$candidate;if($letters.Count -eq 2){break}}}
-  if($letters.Count -ne 2){throw 'temporary letters unavailable'}
-  Emit-Result @{volume=$volumes[0].Path;letter=$letters[0];windows_letter=$letters[1]};exit 0
+  Emit-Result @{volume=$volumes[0].Path};exit 0
  }
  if((Get-Item -Force -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'base link'}
  $step=30
@@ -136,36 +123,26 @@ try{
  }
  if($data.mode -eq 'boot'){
   $step=60
-  if($data.letter -ceq $data.windows_letter -or $data.loader_guid -cnotmatch '^\{[0-9a-f-]{36}\}$' -or $data.locale -cnotmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$'){throw 'boot configuration'}
-  foreach($letter in @($data.letter,$data.windows_letter)){
-   if($letter -cnotmatch '^[D-Z]$' -or (Get-Volume|Where-Object DriveLetter -eq $letter) -or (Get-PSDrive -PSProvider FileSystem|Where-Object Name -eq $letter) -or $letter -in @(Get-ReservedDriveLetters)){throw 'letter unavailable'}
-  }
-  $espAdded=$false;$windowsAdded=$false
-  try{
-   $step=61
-   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath ($data.letter+':\');$espAdded=$true
-   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp[0].PartitionNumber -AccessPath ($data.windows_letter+':\');$windowsAdded=$true
-   $step=62
-   Copy-BootFiles $win $esp
-   $step=63
-   $store=Join-Path $esp 'EFI\Microsoft\Boot\BCD'
-   Set-BootStore $store $data
-   $step=64
-   foreach($name in @('EFI\Boot\bootx64.efi','EFI\Microsoft\Boot\bootmgfw.efi','EFI\Microsoft\Boot\BCD','EFI\Microsoft\Boot\boot.stl')){if(!(Test-Path -LiteralPath (Join-Path $esp $name) -PathType Leaf)){throw 'boot artifact absent'}}
-   $codes=@{fallback=(Get-IssuerCode (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-IssuerCode (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'));source=(Get-IssuerCode (Join-Path $win 'Windows\Boot\EFI\bootmgfw.efi'))}
-   if($codes.fallback -ne 1 -or $codes.microsoft -ne 1 -or $codes.source -ne 1){Emit-Result @{boot_failure=$true;fallback_issuer=$codes.fallback;microsoft_issuer=$codes.microsoft;source_issuer=$codes.source};throw 'boot issuer differs from 2011 selection'}
-   $issuers=@{fallback='windows_production_pca_2011';microsoft='windows_production_pca_2011';source='windows_production_pca_2011'}
-   $step=65
-   $verification=Test-BootStore $store $data
-   if($verification -ne 0){Emit-Result @{boot_failure=$true;bcd_verify=[uint32]$verification};throw 'offline boot verification'}
-   $v=(Get-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\bcdedit.exe')).VersionInfo
-   $bootVersion=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)
-  }finally{
-   # Always try both removals, including when one removal itself fails.
-   try{if($windowsAdded){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp[0].PartitionNumber -AccessPath ($data.windows_letter+':\')}}finally{
-    if($espAdded){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep[0].PartitionNumber -AccessPath ($data.letter+':\')}
-   }
-  }
+  if($data.loader_guid -cnotmatch '^\{[0-9a-f-]{36}\}$' -or $data.locale -cnotmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$'){throw 'boot configuration'}
+  $step=61
+  Copy-BootFiles $win $esp
+  $step=62
+  $store=Join-Path $esp 'EFI\Microsoft\Boot\BCD'
+  Set-BootStore $store $data
+  $step=63
+  Assert-BootPath $esp ($store+'.plain-gpt')
+  $written=Set-BootDevices $store $data
+  if($written -ne 0){Emit-Result @{boot_failure=$true;bcd_write=[uint32]$written};throw 'offline boot device write'}
+  $step=64
+  foreach($name in @('EFI\Boot\bootx64.efi','EFI\Microsoft\Boot\bootmgfw.efi','EFI\Microsoft\Boot\BCD','EFI\Microsoft\Boot\boot.stl')){if(!(Test-Path -LiteralPath (Join-Path $esp $name) -PathType Leaf)){throw 'boot artifact absent'}}
+  $codes=@{fallback=(Get-IssuerCode (Join-Path $esp 'EFI\Boot\bootx64.efi'));microsoft=(Get-IssuerCode (Join-Path $esp 'EFI\Microsoft\Boot\bootmgfw.efi'));source=(Get-IssuerCode (Join-Path $win 'Windows\Boot\EFI\bootmgfw.efi'))}
+  if($codes.fallback -ne 1 -or $codes.microsoft -ne 1 -or $codes.source -ne 1){Emit-Result @{boot_failure=$true;fallback_issuer=$codes.fallback;microsoft_issuer=$codes.microsoft;source_issuer=$codes.source};throw 'boot issuer differs from 2011 selection'}
+  $issuers=@{fallback='windows_production_pca_2011';microsoft='windows_production_pca_2011';source='windows_production_pca_2011'}
+  $step=65
+  $verification=Test-BootStore $store $data
+  if($verification -ne 0){Emit-Result @{boot_failure=$true;bcd_verify=[uint32]$verification};throw 'offline boot verification'}
+  $v=(Get-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\bcdedit.exe')).VersionInfo
+  $bootVersion=('{0}.{1}.{2}.{3}' -f $v.FileMajorPart,$v.FileMinorPart,$v.FileBuildPart,$v.FilePrivatePart)
   # Apply-time policy only: no recovery partition; the factory does not register
   # WinRE. Windows setup may subsequently configure it on the Windows volume.
   Emit-Result @{bcdedit_version=$bootVersion;boot_issuers=$issuers;bcd_verified=$true};exit 0

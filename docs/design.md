@@ -1147,9 +1147,13 @@ ACL and deny-write handles, not hashed per job.
   No resume object is created: disposable CI guests always cold boot and never
   hibernate. PR 3 must explicitly disable hibernation and fast startup in the
   guest. No memdiag object is created.
-  Two journalled temporary letters provide documented `partition=X:`
-  references for ESP and Windows; both are removed on success and failure.
-  No firmware objects or system-store commands are used.
+  BCDEdit sets no device elements: on a host-attached VHD, its partition
+  references encode a nested host VHD path that cannot resolve in the guest.
+  Offreg writes the three device elements as exact 88-byte plain GPT
+  partition devices using the recorded partition/disk GUIDs in Windows byte
+  order. It requires absent element keys, saves a new sibling hive, closes
+  the source and atomically replaces it on the owned ESP. No temporary
+  drive letters, firmware objects or system-store commands are used.
   The final table must be exactly three partitions in offset order with the
   recorded GUIDs, ESP/MSR/basic-data types and expected sizes. If GPT
   initialization creates its own MSR, the factory removes that one partition
@@ -1160,16 +1164,18 @@ ACL and deny-write handles, not hashed per job.
   valid Authenticode signatures from the expected 2011 issuer.
   Read-only offreg verification requires exactly those two objects and checks
   their types, descriptions, every set element, single-loader displayorder,
-  zero timeout, locales and both disk/partition GUID byte identities in all
-  three device elements. Class-4 template elements and every unknown element
+  zero timeout, locales and byte-for-byte equality of all three complete plain
+  GPT device elements, including their type, length and reserved zero bytes.
+  Nested VHD devices refuse even if they contain the recorded GUIDs.
+  Class-4 template elements and every unknown element
   refuse, including inherit/resume references. Failures expose numeric codes,
   never hive data. The manifest records the scratch-store method, loader GUID, verified flag, fixed
   issuer names and BCDEdit/DISM versions.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
-- **Ownership and cleanup:** ISO mount, base/child attachment, access paths and
-  both temporary letters have durable intents before creation. Partitions share the
+- **Ownership and cleanup:** ISO mount, base/child attachment and access paths
+  have durable intents before creation. Partitions share the
   owned base attachment's lifetime; their GUIDs are recorded in the layout.
   Fixed host helper processes and their DISM/BCDEdit descendants are atomically
   assigned to a private kill-on-close job named in the Global namespace from
@@ -1179,12 +1185,6 @@ ACL and deny-write handles, not hashed per job.
   worker. It proves guest absence, removes only recorded access paths on the
   owned attachments (including RAW/partitionless bases), confirms detach, then
   removes workspace files. Storage uncertainty retains the workspace.
-  Temporary-letter selection excludes live letters and every mount-manager
-  reservation, including absent devices; boot rechecks reservations before use.
-  After detach/reboot, only a GPT mapping with the exact DMIO:ID: prefix and
-  corresponding recorded ESP or Windows GUID bytes retains the workspace for operator resolution.
-  Unreadable mount-manager state also retains it. Cleanup reports retained_letters;
-  known foreign mappings remain untouched and do not retain the workspace.
   No provider service journal or CI mode is touched. Applied-image TOTALBYTES,
   ISO size and child/flatten headroom replace the template-copy space estimate.
 - **Inspection gate:** before boot, the child must be generalized to OOBE,

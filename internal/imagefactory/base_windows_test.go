@@ -54,21 +54,18 @@ func TestBaseFailureIntents(t *testing.T) {
 							t.Fatal("unrecorded native object", name)
 						}
 					}
-					if r.TemporaryLetter != "Z" || r.WindowsTemporaryLetter != "Y" {
-						t.Fatal("temporary letter not recorded")
-					}
 				}
 				if mode == failure {
 					return nil, &HostScriptError{Step: 50}
 				}
 				switch mode {
 				case "media":
-					return []byte(`{"volume":"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\","letter":"Z","windows_letter":"Y"}`), nil
+					return []byte(`{"volume":"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\"}`), nil
 				case "layout":
 					return []byte(`{"disk_guid":"{11111111-1111-1111-1111-111111111111}","esp_guid":"{22222222-2222-2222-2222-222222222222}","msr_guid":"{33333333-3333-3333-3333-333333333333}","windows_guid":"{44444444-4444-4444-4444-444444444444}"}`), nil
 				case "boot":
-					if !persisted["temporary_letter"] || !persisted["windows_temporary_letter"] || !validGUID(r.Manifest.Media.LoaderGUID) {
-						t.Fatal("unrecorded temporary letter")
+					if !validGUID(r.Manifest.Media.LoaderGUID) {
+						t.Fatal("unrecorded loader identity")
 					}
 					return []byte(`{"bcdedit_version":"10.0.26300.1","bcd_verified":true,"boot_issuers":{"fallback":"windows_production_pca_2011","microsoft":"windows_production_pca_2011","source":"windows_production_pca_2011"}}`), nil
 				case "apply":
@@ -90,14 +87,14 @@ func TestBaseFailureIntents(t *testing.T) {
 			if failure == "" && !slices.Equal(calls, []string{"media", "create", "layout", "apply", "boot", "detach"}) {
 				t.Fatal(calls)
 			}
-			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "scratch_bcdedit_uefi_2011" || !r.Manifest.Media.BCDVerified) {
+			if failure == "" && (r.Manifest.Media.WinRE != "apply_time_no_recovery_partition_not_registered_by_factory" || r.Manifest.Media.DISMVersion == "" || !numericVersion(r.Manifest.Media.BCDEditVersion) || r.Manifest.Media.BootIssuers.Source != "windows_production_pca_2011" || r.Manifest.Media.BootMethod != "scratch_bcdedit_offreg_plain_gpt_uefi_2011" || !r.Manifest.Media.BCDVerified) {
 				t.Fatal("missing provenance")
 			}
 			if failure != "" && failure != "save" {
 				removed := false
 				e := cleanupOwned(nil, func() error { return nil }, func() error {
 					return detachOwnedWith(t.Context(), r, func(_ context.Context, script string, input any, output bool) ([]byte, error) {
-						if script != detachDisk || !output {
+						if script != detachDisk || output {
 							t.Fatal("wrong cleanup helper")
 						}
 						var intents map[string]bool
@@ -109,7 +106,7 @@ func TestBaseFailureIntents(t *testing.T) {
 								t.Fatal("cleanup lost persisted ownership", name)
 							}
 						}
-						return []byte(`{"retained_letters":[]}`), nil
+						return []byte(`{}`), nil
 					})
 				}, func() error { removed = true; return nil })
 				if e != nil || !removed {
@@ -120,23 +117,6 @@ func TestBaseFailureIntents(t *testing.T) {
 	}
 }
 
-func TestRetainedLetterStopsDeletionAndPersists(t *testing.T) {
-	r := &record{TemporaryLetter: "Z", WindowsTemporaryLetter: "Y", StorageIntents: map[string]bool{"temporary_letter": true, "windows_temporary_letter": true}}
-	removed := false
-	e := cleanupOwned(nil, func() error { return nil }, func() error {
-		return detachOwnedWith(t.Context(), r, func(context.Context, string, any, bool) ([]byte, error) {
-			return []byte(`{"retained_letters":["Z","Y"]}`), nil
-		})
-	}, func() error { removed = true; return nil })
-	var retained *RetainedLettersError
-	b, _ := json.Marshal(r)
-	if !errors.As(e, &retained) || !slices.Equal(retained.Letters, []string{"Z", "Y"}) || removed || !strings.Contains(string(b), `"retained_letters":["Z","Y"]`) {
-		t.Fatal("ambiguous mapping lost ownership/diagnostics")
-	}
-}
-
-// The real helper, not the fixture's replacement: a tool that writes to
-// stderr must still report its own exit code under Windows PowerShell 5.1.
 func TestImageToolStderrKeepsExitCode(t *testing.T) {
 	start := strings.Index(baseDisk, "function Invoke-ImageTool(")
 	end := strings.Index(baseDisk[start:], "\n") + start

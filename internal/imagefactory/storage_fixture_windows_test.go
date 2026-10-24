@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -25,8 +26,8 @@ const storageFixturePS = `
   $sizes=@(200MB,16MB,1GB);$offsets=@(1MB,201MB,217MB)
   for($i=0;$i -lt $state.parts;$i++){
    $access=@('Q:\')
-   if($i -eq 0){if($state.esp_access){$access+=((Join-Path $fixture.workspace 'base-esp')+'\')};if($state.letter){$access+='Z:\'}}
-   if($i -eq 2){if($state.windows_letter){$access+='Y:\'};if($state.windows_access){$access+=((Join-Path $fixture.workspace 'base-windows')+'\')};if($state.inspection_access){$access+=((Join-Path $fixture.workspace 'inspect-mount')+'\')};if($state.staging_access){$access+=((Join-Path $fixture.workspace 'setup-private\mount')+'\')}}
+   if($i -eq 0){if($state.esp_access){$access+=((Join-Path $fixture.workspace 'base-esp')+'\')}}
+   if($i -eq 2){if($state.windows_access){$access+=((Join-Path $fixture.workspace 'base-windows')+'\')};if($state.inspection_access){$access+=((Join-Path $fixture.workspace 'inspect-mount')+'\')};if($state.staging_access){$access+=((Join-Path $fixture.workspace 'setup-private\mount')+'\')}}
    [pscustomobject]@{PartitionNumber=($i+1);Guid=$fixture.guids[$i];GptType=$types[$i];Size=$sizes[$i];Offset=$offsets[$i];AccessPaths=$access}
   }
  }
@@ -81,16 +82,12 @@ const storageFixturePS = `
  }
  function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
   if($DiskNumber -ne 123){throw 'disk number'}
-  if($AccessPath -eq 'Z:\'){Trace 'letter';$state.letter=$true}
-  elseif($AccessPath -eq 'Y:\'){Trace 'windows_letter';$state.windows_letter=$true}
-  elseif($AccessPath -eq ((Join-Path $fixture.workspace 'base-windows')+'\')){Trace 'access_windows';$state.windows_access=$true}
+  if($AccessPath -eq ((Join-Path $fixture.workspace 'base-windows')+'\')){Trace 'access_windows';$state.windows_access=$true}
   elseif($AccessPath -eq ((Join-Path $fixture.workspace 'base-esp')+'\')){Trace 'access_esp';$state.esp_access=$true}
   else{throw 'foreign access path'};Save-Fixture
  }
  function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
   switch($AccessPath){
-   'Z:\' {Trace 'remove_letter';$state.letter=$false}
-   'Y:\' {Trace 'remove_windows_letter';$state.windows_letter=$false}
    ((Join-Path $fixture.workspace 'base-windows')+'\') {Trace 'remove_windows';$state.windows_access=$false}
    ((Join-Path $fixture.workspace 'base-esp')+'\') {Trace 'remove_esp';$state.esp_access=$false}
    ((Join-Path $fixture.workspace 'inspect-mount')+'\') {Trace 'remove_inspection';$state.inspection_access=$false}
@@ -105,10 +102,9 @@ const storageFixturePS = `
  }
  function Get-Volume {
   $path=$fixture.volume;if($fixture.refuse -eq 'media_changed'){$path='\\?\Volume{ffffffff-ffff-ffff-ffff-ffffffffffff}\'}
-  $letter='';if($fixture.refuse -eq 'letter_collision'){$letter='Z'}
+  $letter=''
   [pscustomobject]@{Path=$path;DriveLetter=$letter}
  }
- function Get-PSDrive {param($PSProvider)}
  function Test-Path {param($LiteralPath,$PathType)
   if($LiteralPath -like '*\base-esp\EFI\Boot\bootx64.efi' -and $fixture.refuse -eq 'missing_artifact'){return $false}
   Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath
@@ -132,16 +128,7 @@ const storageFixturePS = `
   switch($fixture.refuse){'unsigned' {$status='NotSigned'};'invalid_signature' {$status='HashMismatch'};'issuer2023' {$issuer='CN=Windows UEFI CA 2023, O=Microsoft Corporation'};'unknown_issuer' {$issuer='CN=Unrecognized'};'source_unsigned' {if($LiteralPath -like '*\base-windows\*'){$status='NotSigned'}}}
   [pscustomobject]@{Status=$status;SignerCertificate=[pscustomobject]@{Issuer=$issuer}}
  }
- function Get-MountedDeviceNames{if($fixture.refuse -eq 'mapping_unreadable'){throw 'unavailable'};$fixture.reservations}
- function Get-MountedDeviceMapping([string]$Letter){
-  if($fixture.refuse -eq 'mapping_unreadable'){throw 'unavailable'}
-  if($fixture.foreign_mapping){return ,([byte[]]([Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+([Guid]'{ffffffff-ffff-ffff-ffff-ffffffffffff}').ToByteArray()))}
-  $index=0;$owned=$state.letter -or $fixture.stale_esp
-  if($Letter -eq 'Y'){$index=2;$owned=$state.windows_letter -or $fixture.stale_windows}
-  if($fixture.mapping_swap){$index=2-$index}
-  if($owned -or $fixture.stale_mapping){return ,([byte[]]([Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+([Guid]$fixture.guids[$index]).ToByteArray()))}
-  return $null
- }
+ function Set-BootDevices([string]$Store,$Data){Trace 'write_devices';return [uint32]$fixture.write}
  function Test-BootStore([string]$Store,$Data){return [uint32]$fixture.verify}
 `
 
@@ -166,7 +153,7 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 	}
 	writeFixtureJSON(t, filepath.Join(workspace, "owner.json"), map[string]string{"build_id": id, "workspace": workspace})
 	f := &storageFixture{t: t, workspace: workspace, root: root, id: id, optionsPath: filepath.Join(root, "fixture.json"), statePath: filepath.Join(root, "state.json"), tracePath: filepath.Join(root, "trace.txt")}
-	f.options = map[string]any{"workspace": workspace, "state": f.statePath, "trace": f.tracePath, "fail": "", "fail_after": "", "refuse": "", "table": "", "auto": "", "stale_mapping": false, "disk_guid": "{11111111-1111-1111-1111-111111111111}", "guids": []string{"{22222222-2222-2222-2222-222222222222}", "{33333333-3333-3333-3333-333333333333}", "{44444444-4444-4444-4444-444444444444}"}, "volume": `\\?\Volume{55555555-5555-5555-5555-555555555555}\`}
+	f.options = map[string]any{"workspace": workspace, "state": f.statePath, "trace": f.tracePath, "fail": "", "fail_after": "", "refuse": "", "table": "", "auto": "", "disk_guid": "{11111111-1111-1111-1111-111111111111}", "guids": []string{"{22222222-2222-2222-2222-222222222222}", "{33333333-3333-3333-3333-333333333333}", "{44444444-4444-4444-4444-444444444444}"}, "volume": `\\?\Volume{55555555-5555-5555-5555-555555555555}\`}
 	later := mode != "layout" && mode != "media"
 	style := "RAW"
 	parts := 0
@@ -174,8 +161,7 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 		style = "GPT"
 		parts = 3
 	}
-	f.state = map[string]any{"style": style, "parts": parts, "offline": true, "base_attached": later, "iso_attached": mode != "media", "child_attached": false, "windows_access": later, "esp_access": later, "inspection_access": false, "staging_access": false, "letter": false, "auto": "", "tool_args": []string{}}
-	f.state["windows_letter"] = false
+	f.state = map[string]any{"style": style, "parts": parts, "offline": true, "base_attached": later, "iso_attached": mode != "media", "child_attached": false, "windows_access": later, "esp_access": later, "inspection_access": false, "staging_access": false, "auto": "", "tool_args": []string{}}
 	f.state["tool_calls"] = []any{}
 	if later {
 		createBootFixtureFiles(t, workspace)
@@ -195,7 +181,7 @@ func writeFixtureJSON(t *testing.T, path string, value any) {
 	}
 }
 func (f *storageFixture) data(mode string) map[string]string {
-	return map[string]string{"root": f.root, "instance_id": f.id, "disk": filepath.Join(f.workspace, "disk.vhdx"), "mode": mode, "kind": "wim", "index": "6", "letter": "Z", "windows_letter": "Y", "temporary_letter": "Z", "windows_temporary_letter": "Y", "loader_guid": "{66666666-6666-4666-8666-666666666666}", "locale": "en-US", "disk_guid": f.options["disk_guid"].(string), "esp_guid": f.options["guids"].([]string)[0], "windows_guid": f.options["guids"].([]string)[2], "volume": f.options["volume"].(string)}
+	return map[string]string{"root": f.root, "instance_id": f.id, "disk": filepath.Join(f.workspace, "disk.vhdx"), "mode": mode, "kind": "wim", "index": "6", "loader_guid": "{66666666-6666-4666-8666-666666666666}", "locale": "en-US", "disk_guid": f.options["disk_guid"].(string), "esp_guid": f.options["guids"].([]string)[0], "windows_guid": f.options["guids"].([]string)[2], "volume": f.options["volume"].(string)}
 }
 func (f *storageFixture) run(script string, data map[string]string) ([]byte, error) {
 	f.t.Helper()
@@ -239,84 +225,6 @@ func requireScriptStep(t *testing.T, err error, want int) {
 	var step *HostScriptError
 	if !errors.As(err, &step) || step.Step != want {
 		t.Fatalf("script step: got %v, want %d", err, want)
-	}
-}
-
-func TestBaseLetterReservations(t *testing.T) {
-	t.Run("selection", func(t *testing.T) {
-		f := newStorageFixture(t, "media")
-		f.options["reservations"] = []string{`\DosDevices\z:`, `\DosDevices\Y:`, `\DosDevices\X:other`, `\??\Volume{foreign}`}
-		b, e := f.run(baseDisk, f.data("media"))
-		var result struct{ Letter string }
-		if e != nil || json.Unmarshal(b, &result) != nil || result.Letter != "X" {
-			t.Fatal("selection did not skip reserved absent devices", e)
-		}
-	})
-	t.Run("reservation_after_selection", func(t *testing.T) {
-		f := newStorageFixture(t, "boot")
-		f.options["reservations"] = []string{`\DosDevices\Z:`}
-		_, e := f.run(baseDisk, f.data("boot"))
-		requireScriptStep(t, e, 60)
-		if len(f.trace()) != 0 {
-			t.Fatal("reserved letter taken during boot")
-		}
-	})
-	t.Run("unreadable", func(t *testing.T) {
-		f := newStorageFixture(t, "media")
-		f.options["refuse"] = "mapping_unreadable"
-		_, e := f.run(baseDisk, f.data("media"))
-		requireScriptStep(t, e, 20)
-	})
-}
-
-func TestGPTLetterMappingBytes(t *testing.T) {
-	helpers, _, ok := strings.Cut(detachDisk, "\ntry{")
-	if !ok {
-		t.Fatal("cleanup helper boundary absent")
-	}
-	// This asymmetric GUID makes textual/network byte order differ from the
-	// Windows binary GUID layout. No registry or native Storage command runs.
-	script := helpers + `
-$guid='{00112233-4455-6677-8899-aabbccddeeff}'
-[byte[]]$owned=68,77,73,79,58,73,68,58,51,34,17,0,85,68,119,102,136,153,170,187,204,221,238,255
-if(!(Test-GPTLetterMapping $owned $guid)){throw 'owned mapping rejected'}
-$foreign=$owned.Clone();$foreign[8]=0
-$prefix=$owned.Clone();$prefix[0]=0
-[byte[]]$network=68,77,73,79,58,73,68,58,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255
-foreach($value in @($null,'DMIO:ID:',([byte[]]@()),$foreign,$prefix,$network,([byte[]]$owned[0..22]),([byte[]]($owned+0)))){
- if(Test-GPTLetterMapping $value $guid){throw 'foreign mapping claimed'}
-}
-[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
-[Console]::Out.WriteLine('{}')
-`
-	path := filepath.Join(t.TempDir(), "mapping.ps1")
-	if e := os.WriteFile(path, []byte(script), 0600); e != nil {
-		t.Fatal(e)
-	}
-	if _, e := executeHost(t.Context(), path, nil, true); e != nil {
-		t.Fatal("mapping byte comparison", e)
-	}
-}
-
-func TestForeignLetterMappingBuildAndCleanup(t *testing.T) {
-	f := newStorageFixture(t, "boot")
-	if _, e := f.run(baseDisk, f.data("boot")); e != nil {
-		t.Fatal("boot failed", e)
-	}
-	if _, e := f.run(baseDisk, f.data("detach")); e != nil {
-		t.Fatal("build detach failed", e)
-	}
-	// Another device reserves the recorded letter after the factory releases it.
-	f.options["foreign_mapping"] = true
-	b, e := f.cleanup()
-	var result struct {
-		Letters []string `json:"retained_letters"`
-	}
-	if e != nil || json.Unmarshal(b, &result) != nil || len(result.Letters) != 0 {
-		t.Fatal("foreign mapping retained a completed build", e)
-	}
-	if calls := f.trace(); slices.Contains(calls[slices.Index(calls, "detach_base")+1:], "remove_letter") {
-		t.Fatal("cleanup touched a foreign reservation")
 	}
 }
 
@@ -436,8 +344,8 @@ func TestBaseApplyArgumentsAndMediaChange(t *testing.T) {
 		t.Fatal("DISM ran after changed media")
 	}
 }
-func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
-	for _, refuse := range []string{"", "letter_collision", "tool_exit", "missing_artifact", "unsigned", "invalid_signature", "issuer2023", "unknown_issuer", "source_unsigned"} {
+func TestBaseBootSignatures(t *testing.T) {
+	for _, refuse := range []string{"", "tool_exit", "missing_artifact", "unsigned", "invalid_signature", "issuer2023", "unknown_issuer", "source_unsigned"} {
 		t.Run(refuse, func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["refuse"] = refuse
@@ -451,7 +359,7 @@ func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
 					t.Fatal("invalid signed boot result", e)
 				}
 			} else {
-				step := map[string]int{"letter_collision": 60, "tool_exit": 63, "missing_artifact": 64}[refuse]
+				step := map[string]int{"tool_exit": 62, "missing_artifact": 64}[refuse]
 				if step == 0 {
 					step = 64
 				}
@@ -460,23 +368,12 @@ func TestBaseBootSignaturesAndFailureLetterCleanup(t *testing.T) {
 					t.Fatal("refused boot has no numeric shape")
 				}
 			}
-			trace := f.trace()
-			if refuse == "letter_collision" {
-				if len(trace) != 0 {
-					t.Fatal("letter collision mutated storage")
-				}
-				return
-			}
-			if !slices.Contains(trace, "remove_letter") || !slices.Contains(trace, "remove_windows_letter") {
-				t.Fatal("temporary letter survived boot failure")
-			}
-			assertFixtureLettersRemoved(t, f)
 		})
 	}
 }
 
 func fixtureCleanupIntents() map[string]bool {
-	return map[string]bool{"iso_mount": true, "base_attach": true, "child_attach": true, "windows_access": true, "esp_access": true, "inspection_access": true, "staging_access": true, "temporary_letter": true, "windows_temporary_letter": true}
+	return map[string]bool{"iso_mount": true, "base_attach": true, "child_attach": true, "windows_access": true, "esp_access": true, "inspection_access": true, "staging_access": true}
 }
 func (f *storageFixture) cleanup() ([]byte, error) {
 	data := f.data("cleanup")
@@ -488,7 +385,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 	cases := []struct {
 		mode, fail string
 		step       int
-	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "letter", 61}, {"boot", "windows_letter", 61}, {"boot", "tool_bcdedit", 63}, {"boot", "remove_letter", 65}, {"boot", "remove_windows_letter", 65}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
+	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "tool_bcdedit", 62}, {"boot", "write_devices", 63}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
 	for _, test := range cases {
 		t.Run(test.fail, func(t *testing.T) {
 			f := newStorageFixture(t, test.mode)
@@ -496,18 +393,12 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 			_, e := f.run(baseDisk, f.data(test.mode))
 			requireScriptStep(t, e, test.step)
 			f.options["fail"] = ""
-			b, e := f.cleanup()
+			_, e = f.cleanup()
 			if e != nil {
 				t.Fatal("failure cleanup failed", e)
 			}
-			var result struct {
-				Letters []string `json:"retained_letters"`
-			}
-			if json.Unmarshal(b, &result) != nil || len(result.Letters) != 0 {
-				t.Fatal("unexpected retained letter")
-			}
 			state := f.readState()
-			for _, name := range []string{"base_attached", "iso_attached", "child_attached", "letter", "windows_letter"} {
+			for _, name := range []string{"base_attached", "iso_attached", "child_attached"} {
 				if state[name] != false {
 					t.Fatal("cleanup leaked native object", name)
 				}
@@ -521,77 +412,28 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 		})
 	}
 }
-func TestCleanupAccessIntentsAndStaleLetter(t *testing.T) {
-	for _, test := range []string{"all", "no_access_intents", "reboot_mapping", "reboot_esp", "reboot_windows", "reboot_wrong_partition", "foreign_mapping", "mapping_unreadable", "detached_no_mapping"} {
-		t.Run(test, func(t *testing.T) {
+
+func TestCleanupAccessIntents(t *testing.T) {
+	for _, recorded := range []bool{true, false} {
+		t.Run(strconv.FormatBool(recorded), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
-			f.state["child_attached"] = true
-			f.state["inspection_access"] = true
-			f.state["staging_access"] = true
-			if strings.HasPrefix(test, "reboot") || strings.HasPrefix(test, "mapping") || test == "detached_no_mapping" {
-				f.state["base_attached"] = false
-				f.state["child_attached"] = false
-				f.options["stale_mapping"] = test != "detached_no_mapping"
-				if test == "reboot_esp" || test == "reboot_windows" {
-					f.options["stale_mapping"] = false
-					f.options["stale_esp"] = test == "reboot_esp"
-					f.options["stale_windows"] = test == "reboot_windows"
-				}
-			}
-			if test == "mapping_unreadable" {
-				f.options["refuse"] = test
-			}
-			if test == "foreign_mapping" {
-				f.options["foreign_mapping"] = true
-			}
-			if test == "reboot_wrong_partition" {
-				f.options["mapping_swap"] = true
-			}
+			f.state["child_attached"], f.state["inspection_access"], f.state["staging_access"] = true, true, true
 			writeFixtureJSON(t, f.statePath, f.state)
-			data := f.data("cleanup")
 			intents := fixtureCleanupIntents()
-			if test == "no_access_intents" {
-				for _, key := range []string{"windows_access", "esp_access", "staging_access", "inspection_access"} {
-					delete(intents, key)
+			if !recorded {
+				for _, name := range []string{"windows_access", "esp_access", "inspection_access", "staging_access"} {
+					delete(intents, name)
 				}
 			}
 			raw, _ := json.Marshal(intents)
+			data := f.data("cleanup")
 			data["storage_intents"] = string(raw)
-			b, e := f.run(detachDisk, data)
-			if e != nil {
-				t.Fatal(e)
+			if _, err := f.run(detachDisk, data); err != nil {
+				t.Fatal(err)
 			}
-			var result struct {
-				Letters []string `json:"retained_letters"`
-			}
-			if json.Unmarshal(b, &result) != nil {
-				t.Fatal("invalid cleanup result")
-			}
-			want := []string{}
-			if test == "reboot_mapping" || test == "mapping_unreadable" || test == "reboot_esp" {
-				want = append(want, "Z")
-			}
-			if test == "reboot_mapping" || test == "mapping_unreadable" || test == "reboot_windows" {
-				want = append(want, "Y")
-			}
-			if !slices.Equal(result.Letters, want) {
-				t.Fatal("stale letter retention wrong")
-			}
-			if test == "foreign_mapping" && slices.Contains(f.trace(), "remove_letter") {
-				t.Fatal("foreign mapping touched")
-			}
-			if test == "all" {
-				for _, call := range []string{"remove_windows", "remove_esp", "remove_inspection", "remove_staging"} {
-					if !slices.Contains(f.trace(), call) {
-						t.Fatal("intent was not consumed", call)
-					}
-				}
-			}
-			if test == "no_access_intents" {
-				for _, call := range f.trace() {
-					if strings.HasPrefix(call, "remove_") {
-						t.Fatal("unrecorded access path removed")
-					}
+			for _, call := range []string{"remove_windows", "remove_esp", "remove_inspection", "remove_staging"} {
+				if slices.Contains(f.trace(), call) != recorded {
+					t.Fatal("cleanup access ownership", call)
 				}
 			}
 		})
@@ -602,7 +444,7 @@ func TestCleanupAfterAmbiguousCreationResponses(t *testing.T) {
 	for _, test := range []struct {
 		mode, call string
 		step       int
-	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"boot", "letter", 61}, {"boot", "windows_letter", 61}} {
+	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}} {
 		t.Run(test.call, func(t *testing.T) {
 			f := newStorageFixture(t, test.mode)
 			f.options["fail_after"] = test.call
@@ -613,7 +455,7 @@ func TestCleanupAfterAmbiguousCreationResponses(t *testing.T) {
 				t.Fatal("cleanup after ambiguous creation failed", e)
 			}
 			state := f.readState()
-			for _, name := range []string{"base_attached", "iso_attached", "letter", "windows_letter"} {
+			for _, name := range []string{"base_attached", "iso_attached"} {
 				if state[name] != false {
 					t.Fatal("ambiguous creation leaked", name)
 				}

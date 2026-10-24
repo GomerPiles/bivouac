@@ -1,25 +1,5 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-function Get-MountedDeviceMapping([string]$Letter){
- $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\MountedDevices')
- if(!$key){throw 'mount-manager state unavailable'}
- try{return ,($key.GetValue(('\DosDevices\'+$Letter+':'),$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames))}finally{$key.Dispose()}
-}
-function Test-GPTLetterMapping($Mapping,[string]$ESPGuid){
- # GPT mount-manager data is exactly the ASCII prefix and Windows GUID bytes.
- # Anything else belongs to another device and must not retain this workspace.
- if($Mapping -isnot [byte[]] -or $Mapping.Length -ne 24){return $false}
- $guid=[Guid]::Empty
- if(![Guid]::TryParse($ESPGuid,[ref]$guid)){throw 'recorded ESP identity unavailable'}
- $expected=[Text.Encoding]::ASCII.GetBytes('DMIO:ID:')+$guid.ToByteArray()
- for($i=0;$i -lt $expected.Length;$i++){if($Mapping[$i] -ne $expected[$i]){return $false}}
- return $true
-}
-function Test-RecordedLetterMapping([string]$Letter,[string]$ESPGuid){
- # Read only: retain an owned stale mapping for operator resolution. Registry
- # uncertainty also retains it; known foreign mappings are left alone.
- return Test-GPTLetterMapping (Get-MountedDeviceMapping $Letter) $ESPGuid
-}
 try{
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){exit 1}
@@ -51,13 +31,6 @@ try{
        if($intents.staging_access){$paths+='setup-private\mount'}
       }
       foreach($name in $paths){if($access -ieq ((Join-Path $child $name)+'\')){$owned=$true}}
-      if($entry[0] -eq 'source.vhdx'){
-       foreach($mapping in @(@('temporary_letter',$data.temporary_letter,$data.esp_guid,'{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}'),@('windows_temporary_letter',$data.windows_temporary_letter,$data.windows_guid,'{ebd0a0a2-b9e5-4433-87c0-68b6b72699c7}'))){
-        if($intents.($mapping[0]) -and $mapping[1] -cmatch '^[D-Z]$' -and $access -ieq ($mapping[1]+':\')){
-         if(!$mapping[2] -or $part.Guid -ine $mapping[2] -or $part.GptType -ine $mapping[3]){exit 1};$owned=$true
-        }
-       }
-      }
       if($owned){$null=Remove-PartitionAccessPath -DiskNumber $disks[0].Number -PartitionNumber $part.PartitionNumber -AccessPath $access}
      }
     }
@@ -66,13 +39,7 @@ try{
   }
   if((Get-DiskImage -ImagePath $path).Attached){exit 1}
  }
- $retained=@()
- foreach($mapping in @(@('temporary_letter',$data.temporary_letter,$data.esp_guid),@('windows_temporary_letter',$data.windows_temporary_letter,$data.windows_guid))){
-  if(!$intents.($mapping[0])){continue}
-  if($mapping[1] -cnotmatch '^[D-Z]$'){exit 1}
-  try{if(Test-RecordedLetterMapping $mapping[1] $mapping[2]){$retained+=$mapping[1]}}catch{$retained+=$mapping[1]}
- }
  [Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT')
- [Console]::Out.WriteLine((@{retained_letters=$retained}|ConvertTo-Json -Compress))
+ [Console]::Out.WriteLine('{}')
  exit 0
 }catch{exit 1}

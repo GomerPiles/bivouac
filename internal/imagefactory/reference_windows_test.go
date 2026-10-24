@@ -123,10 +123,34 @@ func TestReferenceOfflineState(t *testing.T) {
 		}
 	}
 	temp := t.TempDir()
-	for _, name := range []string{"SYSTEM", "SOFTWARE", "bootmgfw.efi"} {
+	ex := find(`Windows\Boot\EFI_EX`)
+	if ex == nil {
+		t.Fatal("reference EFI_EX absent")
+	}
+	entries, e := ex.Readdir()
+	if e != nil {
+		t.Fatal("reference EFI_EX inventory")
+	}
+	var exFiles []string
+	for _, entry := range entries {
+		if strings.EqualFold(filepath.Ext(entry.Name), ".efi") {
+			if entry.Name != filepath.Base(entry.Name) || strings.ContainsAny(entry.Name, `\/:`) || len(entry.Name) > 80 {
+				t.Fatal("reference EFI_EX filename")
+			}
+			exFiles = append(exFiles, entry.Name)
+		}
+	}
+	names := []string{"SYSTEM", "SOFTWARE", "bootmgfw.efi"}
+	for _, name := range exFiles {
+		names = append(names, "ex-"+name)
+	}
+	for _, name := range names {
 		relative := `Windows\System32\config\` + name
 		if name == "bootmgfw.efi" {
 			relative = `Windows\Boot\EFI\bootmgfw.efi`
+		}
+		if strings.HasPrefix(name, "ex-") {
+			relative = `Windows\Boot\EFI_EX\` + strings.TrimPrefix(name, "ex-")
 		}
 		entry := find(relative)
 		if entry == nil || entry.Size < 1 || entry.Size > 256<<20 {
@@ -151,14 +175,26 @@ func TestReferenceOfflineState(t *testing.T) {
 	start := strings.Index(inspectDisk, "@\"\n") + 3
 	end := strings.Index(inspectDisk[start:], "\n\"@") + start
 	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=Add-Type -TypeDefinition @"` + "\n" + inspectDisk[start:end] + "\n\"@\n" + `
+ $exIssuers=@{}
+ foreach($name in $data.ex_files){
+  $s=Get-AuthenticodeSignature -LiteralPath (Join-Path $data.root ('ex-'+$name))
+  $issuer=0
+  if($s.SignerCertificate){
+   if($s.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*'){$issuer=2}
+   elseif($s.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*'){$issuer=1}
+   elseif($s.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2026*'){$issuer=3}
+   else{$issuer=4}
+  }
+  $exIssuers[$name]=@{issuer=$issuer;valid=($s.Status -eq 'Valid')}
+ }
  $signature=Get-AuthenticodeSignature -LiteralPath (Join-Path $data.root 'bootmgfw.efi')
- $f=@{boot_signature_valid=($signature.Status -eq 'Valid');boot_signer_2011=($signature.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*');boot_signer_2023=($signature.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*');runner_state='absent';answer_directory_empty=$true};$h=[IntPtr]::Zero
+ $f=@{efi_ex=$exIssuers;boot_signature_valid=($signature.Status -eq 'Valid');boot_signer_2011=($signature.SignerCertificate.Issuer -like '*Microsoft Windows Production PCA 2011*');boot_signer_2023=($signature.SignerCertificate.Issuer -like '*Windows UEFI CA 2023*');runner_state='absent';answer_directory_empty=$true};$h=[IntPtr]::Zero
  $f.system_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SYSTEM'),[ref]$h)
  if($f.system_hive_error -eq 0){try{$f.system_setup_in_progress=[FactoryInspection]::Number($h,'Setup','SystemSetupInProgress');$f.oobe_in_progress=[FactoryInspection]::Number($h,'Setup','OOBEInProgress');$f.setup_phase=[FactoryInspection]::Number($h,'Setup','SetupPhase');$f.unattend_pointer_kind=[FactoryInspection]::Pointer($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
  $f.software_hive_error=[FactoryInspection]::OROpenHive((Join-Path $data.root 'SOFTWARE'),[ref]$h)
  if($f.software_hive_error -eq 0){try{$f.image_state_kind=[FactoryInspection]::State($h)}finally{[void][FactoryInspection]::ORCloseHive($h)}}
  [Console]::Out.Write(($f|ConvertTo-Json -Compress))`
-	input, _ := json.Marshal(map[string]string{"root": temp})
+	input, _ := json.Marshal(map[string]any{"root": temp, "ex_files": exFiles})
 	output := runTestPS(t, script, input)
 	var facts Inspection
 	if json.Unmarshal([]byte(output), &facts) != nil {

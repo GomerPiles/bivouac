@@ -69,16 +69,12 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return err
 	}
 	var media struct {
-		Volume        string `json:"volume"`
-		Letter        string `json:"letter"`
-		WindowsLetter string `json:"windows_letter"`
+		Volume string `json:"volume"`
 	}
-	if json.Unmarshal(b, &media) != nil || !strings.HasPrefix(media.Volume, `\\?\Volume{`) || !strings.HasSuffix(media.Volume, `}\`) || !validTemporaryLetter(media.Letter) || !validTemporaryLetter(media.WindowsLetter) || media.Letter == media.WindowsLetter {
+	if json.Unmarshal(b, &media) != nil || !strings.HasPrefix(media.Volume, `\\?\Volume{`) || !strings.HasSuffix(media.Volume, `}\`) {
 		return errors.New("invalid owned media mount result")
 	}
 	data["volume"] = media.Volume
-	r.TemporaryLetter = media.Letter
-	r.WindowsTemporaryLetter = media.WindowsLetter
 	if err = r.intent("base_attach", save); err != nil {
 		return err
 	}
@@ -93,8 +89,6 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 			return err
 		}
 	}
-	data["letter"] = r.TemporaryLetter
-	data["windows_letter"] = r.WindowsTemporaryLetter
 	b, err = invoke("layout")
 	if err != nil {
 		return errors.Join(err, layoutShape(b))
@@ -127,16 +121,10 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return errors.New("boot loader identity generation failed")
 	}
 	r.Manifest.Media.LoaderGUID = strings.ToLower(loader.String())
-	r.Manifest.Media.BootMethod = "scratch_bcdedit_uefi_2011"
+	r.Manifest.Media.BootMethod = "scratch_bcdedit_offreg_plain_gpt_uefi_2011"
 	data["loader_guid"] = r.Manifest.Media.LoaderGUID
 	r.Manifest.Media.WinRE = "apply_time_no_recovery_partition_not_registered_by_factory"
 	if err = save(); err != nil {
-		return err
-	}
-	if err = r.intent("temporary_letter", save); err != nil {
-		return err
-	}
-	if err = r.intent("windows_temporary_letter", save); err != nil {
 		return err
 	}
 	b, err = invoke("boot")
@@ -161,10 +149,6 @@ func prepareBaseWith(ctx context.Context, c Config, r *record, save func() error
 		return err
 	}
 	return nil
-}
-
-func validTemporaryLetter(s string) bool {
-	return len(s) == 1 && s[0] >= 'D' && s[0] <= 'Z'
 }
 
 func numericVersion(s string) bool {

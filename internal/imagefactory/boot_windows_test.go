@@ -43,15 +43,6 @@ func createBootFixtureFiles(t *testing.T, workspace string) {
 	}
 }
 
-func assertFixtureLettersRemoved(t *testing.T, f *storageFixture) {
-	t.Helper()
-	for _, key := range []string{"letter", "windows_letter"} {
-		if f.readState()[key] != false {
-			t.Fatal("temporary letter survived", key)
-		}
-	}
-}
-
 func TestBootCopySet(t *testing.T) {
 	f := newStorageFixture(t, "boot")
 	if _, e := f.run(baseDisk, f.data("boot")); e != nil {
@@ -94,7 +85,6 @@ func TestBootCopySet(t *testing.T) {
 	if entry, e := os.Stat(filepath.Join(f.workspace, `base-esp\EFI\Microsoft\Recovery`)); e != nil || !entry.IsDir() {
 		t.Fatal("Recovery sibling absent")
 	}
-	assertFixtureLettersRemoved(t, f)
 }
 
 func TestBootCopyRefusals(t *testing.T) {
@@ -108,8 +98,7 @@ func TestBootCopyRefusals(t *testing.T) {
 				t.Fatal(e)
 			}
 			_, e := f.run(baseDisk, f.data("boot"))
-			requireScriptStep(t, e, 62)
-			assertFixtureLettersRemoved(t, f)
+			requireScriptStep(t, e, 61)
 		})
 	}
 	t.Run("link", func(t *testing.T) {
@@ -121,8 +110,7 @@ func TestBootCopyRefusals(t *testing.T) {
 		input, _ := json.Marshal(map[string]string{"target": target, "link": filepath.Join(f.workspace, `base-windows\Windows\Boot\EFI\linked`)})
 		runTestPS(t, `$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$null=New-Item -ItemType Junction -Path $d.link -Target $d.target`, input)
 		_, e := f.run(baseDisk, f.data("boot"))
-		requireScriptStep(t, e, 62)
-		assertFixtureLettersRemoved(t, f)
+		requireScriptStep(t, e, 61)
 	})
 	t.Run("file_bound", func(t *testing.T) {
 		f := newStorageFixture(t, "boot")
@@ -136,8 +124,7 @@ func TestBootCopyRefusals(t *testing.T) {
 			t.Fatal(e)
 		}
 		_, e = f.run(baseDisk, f.data("boot"))
-		requireScriptStep(t, e, 62)
-		assertFixtureLettersRemoved(t, f)
+		requireScriptStep(t, e, 61)
 	})
 }
 
@@ -146,14 +133,11 @@ func expectedBCDCommands(f *storageFixture) [][]string {
 	commands := [][]string{
 		{"/create", "{bootmgr}", "/d", "Windows Boot Manager"},
 		{"/create", loader, "/d", "Windows", "/application", "osloader"},
-		{"/set", "{bootmgr}", "device", "partition=Z:"},
 		{"/set", "{bootmgr}", "path", `\EFI\Microsoft\Boot\bootmgfw.efi`},
 		{"/set", "{bootmgr}", "locale", "en-US"},
 		{"/timeout", "0"},
 		{"/displayorder", loader},
 		{"/default", loader},
-		{"/set", loader, "device", "partition=Y:"},
-		{"/set", loader, "osdevice", "partition=Y:"},
 		{"/set", loader, "path", `\Windows\system32\winload.efi`},
 		{"/set", loader, "systemroot", `\Windows`},
 		{"/set", loader, "locale", "en-US"},
@@ -170,7 +154,7 @@ func expectedBCDCommands(f *storageFixture) [][]string {
 }
 
 func TestBCDCommandsAndFailures(t *testing.T) {
-	for fail := 0; fail <= 19; fail++ {
+	for fail := 0; fail <= 16; fail++ {
 		t.Run(strconv.Itoa(fail), func(t *testing.T) {
 			f := newStorageFixture(t, "boot")
 			f.options["bcd_fail"] = fail
@@ -180,7 +164,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 					t.Fatal(e)
 				}
 			} else {
-				requireScriptStep(t, e, 63)
+				requireScriptStep(t, e, 62)
 				if shape := bootShape(b); shape == nil || !strings.Contains(shape.Error(), "command="+strconv.Itoa(fail)+" exit=17") {
 					t.Fatal("command failure lacks numeric shape")
 				}
@@ -190,7 +174,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 			if json.Unmarshal(raw, &calls) != nil {
 				t.Fatal("invalid tool calls")
 			}
-			count := 19
+			count := 16
 			if fail != 0 {
 				count = fail
 			}
@@ -198,15 +182,54 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 				t.Fatal("continued after failed BCD command")
 			}
 			for i, call := range calls {
-				if !slices.Equal(call, expectedBCDCommands(f)[i]) || (i != 0 && call[0] != "/store") || slices.Contains(call, "{fwbootmgr}") || slices.Contains(call, "inherit") {
+				if !slices.Equal(call, expectedBCDCommands(f)[i]) || (i != 0 && call[0] != "/store") || slices.Contains(call, "{fwbootmgr}") || slices.Contains(call, "inherit") || slices.Contains(call, "device") || slices.Contains(call, "osdevice") {
 					t.Fatal("unsafe or wrong BCD argument array", i)
 				}
 			}
-			assertFixtureLettersRemoved(t, f)
 			if _, e := f.cleanup(); e != nil {
 				t.Fatal("cleanup after BCD command", e)
 			}
 		})
+	}
+}
+
+func TestBCDWriteFailureCleanup(t *testing.T) {
+	for code := 1; code <= 10; code++ {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			f := newStorageFixture(t, "boot")
+			f.options["write"] = code
+			b, err := f.run(baseDisk, f.data("boot"))
+			requireScriptStep(t, err, 63)
+			if shape := bootShape(b); shape == nil || shape.Error() != "offline BCD device write refused: code="+strconv.Itoa(code) {
+				t.Fatal("device write failure lost numeric shape")
+			}
+			if _, err := f.cleanup(); err != nil {
+				t.Fatal("write failure cleanup", err)
+			}
+		})
+	}
+}
+
+func TestBootHasNoTemporaryLetterPlan(t *testing.T) {
+	r := &record{StorageIntents: fixtureCleanupIntents()}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"temporary_letter", "windows_temporary_letter", "retained_letters"} {
+		if strings.Contains(string(b), removed) || strings.Contains(r.scriptData()["storage_intents"], removed) {
+			t.Fatal("removed letter state retained")
+		}
+		if _, exists := r.scriptData()[removed]; exists {
+			t.Fatal("removed letter script input retained")
+		}
+	}
+	for _, script := range []string{baseDisk, bootHelpers, detachDisk} {
+		for _, removed := range []string{"MountedDevices", "Get-PSDrive", "partition=", "$data.letter", "$data.windows_letter"} {
+			if strings.Contains(script, removed) {
+				t.Fatal("boot/cleanup retains a letter operation")
+			}
+		}
 	}
 }
 
@@ -220,29 +243,8 @@ func TestBCDVerificationFailureCleanup(t *testing.T) {
 			if shape := bootShape(b); shape == nil || shape.Error() != "offline BCD refused: code="+strconv.Itoa(code) {
 				t.Fatal("missing numeric verification shape")
 			}
-			assertFixtureLettersRemoved(t, f)
 			if _, e := f.cleanup(); e != nil {
 				t.Fatal("verification failure cleanup", e)
-			}
-		})
-	}
-}
-
-func TestCleanupLetterPartitionGUIDRefusals(t *testing.T) {
-	for _, refuse := range []string{"partition_guid", "windows_guid"} {
-		t.Run(refuse, func(t *testing.T) {
-			f := newStorageFixture(t, "boot")
-			f.state["letter"], f.state["windows_letter"] = true, true
-			writeFixtureJSON(t, f.statePath, f.state)
-			f.options["refuse"] = refuse
-			_, e := f.cleanup()
-			requireScriptStep(t, e, 1)
-			name := "remove_letter"
-			if refuse == "windows_guid" {
-				name = "remove_windows_letter"
-			}
-			if slices.Contains(f.trace(), name) {
-				t.Fatal("unproven letter ownership was removed")
 			}
 		})
 	}
