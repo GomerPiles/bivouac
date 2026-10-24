@@ -79,6 +79,37 @@ func TestReferenceOfflineState(t *testing.T) {
 		}
 		return current
 	}
+	// Every preboot Windows-tree dependency, including clean-state absences.
+	// Media/runner/task installation after first boot is deliberately separate.
+	for _, audit := range []struct {
+		path    string
+		present bool
+	}{
+		{`Windows`, true}, {`Windows\System32`, true},
+		{`Windows\System32\config`, true}, {`Windows\System32\config\SYSTEM`, true},
+		{`Windows\System32\config\SOFTWARE`, true}, {`Windows\System32\config\SAM`, true},
+		{`Windows\Setup`, true}, {`ProgramData`, true}, {`Program Files`, true}, {`Users`, true},
+		{`Windows\System32\Tasks`, true}, {`Windows\System32\DriverStore`, true},
+		{`Windows\Boot\EFI`, true}, {`Windows\Boot\EFI\bootmgfw.efi`, true},
+		{`Windows\Boot\EFI\bootmgr.efi`, true}, {`Windows\Boot\EFI\memtest.efi`, true},
+		{`Windows\Boot\EFI\SecureBootRecovery.efi`, true}, {`Windows\Boot\EFI\boot.pnd.stl`, true},
+		{`Windows\Boot\Fonts`, true}, {`Windows\Boot\Fonts\wgl4_boot.ttf`, true},
+		{`Windows\Boot\Resources`, true}, {`Windows\Boot\Resources\bootres.dll`, true},
+		{`Windows\System32\winload.efi`, true},
+		{`Windows\Panther`, false}, {`Windows\Panther\Unattend`, false},
+		{`Windows\Panther\unattend.xml`, false}, {`Windows\Setup\Scripts`, false},
+		{`Windows\System32\HostDriverStore`, false},
+		{`Windows\System32\HostDriverStore\FileRepository`, false},
+		{`Program Files\Bivouac`, false}, {`ProgramData\Bivouac`, false},
+		{`ProgramData\Bivouac\Image`, false}, {`ProgramData\Bivouac\Guest`, false},
+		{`Windows\System32\Tasks\bivouac-guest-agent`, false}, {`actions-runner`, false},
+	} {
+		entry := find(audit.path)
+		if (entry != nil) != audit.present {
+			t.Fatalf("reference offline path presence differs: %s", audit.path)
+		}
+		t.Logf("offline path %s present=%t", audit.path, audit.present)
+	}
 	for _, path := range []string{`actions-runner`, `Program Files\Bivouac`, `ProgramData\Bivouac\Guest`, `Windows\System32\Tasks\bivouac-guest-agent`, `Windows\Panther\Unattend`} {
 		entry := find(path)
 		if entry != nil {

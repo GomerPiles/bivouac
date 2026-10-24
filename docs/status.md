@@ -411,11 +411,15 @@ Open:
   - Host interface changes while a guest runs.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
-- Install-media lab runs passed owned VHDX layout and DISM WIM apply through
-  the ISO volume-GUID path. ESP preparation now uses image boot files and an
-  explicit BCDEdit store; its boot/firmware trust, no-NIC setup, guest Secure Boot/TPM, a failed build's
-  cleanup and `image cleanup`, and the lab batch on a factory-built
-  image. Admission does not compare the host GPU driver with the image's.
+- Install-media lab runs passed owned VHDX layout, DISM WIM apply through
+  the ISO volume-GUID path, image-sourced ESP files, scratch BCDEdit store,
+  offline GPT BCD verification, 2011 signatures, removal of both temporary
+  letters and unchanged host firmware entries. Inspection stopped at the
+  former Panther-existence requirement. Fresh-child inspection/staging and
+  ownership/ACLs, guest boot/firmware trust, no-NIC setup, guest Secure Boot/TPM,
+  a failed build's cleanup and `image cleanup`, and the lab batch on a
+  factory-built image remain open. Admission does not compare the host GPU
+  driver with the image's.
 - The warm spare.
 - Agent images built by this branch contain no legacy guest components and have
   not been built or validated live. Offline ownership/ACLs, specialize service/MSI

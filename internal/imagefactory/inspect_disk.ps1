@@ -43,9 +43,15 @@ public static class FactoryInspection {
    $step=90;Read-SetupStep $mount $facts
   }else{
    $step=40
-   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
+   foreach($relative in @('Windows','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
     $path=Join-Path $mount $relative
     if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Windows path'}
+   }
+   # Setup creates Panther; absence is clean, but never traverse a link/file.
+   $panther=Join-Path $mount 'Windows\Panther'
+   if(Test-Path -LiteralPath $panther){
+    $item=Get-Item -Force -LiteralPath $panther
+    if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Panther path'}
    }
    $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
    $software=Join-Path $mount 'Windows\System32\config\SOFTWARE'

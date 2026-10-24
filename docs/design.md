@@ -1191,12 +1191,26 @@ ACL and deny-write handles, not hashed per job.
   with no answer-file pointer, an absent/empty embedded answer directory,
   no runner, agent installation, either guest task or bivouac job state. The reference
   install image's pristine hives satisfy the existing setup-state gates.
+  Panther is optional before Setup: an absent Panther/Unattend is clean;
+  an existing Panther must be an ordinary directory.
   `image inspect` instead hashes and inventories media without mounts, disk
   creation or HCS. Facts are public; answer-file values are never reported.
 - **Offline staging:** the factory installs its own executable at
   `guestagent.WindowsPath`, recording SHA-256 and `guestagent.Version` in the
   manifest. The installation grants SYSTEM, Administrators and TrustedInstaller
   full control and Users read/execute, without inherited user write access.
+  Fresh install images need not contain Panther, Setup\Scripts or
+  System32\HostDriverStore\FileRepository. Staging creates those parents and
+  Panther\Unattend one ordinary component at a time, refusing links/files.
+  New directories inherit the guest parent's DACL and take its owner;
+  existing ordinary parents retain their security. Unattend keeps its
+  protected SYSTEM/Administrators DACL; ProgramData\Bivouac\Image retains
+  its existing administrator-only policy. These directories belong to the
+  owned child disk and need no separate host cleanup record.
+  Only an absent/empty answer directory may be staged, with CreateNew files;
+  an existing agent installation refuses. Setup\Scripts is created empty;
+  media scripts/runner remain on the setup ISO until FirstLogon, which
+  registers the logon task.
   A bounded, protected snapshot of each configured GPU driver tree is copied
   into `Windows\System32\HostDriverStore\FileRepository\<directory name>`.
   Exact file/directory inventories and SHA-256 checks refuse links, incomplete
