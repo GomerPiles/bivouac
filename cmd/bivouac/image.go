@@ -22,7 +22,8 @@ func imageCmd(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("image "+args[0], flag.ContinueOnError)
 	config := fs.String("config", "", "administrator-protected image factory JSON")
 	id := fs.String("build", "", "retained build ID (cleanup only)")
-	if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *config == "" || (args[0] != "cleanup" && *id != "") || (args[0] == "cleanup" && *id == "") {
+	retain := fs.Bool("retain-failed", false, "keep a failed build's detached workspace for offline diagnosis (build only)")
+	if fs.Parse(args[1:]) != nil || fs.NArg() != 0 || *config == "" || (args[0] != "cleanup" && *id != "") || (args[0] == "cleanup" && *id == "") || (args[0] != "build" && *retain) {
 		return errUsage
 	}
 	if err := imagefactory.RequireElevated(); err != nil {
@@ -43,6 +44,7 @@ func imageCmd(ctx context.Context, args []string, out io.Writer) error {
 	if args[0] == "inspect" {
 		return imagefactory.Inspect(ctx, c, log, out)
 	}
+	c.RetainFailed = *retain
 	m, err := imagefactory.Build(ctx, c, log)
 	return writeImageResult(out, os.Stderr, m, err)
 }

@@ -145,7 +145,14 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 				}
 			}
 			return detachOwned(cleanupCtx, r)
-		}, func() error { return removeOwned(r) })
+		}, func() error {
+			// A lab build may keep a failed workspace (detached, guest absent)
+			// for offline diagnosis; `image cleanup --build` removes it later.
+			if c.RetainFailed && err != nil {
+				return errors.New("failed build workspace retained on request")
+			}
+			return removeOwned(r)
+		})
 		r.Retained = cleanupErr != nil
 		if err != nil {
 			r.Phase = "failed"
@@ -309,10 +316,18 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 			return e
 		}
 		preparationStarted = true
-		return prepareUntilExit(guardCtx, func(ctx context.Context) error {
-			_, err := system.WaitExit(ctx)
+		// prepareUntilExit joins the watcher before returning, so exit is
+		// safe to read afterwards.
+		var exit hcs.ExitStatus
+		e = prepareUntilExit(guardCtx, func(ctx context.Context) error {
+			var err error
+			exit, err = system.WaitExit(ctx)
 			return err
 		}, func(ctx context.Context) error { return prepareGuest(ctx, c, r) })
+		if e != nil && exit.ExitType != "" {
+			e = errors.Join(e, fmt.Errorf("guest exit: type=%s status=0x%08x", exitTypeName(exit.ExitType), uint32(exit.Status))) // #nosec G115 -- HRESULT bit pattern.
+		}
+		return e
 	}); err != nil {
 		return Manifest{}, errors.Join(err, context.Cause(guardCtx))
 	}
