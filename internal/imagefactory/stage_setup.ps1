@@ -83,6 +83,9 @@ public static class SpikeOfflineAnswer {
   Install-OfflineAgent $mount $data.agent $data.agent_sha256
   $phaseCode=65
   Copy-OfflineDrivers $mount (Join-Path $child 'drivers') ($data.driver_plan | ConvertFrom-Json)
+  $phaseCode=66
+  $encryption=Set-OfflineEncryptionPolicy $mount
+  if($encryption -ne 0){$phaseCode=66000+[int]$encryption;throw 'offline device encryption policy'}
  } finally {
   if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}
  }

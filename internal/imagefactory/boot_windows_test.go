@@ -87,6 +87,71 @@ func TestBootCopySet(t *testing.T) {
 	}
 }
 
+func TestBootGenerationSelection(t *testing.T) {
+	for _, mode := range []string{"absent", "2023", "wrong issuer", "byte mismatch", "mixed"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newStorageFixture(t, "boot")
+			if mode != "absent" {
+				f.options["ex"] = true
+				files := map[string]string{`Windows\Boot\EFI_EX\bootmgfw_EX.efi`: "2023-loader", `Windows\Boot\EFI_EX\en-US\bootmgfw_EX.efi.mui`: "2023-language", `Windows\Boot\EFI_EX\en-US\bootmgr_EX.efi.mui`: "unused-other-language"}
+				for relative, value := range files {
+					path := filepath.Join(f.workspace, "base-windows", relative)
+					if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			switch mode {
+			case "wrong issuer":
+				f.options["refuse"] = "ex_wrong"
+			case "byte mismatch":
+				f.options["refuse"] = "byte_mismatch"
+			case "mixed":
+				f.options["refuse"] = "mixed"
+			}
+			b, err := f.run(baseDisk, f.data("boot"))
+			if mode == "wrong issuer" {
+				requireScriptStep(t, err, 61)
+				return
+			}
+			if mode == "byte mismatch" || mode == "mixed" {
+				requireScriptStep(t, err, 64)
+				if bootShape(b) == nil {
+					t.Fatal("missing numeric refusal")
+				}
+				return
+			}
+			var result struct {
+				Generation string      `json:"boot_generation"`
+				Issuers    BootIssuers `json:"boot_issuers"`
+			}
+			if err != nil || json.Unmarshal(b, &result) != nil || !validBootGeneration(result.Generation, result.Issuers) {
+				t.Fatal("generation selection", err)
+			}
+			expected := "pca_2011"
+			if mode == "2023" {
+				expected = "uefi_ca_2023"
+				for _, relative := range []string{`EFI\Boot\bootx64.efi`, `EFI\Microsoft\Boot\bootmgfw.efi`} {
+					content, e := os.ReadFile(filepath.Join(f.workspace, "base-esp", relative))
+					if e != nil || string(content) != "2023-loader" {
+						t.Fatal("selected source copy")
+					}
+				}
+				content, e := os.ReadFile(filepath.Join(f.workspace, "base-esp", `EFI\Microsoft\Boot\en-US\bootmgfw.efi.mui`))
+				if e != nil || string(content) != "2023-language" {
+					t.Fatal("EX language mapping")
+				}
+			}
+			if result.Generation != expected {
+				t.Fatal("wrong generation")
+			}
+		})
+	}
+}
+
 func TestBootCopyRefusals(t *testing.T) {
 	for _, name := range bootFixtureSources() {
 		if strings.Contains(name, "EFI_EX") || strings.HasSuffix(name, "mui") || strings.HasSuffix(name, `EFI\boot.stl`) {

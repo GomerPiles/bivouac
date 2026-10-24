@@ -86,10 +86,11 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 		r.hostError("setup_iso", err)
 		return fmt.Errorf("protected setup ISO creation failed: %w", err)
 	}
-	if _, err := run(ctx, offlinePayload+stageSetup, data, false); err != nil {
+	if _, err := run(ctx, offlineEncryption+offlinePayload+stageSetup, data, false); err != nil {
 		r.hostError("stage_setup", err)
 		return fmt.Errorf("offline owned-child answer staging failed: %w", err)
 	}
+	r.Manifest.PreventDeviceEncryption = true
 	return nil
 }
 

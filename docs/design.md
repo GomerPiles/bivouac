@@ -1113,6 +1113,13 @@ ACL and deny-write handles, not hashed per job.
   only then permits use. Input handles deny write/delete while open. This
   deliberately replaces source-ACL checks for all pinned file imports;
   driver-directory validation remains separate.
+  Boot-manager generation comes from the applied image. A present, valid
+  embedded UEFI CA 2023 signature on EFI_EX\bootmgfw_EX.efi selects
+  `uefi_ca_2023`; absence of that file selects the embedded PCA 2011 normal
+  loader (`pca_2011`). A present EX file with any other/invalid signer refuses.
+  Embedded PKCS#7 parsing identifies the primary signer and counts signatures;
+  WinVerifyTrust validates that primary file signature with no UI, revocation
+  or network retrieval. Catalog answers are never used.
 - **Disk layout:** the factory creates a dynamic VHDX (default 127 GiB,
   bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
   cross-checks the mounted image's physical device, Storage disk path and
@@ -1124,8 +1131,12 @@ ACL and deny-write handles, not hashed per job.
   WinRE at apply time and creates no recovery partition; Windows setup may
   subsequently register WinRE on the Windows volume. The manifest records
   this apply-time policy, not the installed guest's final WinRE state.
-  The factory copies the applied image's normal 2011 EFI boot tree, fonts and
-  resources to the owned ESP; EFI_EX is excluded. It installs the fallback
+  The factory copies the applied image's normal EFI boot tree, fonts and
+  resources to the owned ESP. For the 2023 generation, the EX boot manager
+  replaces both bootmgfw.efi and bootx64.efi; each bootmgfw.efi.mui is mapped
+  from EFI_EX\<language>\bootmgfw_EX.efi.mui. Other EFI files and normal Fonts
+  and Resources keep their existing mapping. No further EX remapping is
+  inferred. It installs the fallback
   loader and promotes the pending boot revocation policy to boot.stl, creating
   an empty EFI\Microsoft\Recovery directory without registering WinRE.
   Traversal refuses links and bounds depth, entries and bytes. Boot files
@@ -1161,7 +1172,10 @@ ACL and deny-write handles, not hashed per job.
   partition refuses. A refused table is reported as numbers only (type codes,
   MiB offsets and sizes, GUID matches). The fallback EFI loader, Microsoft loader and BCD store
   must exist. Both ESP loaders and the applied source boot manager must have
-  valid Authenticode signatures from the expected 2011 issuer.
+  valid embedded signatures from the selected generation's issuer. The ESP
+  loaders must also match the selected source byte for byte, and mixed issuers
+  refuse. The manifest records generation, numeric issuer codes and embedded
+  signature counts for fallback, Microsoft and selected source loaders.
   Read-only offreg verification requires exactly those two objects and checks
   their types, descriptions, every set element, single-loader displayorder,
   zero timeout, locales and byte-for-byte equality of all three complete plain
@@ -1170,7 +1184,7 @@ ACL and deny-write handles, not hashed per job.
   Class-4 template elements and every unknown element
   refuse, including inherit/resume references. Failures expose numeric codes,
   never hive data. The manifest records the scratch-store method, loader GUID, verified flag, fixed
-  issuer names and BCDEdit/DISM versions.
+  issuer codes and BCDEdit/DISM versions.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
@@ -1211,6 +1225,12 @@ ACL and deny-write handles, not hashed per job.
   an existing agent installation refuses. Setup\Scripts is created empty;
   media scripts/runner remain on the setup ISO until FirstLogon, which
   registers the logon task.
+  Before first boot, child staging sets DWORD PreventDeviceEncryption=1 under
+  SYSTEM\ControlSet<current>\Control\BitLocker, using Select\Current offline.
+  An existing value other than DWORD 1 refuses. Offreg saves a fresh sibling
+  hive, preserves the source owner/DACL and atomically replaces SYSTEM;
+  already-1 is accepted without rewriting. This policy belongs to the child
+  after inspection, leaving the base pristine, and is recorded in the manifest.
   A bounded, protected snapshot of each configured GPU driver tree is copied
   into `Windows\System32\HostDriverStore\FileRepository\<directory name>`.
   Exact file/directory inventories and SHA-256 checks refuse links, incomplete
@@ -1348,10 +1368,13 @@ ACL and deny-write handles, not hashed per job.
   installation, either guest task or Guest directory. Public agent presence/hash/task
   facts replace legacy service and package facts; legacy VDD presence remains
   informational. The manifest records media/asset/output/agent hashes, selected image metadata,
-  host DISM/BCDBoot versions, options, verified boot issuer generations,
+  host BCDEdit/DISM versions, selected boot generation, numeric embedded issuer
+  codes and signature counts, verified BCD,
   apply-time WinRE policy, disk/partition GUIDs and
   effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
-  and TPM present (readiness is recorded). It also records agent
+  and TPM present (readiness is recorded). It records offline device-encryption
+  prevention and numeric C: BitLocker conversion/protection diagnostics;
+  these statuses do not gate publication. It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;

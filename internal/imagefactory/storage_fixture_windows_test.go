@@ -123,10 +123,16 @@ const storageFixturePS = `
    [IO.File]::WriteAllText($Arguments[1],'scratch-store')
   };return 0
  }
- function Get-AuthenticodeSignature {param($LiteralPath)
-  $status='Valid';$issuer='CN=Microsoft Windows Production PCA 2011, O=Microsoft Corporation'
-  switch($fixture.refuse){'unsigned' {$status='NotSigned'};'invalid_signature' {$status='HashMismatch'};'issuer2023' {$issuer='CN=Windows UEFI CA 2023, O=Microsoft Corporation'};'unknown_issuer' {$issuer='CN=Unrecognized'};'source_unsigned' {if($LiteralPath -like '*\base-windows\*'){$status='NotSigned'}}}
-  [pscustomobject]@{Status=$status;SignerCertificate=[pscustomobject]@{Issuer=$issuer}}
+ function Get-EmbeddedSignature([string]$Path){
+  $issuer=1;if($fixture.ex){$issuer=2}
+  $source=$Path -like '*\base-windows\*'
+  if($fixture.refuse -eq 'ex_wrong' -and $source){$issuer=1}
+  if($fixture.refuse -eq 'source_unsigned' -and $source){$issuer=0}
+  if(!$source){switch($fixture.refuse){'unsigned' {$issuer=0};'invalid_signature' {$issuer=0};'issuer2023' {$issuer=2};'unknown_issuer' {$issuer=4};'mixed' {if($Path -like '*\EFI\Boot\*'){$issuer=1}};'byte_mismatch' {if($Path -like '*\EFI\Boot\*'){[IO.File]::AppendAllText($Path,'changed')}}}}
+  return @{issuer=$issuer;signatures=1}
+ }
+ function Test-BootFileMatch([string]$First,[string]$Second){
+  return [Convert]::ToBase64String([IO.File]::ReadAllBytes($First)) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($Second))
  }
  function Set-BootDevices([string]$Store,$Data){Trace 'write_devices';return [uint32]$fixture.write}
  function Test-BootStore([string]$Store,$Data){return [uint32]$fixture.verify}
@@ -187,7 +193,7 @@ func (f *storageFixture) run(script string, data map[string]string) ([]byte, err
 	f.t.Helper()
 	writeFixtureJSON(f.t, f.optionsPath, f.options)
 	if script == baseDisk {
-		script = bootHelpers + script
+		script = embeddedSignatures + bootHelpers + script
 	}
 	script = strings.Replace(script, "\ntry{", "\n"+storageFixturePS+"\ntry{", 1)
 	path := filepath.Join(f.root, "run.ps1")
@@ -355,11 +361,11 @@ func TestBaseBootSignatures(t *testing.T) {
 					Version string      `json:"bcdedit_version"`
 					Issuers BootIssuers `json:"boot_issuers"`
 				}
-				if e != nil || json.Unmarshal(b, &result) != nil || !numericVersion(result.Version) || result.Issuers.Fallback != "windows_production_pca_2011" || result.Issuers.Microsoft != "windows_production_pca_2011" {
+				if e != nil || json.Unmarshal(b, &result) != nil || !numericVersion(result.Version) || result.Issuers.Fallback != 1 || result.Issuers.Microsoft != 1 {
 					t.Fatal("invalid signed boot result", e)
 				}
 			} else {
-				step := map[string]int{"tool_exit": 62, "missing_artifact": 64}[refuse]
+				step := map[string]int{"tool_exit": 62, "missing_artifact": 64, "source_unsigned": 61}[refuse]
 				if step == 0 {
 					step = 64
 				}
