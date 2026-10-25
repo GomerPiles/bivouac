@@ -80,7 +80,11 @@ function Start-Sleep {param($Milliseconds) $text=$data.report;if($data.bad_repor
 function Move-Item {param($LiteralPath,$Destination) Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination;if($data.oversize){[IO.File]::WriteAllText($Destination,('x'*4097))}}
 function Get-Date {return [datetime]'2026-01-01T00:02:00Z'}
 function Get-Process {param($ErrorAction) if($data.observation_failure){throw 'fixture'};[pscustomobject]@{ProcessName='render';SessionId=2;TotalProcessorTime=[timespan]::FromMilliseconds(1500)};[pscustomobject]@{ProcessName='render';SessionId=3;TotalProcessorTime=[timespan]::FromMilliseconds(9000)};[pscustomobject]@{ProcessName='explorer';SessionId=2;StartTime=[datetime]'2026-01-01T00:00:00Z'}}
-function Get-CimInstance {param($ClassName,$Filter,$OperationTimeoutSec,$ErrorAction) if($data.observation_failure){throw 'fixture'};[pscustomobject]@{Present=$true;DeviceID='PCI\VEN_1414&DEV_008E';ConfigManagerErrorCode=0};[pscustomobject]@{Present=$true;DeviceID='VMBUS\fixture';ConfigManagerErrorCode=0}}
+function Get-CimInstance {param($Namespace,$ClassName,$Filter,$OperationTimeoutSec,$ErrorAction)
+ if($Namespace -ceq 'root\CIMV2\Security\MicrosoftVolumeEncryption' -and $ClassName -ceq 'Win32_EncryptableVolume' -and $Filter -ceq "DriveLetter='C:'" -and $OperationTimeoutSec -eq 10){return [pscustomobject]@{Fixed=1}}
+ if($ClassName -cne 'Win32_PnPEntity' -or $Namespace){throw 'CIM scope'}
+ if($data.observation_failure){throw 'fixture'};[pscustomobject]@{Present=$true;DeviceID='PCI\VEN_1414&DEV_008E';ConfigManagerErrorCode=0};[pscustomobject]@{Present=$true;DeviceID='VMBUS\fixture';ConfigManagerErrorCode=0}
+}
 function Get-PnpDeviceProperty {param($InstanceId,$KeyName,$ErrorAction) [pscustomobject]@{Data=[uint32]8}}
 `
 	script := `param($data);$ErrorActionPreference='Stop';if($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1){exit 19};` + mocks + renderPathFixture(t)
@@ -119,6 +123,7 @@ function Get-PnpDeviceProperty {param($InstanceId,$KeyName,$ErrorAction) [pscust
 				if err != nil || factoryDisplayReportOK(out) != nil {
 					t.Fatal("factory budget did not allow a late report")
 				}
+				assertRenderSecurityReport(t, out)
 				if b, err := os.ReadFile(filepath.Join(base, "render.json")); err != nil || string(b) != report {
 					t.Fatal("late report was not relocated")
 				}
