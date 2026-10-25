@@ -37,6 +37,11 @@ extra resource admission and an additional inter-guest test fixture; this phase
 covers guest loopback and host-account authorization on the parent-only service.
 No live image build or timing run has been performed for these fixes.
 
+The task-principal selftest accepts either a parsed SID or an account name
+resolved to the agent token's SID. Both forms and rejection cases have unit
+coverage. The failing lab image's task XML representation is unconfirmed;
+passing the installation and subsequent probe-survival gates still needs a live run.
+
 Validation now prepares the pinned prebuilt render probe's fixed output
 directory, relocates its bounded report into the protected probe base and
 cleans up the temporary directory. Sanitation refuses a leftover directory.

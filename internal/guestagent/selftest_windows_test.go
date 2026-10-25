@@ -47,6 +47,46 @@ func TestTaskFactsAreFixedAndRequireActualSettings(t *testing.T) {
 	}
 }
 
+func TestTaskFactsUserID(t *testing.T) {
+	const agentSID = "S-1-5-21-1-2-3-1001"
+	const otherSID = "S-1-5-21-1-2-3-1002"
+	for _, tc := range []struct {
+		name        string
+		userID      string
+		wantMatch   bool
+		wantResolve bool
+	}{
+		{"SID match", agentSID, true, false},
+		{"SID mismatch", otherSID, false, false},
+		{"account match", "imageuser", true, true},
+		{"account mismatch", "otheruser", false, true},
+		{"unresolvable account", "unknownuser", false, true},
+		{"malformed SID", "S-1-5-invalid", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `<Task><Principals><Principal><UserId>` + tc.userID + `</UserId></Principal></Principals><Actions><Exec/></Actions></Task>`
+			resolved := false
+			resolve := func(name string) string {
+				resolved = true
+				switch name {
+				case "imageuser":
+					return agentSID
+				case "otheruser":
+					return otherSID
+				}
+				return ""
+			}
+			facts, err := taskFacts([]byte(raw), "imageuser", agentSID, resolve)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if facts.TaskUser != tc.wantMatch || resolved != tc.wantResolve {
+				t.Fatalf("task user match = %t, account lookup = %t; want %t, %t", facts.TaskUser, resolved, tc.wantMatch, tc.wantResolve)
+			}
+		})
+	}
+}
+
 func TestInstalledAgentSecurityFacts(t *testing.T) {
 	good := "O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + installerSID + ")(A;;0x1200a9;;;BU)"
 	for _, mode := range []string{"valid", "user write", "owner", "inheritance", "extra principal"} {
