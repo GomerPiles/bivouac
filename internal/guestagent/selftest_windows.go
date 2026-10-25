@@ -106,7 +106,12 @@ func taskFacts(raw []byte, user, sid string, resolve func(string) string) (Insta
 	}
 	p := task.Principals[0]
 	a := task.Actions[0]
-	facts.TaskUser = resolve(p.UserID) == sid
+	// Task Scheduler may export the principal as a SID instead of an account name.
+	if taskSID, err := windows.StringToSid(p.UserID); err == nil {
+		facts.TaskUser = taskSID.String() == sid
+	} else {
+		facts.TaskUser = resolve(p.UserID) == sid
+	}
 	facts.TaskHighest = p.RunLevel == "HighestAvailable"
 	facts.TaskInteractive = p.LogonType == "InteractiveToken"
 	facts.TaskAction = strings.EqualFold(a.Command, WindowsPath) && a.Arguments == "guest-agent --user "+user
