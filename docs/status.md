@@ -37,6 +37,12 @@ extra resource admission and an additional inter-guest test fixture; this phase
 covers guest loopback and host-account authorization on the parent-only service.
 No live image build or timing run has been performed for these fixes.
 
+Validation now prepares the pinned prebuilt render probe's fixed output
+directory, relocates its bounded report into the protected probe base and
+cleans up the temporary directory. Sanitation refuses a leftover directory.
+This path correction has script/fixture coverage only; a fresh-image render
+build with the corrected validation script remains a live gate.
+
 ## Checks
 
 Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,

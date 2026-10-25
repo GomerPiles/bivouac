@@ -10,6 +10,7 @@ try {
  }
  $base='C:\ProgramData\Bivouac\Image'
  foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\actions-runner')){Assert-Ordinary $path}
+ if(Test-Path -LiteralPath 'C:\ProgramData\BivouacHcsSpike'){exit 32}
  if(!(Test-Path -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe' -PathType Leaf)){exit 1}
  # The template has recreated this directory after removal; it must not ship.
  if(Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox')){exit 31}
