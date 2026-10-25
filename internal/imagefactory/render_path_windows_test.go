@@ -16,6 +16,59 @@ import (
 
 const pinnedProbeDirectory = `C:\ProgramData\BivouacHcsSpike`
 
+// Include the real diagnostic helper but replace every native security query.
+// Nonzero diagnostic values distinguish successful CIM reads from the helper's
+// unavailable-value fallback; none of these fixtures reads host security state.
+func renderSecurityFixture(t *testing.T) string {
+	t.Helper()
+	start := strings.Index(guestValidate, "function Read-BitLockerDiagnostics")
+	if start < 0 {
+		t.Fatal("BitLocker helper missing")
+	}
+	end := strings.Index(guestValidate[start:], "\n}\n")
+	if end < 0 {
+		t.Fatal("BitLocker helper boundary missing")
+	}
+	return guestValidate[start:start+end+3] + `
+function Confirm-SecureBootUEFI {return $true}
+function Get-Tpm {return [pscustomobject]@{TpmPresent=$true;TpmReady=$true}}
+function Invoke-CimMethod {param($InputObject,$MethodName,$OperationTimeoutSec)
+ if($InputObject.Fixed -ne 1 -or $OperationTimeoutSec -ne 10){throw 'CIM scope'}
+ switch -CaseSensitive ($MethodName){
+  'GetConversionStatus' {return [pscustomobject]@{ReturnValue=0;ConversionStatus=4}}
+  'GetProtectionStatus' {return [pscustomobject]@{ReturnValue=0;ProtectionStatus=2}}
+  default {throw 'CIM method'}
+ }
+}
+`
+}
+
+func assertRenderSecurityReport(t *testing.T, output []byte) {
+	t.Helper()
+	var report map[string]json.RawMessage
+	if json.Unmarshal(output, &report) != nil {
+		t.Fatal("merged render report is not JSON")
+	}
+	for field, want := range map[string]string{
+		"secure_boot": "true", "tpm_present": "true", "tpm_ready": "true",
+		"bitlocker_conversion_status": "4", "bitlocker_protection_status": "2",
+		"guest_ready": "true", "credential_rotated": "false",
+		"desktop_ready": "true", "hardware_d3d11": "true", "presented": "true", "pixel_readback": "true",
+		"stage": "7", "hresult": "0", "gpu_device_diagnostics_valid": "true",
+		"topology_valid": "true", "virtual_equals_primary": "true", "hyperv_video_enabled": "true", "hyperv_video_started": "true",
+		"probe_foreground": "true", "probe_on_primary": "true", "probe_input_received": "true",
+		"security_window_found": "false", "security_on_primary": "false",
+	} {
+		if string(report[field]) != want {
+			t.Fatal("merged render report field changed:", field)
+		}
+	}
+	security, err := parseGuestSecurity(output)
+	if err != nil || security != (GuestSecurity{SecureBoot: true, TPMPresent: true, TPMReady: true, BitLockerConversionStatus: 4, BitLockerProtectionStatus: 2}) {
+		t.Fatal("merged render security report was not preserved by the consumer")
+	}
+}
+
 func renderPathFixture(t *testing.T) string {
 	t.Helper()
 	start := strings.Index(guestValidate, " # Render-probe wait and failure diagnostics.")
@@ -23,11 +76,12 @@ func renderPathFixture(t *testing.T) string {
 		t.Fatal("render step missing")
 	}
 	// Include the helpers, budget selection, path bridge, nested cleanup and
-	// final diagnostic catch together. Only the output path and clock are fake.
+	// final diagnostic catch together. Relocate the output path and fake the
+	// clock; the caller and security fixture stub native observations/actions.
 	step := guestValidate[start:]
 	step = strings.ReplaceAll(step, "'"+pinnedProbeDirectory+"'", "$data.spike")
 	step = strings.Replace(step, "[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{Elapsed=[pscustomobject]@{TotalSeconds=$data.elapsed}}", 1)
-	return "try{\n" + step
+	return renderSecurityFixture(t) + "try{\n" + step
 }
 
 func TestPinnedRenderProbeOutputBridge(t *testing.T) {
@@ -73,7 +127,10 @@ function Set-Acl {param($LiteralPath,$AclObject)
 function Get-ScheduledTask {param($TaskName,$ErrorAction) if($data.mode -eq 'task exists'){return $true};if($renderRegistered){[IO.File]::WriteAllText((Join-Path $data.root 'diagnostic-before-cleanup'),([int](Test-Path -LiteralPath $data.spike)).ToString());return [pscustomobject]@{State=4}}}
 function Get-ScheduledTaskInfo {param($TaskName,$ErrorAction) [pscustomobject]@{LastTaskResult=0x41301}}
 function Get-Process {param($ErrorAction)}
-function Get-CimInstance {param($ClassName,$Filter,$OperationTimeoutSec,$ErrorAction)}
+function Get-CimInstance {param($Namespace,$ClassName,$Filter,$OperationTimeoutSec,$ErrorAction)
+ if($Namespace -ceq 'root\CIMV2\Security\MicrosoftVolumeEncryption' -and $ClassName -ceq 'Win32_EncryptableVolume' -and $Filter -ceq "DriveLetter='C:'" -and $OperationTimeoutSec -eq 10){return [pscustomobject]@{Fixed=1}}
+ if($ClassName -cne 'Win32_PnPEntity' -or $Namespace){throw 'CIM scope'}
+}
 function New-ScheduledTaskPrincipal {param($UserId,$LogonType,$RunLevel)}
 function New-ScheduledTaskAction {param($Execute,$WorkingDirectory)}
 function New-ScheduledTaskSettingsSet {param($ExecutionTimeLimit,[switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries)}
@@ -156,6 +213,7 @@ function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::
 				if err != nil || string(b) != report || !json.Valid(output) {
 					t.Fatal("report was not relocated and decoded")
 				}
+				assertRenderSecurityReport(t, output)
 			}
 			if mode == "timeout" || mode == "cleanup failure" {
 				if probeFailureShape(output) == "" {
