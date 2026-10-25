@@ -190,14 +190,14 @@ func TestGuestBootstrapSyntax(t *testing.T) {
 			if err != nil {
 				t.Skip("PowerShell unavailable")
 			}
-			text, _ := json.Marshal(guestBootstrap)
+			text, _ := json.Marshal([]string{guestBootstrap, guestValidate})
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, path, "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(`$s=[Console]::In.ReadToEnd()|ConvertFrom-Json;$t=$null;$e=$null;$null=[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e);if($e.Count){exit 1}`))
+			cmd := exec.CommandContext(ctx, path, "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShell(`$scripts=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($s in $scripts){$t=$null;$e=$null;$null=[Management.Automation.Language.Parser]::ParseInput($s,[ref]$t,[ref]$e);if($e.Count){exit 1}}`))
 			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
 			cmd.Stdin = bytes.NewReader(text)
 			if err := cmd.Run(); err != nil {
-				t.Fatal("bootstrap syntax invalid")
+				t.Fatal("guest script syntax invalid")
 			}
 		})
 	}

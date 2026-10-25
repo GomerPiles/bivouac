@@ -18,19 +18,20 @@ const pinnedProbeDirectory = `C:\ProgramData\BivouacHcsSpike`
 
 func renderPathFixture(t *testing.T) string {
 	t.Helper()
-	start := strings.Index(guestValidate, " $step=32\n")
-	end := strings.LastIndex(guestValidate, "\n exit 0")
-	if start < 0 || end <= start {
+	start := strings.Index(guestValidate, " # Render-probe wait and failure diagnostics.")
+	if start < 0 || !strings.Contains(guestValidate[start:], " $step=32\n") || strings.Count(guestValidate[start:], "[Diagnostics.Stopwatch]::StartNew()") != 1 {
 		t.Fatal("render step missing")
 	}
-	step := guestValidate[start:end]
+	// Include the helpers, budget selection, path bridge, nested cleanup and
+	// final diagnostic catch together. Only the output path and clock are fake.
+	step := guestValidate[start:]
 	step = strings.ReplaceAll(step, "'"+pinnedProbeDirectory+"'", "$data.spike")
-	// Exercise the existing timeout exit without waiting or running a task.
-	return strings.ReplaceAll(step, "$probeBudget.Elapsed.TotalSeconds -gt 50", "$probeBudget.Elapsed.TotalSeconds -gt -1")
+	step = strings.Replace(step, "[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{Elapsed=[pscustomobject]@{TotalSeconds=$data.elapsed}}", 1)
+	return "try{\n" + step
 }
 
 func TestPinnedRenderProbeOutputBridge(t *testing.T) {
-	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed"} {
+	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed", "cleanup failure"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
@@ -54,9 +55,13 @@ func TestPinnedRenderProbeOutputBridge(t *testing.T) {
 				}
 			}
 			report := `{"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0}`
-			data, _ := json.Marshal(map[string]string{"mode": mode, "base": base, "spike": spike, "outside": outside, "report": report, "root": root})
+			elapsed := 0
+			if mode == "timeout" || mode == "cleanup failure" {
+				elapsed = 50
+			}
+			data, _ := json.Marshal(map[string]any{"mode": mode, "base": base, "spike": spike, "outside": outside, "report": report, "root": root, "elapsed": elapsed, "require_setup": false})
 			script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json
-$base=$data.base;$probe=Join-Path $base 'render.exe';$rotated=$false
+$base=$data.base;$probe=Join-Path $base 'render.exe';$rotated=$false;$session=2
 $acl=[Security.AccessControl.DirectorySecurity]::new()
 $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
 $topology=@{topology_valid=$true;virtual_equals_primary=$true;hyperv_video_enabled=$true;hyperv_video_started=$true;probe_foreground=$true;probe_on_primary=$true;probe_input_received=$true;security_window_found=$false;security_on_primary=$false}
@@ -65,14 +70,17 @@ function Set-Acl {param($LiteralPath,$AclObject)
  if($LiteralPath -ne $data.spike -or $AclObject.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'){throw 'wrong ACL'}
  if($data.mode -eq 'ACL error'){throw 'fixture ACL failure'}
 }
-function Get-ScheduledTask {param($TaskName,$ErrorAction) if($data.mode -eq 'task exists'){return $true}}
+function Get-ScheduledTask {param($TaskName,$ErrorAction) if($data.mode -eq 'task exists'){return $true};if($renderRegistered){[IO.File]::WriteAllText((Join-Path $data.root 'diagnostic-before-cleanup'),([int](Test-Path -LiteralPath $data.spike)).ToString());return [pscustomobject]@{State=4}}}
+function Get-ScheduledTaskInfo {param($TaskName,$ErrorAction) [pscustomobject]@{LastTaskResult=0x41301}}
+function Get-Process {param($ErrorAction)}
+function Get-CimInstance {param($ClassName,$Filter,$OperationTimeoutSec,$ErrorAction)}
 function New-ScheduledTaskPrincipal {param($UserId,$LogonType,$RunLevel)}
 function New-ScheduledTaskAction {param($Execute,$WorkingDirectory)}
 function New-ScheduledTaskSettingsSet {param($ExecutionTimeLimit,[switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries)}
 function Register-ScheduledTask {param($TaskName,$Principal,$Action,$Settings) if($data.mode -eq 'register error'){throw 'fixture registration failure'}}
 function Start-ScheduledTask {param($TaskName)
  if($data.mode -eq 'start error'){throw 'fixture start failure'}
- if($data.mode -eq 'timeout'){return}
+ if($data.mode -in @('timeout','cleanup failure')){return}
  $path=Join-Path $data.spike 'render.json'
  switch($data.mode){
   'oversize' {[IO.File]::WriteAllText($path,('x'*4097))}
@@ -83,10 +91,9 @@ function Start-ScheduledTask {param($TaskName)
   default {[IO.File]::WriteAllText($path,$data.report)}
  }
 }
-function Stop-ScheduledTask {param($TaskName,$ErrorAction) [IO.File]::WriteAllText((Join-Path $data.root 'stopped'),'true')}
+function Stop-ScheduledTask {param($TaskName,$ErrorAction) [IO.File]::WriteAllText((Join-Path $data.root 'stopped'),'true');if($data.mode -eq 'cleanup failure'){[IO.File]::WriteAllText((Join-Path $data.spike 'unexpected'),'preserve')}}
 function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::WriteAllText((Join-Path $data.root 'unregistered'),'true')}
-try{
-` + renderPathFixture(t) + "\n}catch{exit $step}\n"
+` + renderPathFixture(t)
 			system, err := windows.GetSystemDirectory()
 			if err != nil {
 				t.Fatal(err)
@@ -123,6 +130,8 @@ try{
 				want = 16
 			case "malformed":
 				want = 25
+			case "cleanup failure":
+				want = 34
 			}
 			if code != want {
 				t.Fatalf("render step exit %d, want %d", code, want)
@@ -135,9 +144,9 @@ try{
 				}
 			}
 			_, statErr := os.Lstat(spike)
-			if mode == "existing" {
+			if mode == "existing" || mode == "cleanup failure" {
 				if statErr != nil {
-					t.Fatal("pre-existing output directory removed")
+					t.Fatal("pre-existing or unconfirmed output directory removed")
 				}
 			} else if !os.IsNotExist(statErr) {
 				t.Fatal("owned spike directory remains")
@@ -146,6 +155,19 @@ try{
 				b, err := os.ReadFile(filepath.Join(base, "render.json"))
 				if err != nil || string(b) != report || !json.Valid(output) {
 					t.Fatal("report was not relocated and decoded")
+				}
+			}
+			if mode == "timeout" || mode == "cleanup failure" {
+				if probeFailureShape(output) == "" {
+					t.Fatal("timeout lost numeric diagnostics")
+				}
+				if b, err := os.ReadFile(filepath.Join(root, "diagnostic-before-cleanup")); err != nil || string(b) != "1" {
+					t.Fatal("timeout diagnostics ran after spike cleanup")
+				}
+			}
+			if mode == "cleanup failure" {
+				if b, err := os.ReadFile(filepath.Join(spike, "unexpected")); err != nil || string(b) != "preserve" {
+					t.Fatal("cleanup deleted an unexpected entry")
 				}
 			}
 			if b, err := os.ReadFile(filepath.Join(outside, "public.txt")); err != nil || string(b) != "public fixture" {

@@ -349,6 +349,11 @@ or owner record. It mounts, grants and boots only files it created.
    unknown); kinds are 0 unknown, 1 bool, 2 number, 3 string, 4 array, 5 object.
    Empty output, encoding signatures, leading/trailing contamination and valid
    JSON with incompatible types can thus be distinguished without guest text.
+   The first-boot render-probe wait is 180 seconds (`require_setup`), otherwise
+   50 seconds. Failed render validation can append strictly checked numeric
+   task/process/GPU/desktop-age observations; unavailable observations carry
+   explicit validity flags. Guest text and malformed diagnostic output are
+   discarded.
 3. The offline inspection gates the build. The template must be generalized
    to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
    A configured runner (`.runner`, `.credentials`), anything under its `_work`,
@@ -374,8 +379,11 @@ or owner record. It mounts, grants and boots only files it created.
    existing render checks. Sanitation retains both tasks, requires the runner
    task to be Ready, and removes launch/claim/cancellation and lab residue.
    A published directory is never reused.
-6. Build records stay in `<image_root>\.builds`. A failed build terminates its
-   own guest, confirms it absent and removes its workspace. If it could not
+6. Build records stay in `<image_root>\.builds`. After guest preparation fails,
+   cleanup first requests shutdown of its proven guest and waits at most
+   60 seconds total (at most 10 seconds for the request), then terminates as
+   before. A failed/refused request goes straight to termination. The build
+   still fails. Cleanup confirms absence and removes its workspace. If it could not
    confirm that, it keeps the workspace; settle it later, elevated:
 
    ```text

@@ -127,12 +127,24 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, errors.Join(errors.New("workspace ownership recording failed"), err, removeMarker, os.Remove(filepath.Join(workspace, "build.lock")), os.Remove(workspace))
 	}
 	var system *hcs.System
+	preparationStarted := false
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		var terminate func() error
 		if system != nil {
-			terminate = func() error { defer system.Close(); return system.Terminate(cleanupCtx) }
+			terminate = func() error {
+				defer system.Close()
+				stop := func() error { return system.Terminate(cleanupCtx) }
+				if preparationStarted && err != nil {
+					return terminateAfterGuestFailure(cleanupCtx, failureShutdownBudget,
+						func(ctx context.Context) error {
+							return requestFailureShutdown(ctx, guestagent.DialHvsock(r.RuntimeID))
+						},
+						func(ctx context.Context) error { _, e := system.WaitExit(ctx); return e }, stop)
+				}
+				return stop()
+			}
 		}
 		cleanupErr := cleanupOwned(terminate, func() error { return waitAbsent(cleanupCtx, api, r.Name) }, func() error {
 			if r.NativeAttempted && !r.GuestCompleted && err != nil {
@@ -302,6 +314,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		if e = r.save(); e != nil {
 			return e
 		}
+		preparationStarted = true
 		return prepareUntilExit(guardCtx, func(ctx context.Context) error {
 			_, err := system.WaitExit(ctx)
 			return err
