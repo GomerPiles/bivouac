@@ -158,7 +158,13 @@ func guestRun(ctx context.Context, dial guestagent.Dialer, script string, data a
 	if err != nil {
 		var exit *guestagent.ExitError
 		if errors.As(err, &exit) && exit.Code > 0 && exit.Code <= 255 {
-			return nil, fmt.Errorf("fixed guest operation exited at step %d", exit.Code)
+			message := fmt.Sprintf("fixed guest operation exited at step %d", exit.Code)
+			if script == validateEntry {
+				if shape := probeFailureShape(out.data); shape != "" {
+					message += " (" + shape + ")"
+				}
+			}
+			return nil, errors.New(message)
 		}
 		return nil, errors.New("fixed guest operation failed")
 	}

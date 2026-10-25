@@ -16,6 +16,9 @@ Console/OOBE readiness remains a live gate for the agent-served guest.
 In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
 MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
 Recovery after an actual agent crash remains unverified.
+ISO-based agent lab images reach completed setup and topology validation, but
+render-probe validation times out; a successful factory build and agent-image
+timing run remain open gates.
 
 Windows contract 2 requires the agent logon task and separate on-demand runner
 task. Installation self-test checks both task definitions and the runner's
@@ -225,7 +228,18 @@ round trips are opt-in and are not part of ordinary local tests.
 The guest bootstrap used to discard a pinned script's nonzero exit code, so a
 validation step failure surfaced as an empty, invalid topology report.
 PowerShell 5.1 tests reproduce that and cover the fix, which propagates script
-exit codes; it has local coverage only.
+exit codes. Agent-backed lab validation now exposes the render wait failure
+as step 16 rather than an invalid topology report.
+
+Agent-backed no-NIC ISO lab images complete setup, reach a stable desktop and
+pass the topology probe, but the render probe produces no report within the
+previous 50-second wait (step 16). Offline evidence shows the GPU-PV and
+synthetic display devices started without a reported GPU problem; it does not
+identify where the prebuilt render probe stalls. First-boot validation now
+allows 180 seconds, emits bounded numeric failure facts and attempts bounded
+graceful shutdown before termination to preserve event logs. These changes
+have local tests only; render completion, failure observations and event-log
+flushing still need a separately authorized live build.
 
 The runtime and factory agent switch is code-complete with fake-agent, offline-copy and relay tests;
 live validation is pending a matching image. Tests cover exact receive metadata,

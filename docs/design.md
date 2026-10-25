@@ -1163,6 +1163,20 @@ ACL and deny-write handles, not hashed per job.
   Validation decodes the entire bounded stdout as one
   JSON value with the expected types, without extracting or repairing bytes.
   Decode errors contain only numeric shape facts, never guest text.
+  The render probe has an explicit 180-second wait during first-boot factory
+  validation (`require_setup`), and 50 seconds otherwise; its task execution
+  limit exceeds that wait by 30 seconds. Probe failures emit at most 2 KiB of
+  fixed numeric/boolean facts: task state/result, console-session render count
+  and CPU time, present display/GPU-PV state, Explorer age and elapsed/budget
+  seconds. Observation flags distinguish unavailable facts from zero. Failed
+  validation errors append only a strictly decoded, complete schema; malformed,
+  oversized or unexpected output adds no guest bytes to errors.
+  After a preparation failure on the proven running guest, cleanup requests
+  guest shutdown through fixed agent argv, allowing at most 60 seconds total
+  for the request and native exit observation (request capped at 10 seconds),
+  then performs the existing terminate/absence cleanup. Refusal or timeout
+  cannot suppress termination or turn the build into success. This gives guest
+  event logs a chance to flush; successful flushing remains a live gate.
   The build checks hardware D3D11, presentation and pixel readback, requires
   graceful shutdown, flattens the child and writes the manifest last.
 - **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the
