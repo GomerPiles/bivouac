@@ -1094,6 +1094,13 @@ ACL and deny-write handles, not hashed per job.
   No legacy agent, helper, display-driver or OpenSSH installer is accepted.
   Bivouac build scripts, helpers, markers and temporary probes live under
   protected `C:\ProgramData\Bivouac\Image`.
+  The pinned prebuilt render probe still writes its report to the hard-coded
+  `C:\ProgramData\BivouacHcsSpike\render.json`. Validation creates that temporary
+  directory with the same protected ACL as `Image\Probe`, refusing an existing
+  directory. It moves the ordinary, link-free report (at most 4 KiB) into
+  `Image\Probe\render.json` and removes the spike directory. Render-step cleanup
+  runs on failure too; sanitation refuses a leftover spike directory. This path
+  bridge goes away when the Go render probe replaces the prebuilt executable.
 - **Specialize:** before FirstLogon, stop/delete the legacy agent service,
   remove every legacy VDD device (including phantom nodes) and its driver
   package, and delete the entire legacy component directory with bounded
