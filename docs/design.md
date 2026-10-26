@@ -1169,8 +1169,9 @@ ACL and deny-write handles, not hashed per job.
   enabled, no restart policy and no idle, network or battery conditions.
   Fixed registration XML sets the task DACL to SYSTEM and Administrators full
   control, owner Administrators; no user ACE comes from the factory. Task
-  Scheduler stores it unprotected and adds read-only access for the task's own
-  principal, which cannot run it. A registration that gave Administrators only
+  Scheduler stores it unprotected, so it also inherits the root task folder's
+  SYSTEM and Administrators entries, and adds read-only access for the task's
+  own principal, which cannot run it. A registration that gave Administrators only
   read/execute was refused in a live build. The self-test accepts exactly
   these entries. A filtered same-user process must be refused task activation. The
   existing guest-directory user full-control ACE remains; narrowing it is

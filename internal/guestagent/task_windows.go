@@ -159,7 +159,8 @@ func taskFacts(raw []byte, name, user, sid string, resolve func(string) string) 
 // SYSTEM and Administrators have full control. Task Scheduler stores the DACL
 // without the protected flag and adds read-only access for the task's own
 // principal (observed on Windows 11 26300); read access cannot run the task.
-// No other or inherited entry is accepted.
+// In the root task folder it also inherits that folder's SYSTEM and
+// Administrators entries. No other principal is accepted, explicit or inherited.
 func runnerTaskSecurity(text, principal string) bool {
 	sd, err := windows.SecurityDescriptorFromString(text)
 	if err != nil {
@@ -170,17 +171,29 @@ func runnerTaskSecurity(text, principal string) bool {
 		return false
 	}
 	acl, _, err := sd.DACL()
-	if err != nil || acl == nil || acl.AceCount < 2 || acl.AceCount > 3 {
+	if err != nil || acl == nil || acl.AceCount < 2 || acl.AceCount > 16 {
 		return false
 	}
 	seen := map[string]bool{}
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
-		if windows.GetAce(acl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags != 0 {
+		if windows.GetAce(acl, i, &ace) != nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return false
 		}
 		// #nosec G103 -- GetAce validates the variable-sized SID.
 		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		system, admins := sid.IsWellKnown(windows.WinLocalSystemSid), sid.IsWellKnown(windows.WinBuiltinAdministratorsSid)
+		// The unprotected DACL inherits the task folder's entries; only
+		// SYSTEM and Administrators may appear that way, with any access.
+		if ace.Header.AceFlags == windows.INHERITED_ACE {
+			if !system && !admins {
+				return false
+			}
+			continue
+		}
+		if ace.Header.AceFlags != 0 {
+			return false
+		}
 		key := sid.String()
 		if seen[key] {
 			return false
@@ -189,7 +202,7 @@ func runnerTaskSecurity(text, principal string) bool {
 		mask := uint32(0x1f01ff) // FILE_ALL_ACCESS
 		if principal != "" && key == principal {
 			mask = 0x120089 // FILE_GENERIC_READ
-		} else if !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		} else if !system && !admins {
 			return false
 		}
 		if uint32(ace.Mask) != mask {
