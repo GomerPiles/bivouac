@@ -16,18 +16,20 @@ type agentLiveFacts struct {
 	LoopbackRefused     bool                         `json:"loopback_refused"`
 	Installation        guestagent.InstallationFacts `json:"installation"`
 	Probe               winrunner.LabProbeFacts      `json:"probe"`
+	RunnerRun           winrunner.LabRunnerRunFacts  `json:"runner_run"`
 	GateStage           string                       `json:"gate_stage"`
 	TaskRestartSurvived bool                         `json:"task_restart_survived"`
 	AgentKillSurvived   bool                         `json:"agent_kill_survived"`
 }
 
 func (f agentLiveFacts) valid() bool {
-	return f.LoopbackRefused && f.Installation.Valid() && f.Probe.Valid() && f.TaskRestartSurvived && f.AgentKillSurvived
+	return f.LoopbackRefused && f.Installation.Valid() && f.Probe.Valid() && f.RunnerRun.Valid() && f.TaskRestartSurvived && f.AgentKillSurvived
 }
 
 func labAgentCommand(ctx context.Context, dial guestagent.Dialer, argv []string, result any) error {
-	// Definition/ACL inspection includes bounded Task Scheduler queries.
-	attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
+	// Definition/ACL inspection includes bounded Task Scheduler queries; the
+	// descriptor query alone may take a minute on a fresh guest.
+	attempt, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	output := &validationOutput{steps: map[string]int64{}, begun: time.Now()}
 	if guestagent.Run(attempt, dial, argv, nil, output) != nil {
@@ -83,6 +85,14 @@ func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLi
 		return
 	}
 	baseline := facts.Probe
+	// The probe holds the runner task, so neither run below starts anything.
+	facts.GateStage = "runner-run"
+	if err = command(ctx, "lab-runner-run", &facts.RunnerRun); err != nil {
+		return
+	}
+	if !facts.RunnerRun.Valid() {
+		return facts, errors.New("runner task activation is not limited to administrators")
+	}
 	for _, cycle := range []struct {
 		start, result string
 		passed        *bool

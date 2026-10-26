@@ -33,17 +33,19 @@ func TestTaskSchemaDefaults(t *testing.T) {
 func TestRunnerTaskSecuritySeparateFromRuntimeDefinition(t *testing.T) {
 	const principal = "S-1-5-21-1-2-3-1001"
 	good := "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)"
-	// The form Task Scheduler stores after registering good (observed live).
-	stored := good + "(A;;FR;;;" + principal + ")"
-	// The root task folder's form, as a live guest stored it.
-	rooted := "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;" + principal + ")"
-	accepted := map[string]bool{good: true, stored: true, rooted: true, strings.ReplaceAll(stored, "O:BA", "O:SY"): true, strings.ReplaceAll(stored, "D:", "D:P"): true}
-	for _, text := range []string{good, stored, rooted, strings.ReplaceAll(stored, "O:BA", "O:SY"), strings.ReplaceAll(stored, "D:", "D:P"), "",
-		strings.ReplaceAll(stored, "O:BA", "O:BU"), stored + "(A;;FR;;;BU)", strings.ReplaceAll(stored, "FR;;;"+principal, "FRFX;;;"+principal),
-		strings.ReplaceAll(stored, principal, "S-1-5-21-1-2-3-1002"), strings.ReplaceAll(stored, "FA;;;BA", "FRFX;;;BA"), strings.ReplaceAll(stored, "FA;;;SY", "FRFX;;;SY"),
-		"O:BAD:(A;;FA;;;SY)(A;;FR;;;" + principal + ")", "O:BAD:(A;;FA;;;SY)(A;ID;FA;;;BA)(A;;FR;;;" + principal + ")", "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;SY)",
-		rooted + "(A;ID;FRFX;;;AU)", rooted + "(A;ID;FR;;;" + principal + ")", strings.ReplaceAll(rooted, "(A;ID;FA;;;BA)", "(A;CIID;FA;;;BA)")} {
-		if runnerTaskSecurity(text, principal) != accepted[text] {
+	// The root task folder's inherited entries, as a live guest stored them.
+	rooted := good + "(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)"
+	// The principal's read entry lets its user, even unelevated, run the task.
+	withPrincipal := rooted + "(A;;FR;;;" + principal + ")"
+	many := good + strings.Repeat("(A;ID;FA;;;BA)", 15)
+	accepted := map[string]bool{good: true, rooted: true, strings.ReplaceAll(good, "O:BA", "O:SY"): true, strings.ReplaceAll(good, "D:", "D:P"): true}
+	for _, text := range []string{good, rooted, strings.ReplaceAll(good, "O:BA", "O:SY"), strings.ReplaceAll(good, "D:", "D:P"), "", withPrincipal,
+		good + "(A;;FR;;;" + principal + ")", strings.ReplaceAll(good, "O:BA", "O:BU"), good + "(A;;FR;;;BU)", strings.ReplaceAll(good, "FA;;;BA", "FRFX;;;BA"),
+		strings.ReplaceAll(good, "FA;;;SY", "FRFX;;;SY"), "O:BAD:(A;;FA;;;SY)", "O:BAD:(A;;FA;;;SY)(A;ID;FA;;;BA)", good + "(A;;FA;;;SY)",
+		rooted + "(A;ID;FRFX;;;AU)", strings.ReplaceAll(rooted, "(A;ID;FA;;;BA)", "(A;CIID;FA;;;BA)"), strings.ReplaceAll(good, "(A;;FA;;;BA)", "(A;OI;FA;;;BA)"),
+		strings.ReplaceAll(good, "(A;;FA;;;BA)", "(A;IO;FA;;;BA)"), good + "(D;;FA;;;BU)", good + "(OA;;FA;bf967aba-0de6-11d0-a285-00aa003049e2;;BU)",
+		"O:BA", "O:BAD:", many} {
+		if runnerTaskSecurity(text) != accepted[text] {
 			t.Fatal("unexpected installation DACL decision", text)
 		}
 		raw := strings.ReplaceAll(runnerTaskXML, good, text)

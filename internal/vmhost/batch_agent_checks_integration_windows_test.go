@@ -70,6 +70,8 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 				result = map[string]bool{"started": true}
 			case "lab-status":
 				result = winrunner.LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: "unknown", AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
+			case "lab-runner-run":
+				result = winrunner.LabRunnerRunFacts{FilteredToken: true, FilteredRefused: true, ElevatedAccepted: true}
 			case "lab-task-cycle", "lab-agent-cycle":
 				result = map[string]any{"scheduled": true, "id": "fixture-id"}
 			case "lab-task-result", "lab-agent-result":
@@ -84,7 +86,7 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 		return host, nil
 	}
 	facts, err := agentLiveChecks(t.Context(), dial)
-	want := []string{"loopback", "inspect", "lab-start", "lab-status", "lab-task-cycle", "lab-task-result", "lab-status", "lab-agent-cycle", "lab-agent-result", "lab-status", "lab-stop"}
+	want := []string{"loopback", "inspect", "lab-start", "lab-status", "lab-runner-run", "lab-task-cycle", "lab-task-result", "lab-status", "lab-agent-cycle", "lab-agent-result", "lab-status", "lab-stop"}
 	if err != nil || !facts.valid() || !slices.Equal(calls, want) {
 		t.Fatal("incorrect live-gate command sequence", err, calls)
 	}

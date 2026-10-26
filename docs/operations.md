@@ -300,8 +300,8 @@ or owner record. It mounts, grants and boots only files it created.
      binary runs `guest windows detached` on demand for the same elevated
      interactive user, priority 4, IgnoreNew, no restart policy or time limit,
      and no idle/network/battery conditions. Registration XML gives SYSTEM and
-     Administrators full control; Task Scheduler adds read-only access for the
-     task's own account. Preparation
+     Administrators full control, registered without the principal's own entry
+     (`TASK_DONT_ADD_PRINCIPAL_ACE`). Preparation
      and publication self-tests check both task definitions and the runner
      task's current security descriptor. A matching contract-2 image is required.
    - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,

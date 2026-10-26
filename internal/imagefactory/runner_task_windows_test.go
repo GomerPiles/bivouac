@@ -17,6 +17,11 @@ func TestRunnerTaskRegistrationXML(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("registration block unavailable")
 	}
+	// TASK_CREATE|TASK_DONT_ADD_PRINCIPAL_ACE with an interactive-token logon;
+	// the cmdlet would grant the principal read access, which lets it run.
+	if !strings.Contains(guestSetup, `RegisterTask('bivouac-guest-runner',$Xml,0x12,$null,$null,3,$null)`) || strings.Contains(guestSetup, "Register-ScheduledTask -TaskName 'bivouac-guest-runner'") {
+		t.Fatal("runner task registration may add a principal entry")
+	}
 	guardStart, guardEnd := strings.Index(guestSetup, "# Check both tasks"), strings.Index(guestSetup, "$principal=New-ScheduledTaskPrincipal")
 	if guardStart < 0 || guardEnd <= guardStart || guardEnd > strings.Index(guestSetup, "Register-ScheduledTask") {
 		t.Fatal("task prechecks do not precede registration")
@@ -26,8 +31,7 @@ func TestRunnerTaskRegistrationXML(t *testing.T) {
 		input, _ := json.Marshal(map[string]string{"existing": existing})
 		script := `$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$registered=$false;$refused=$false
 function Get-ScheduledTask {param($TaskName,$ErrorAction) if($TaskName -cnotin @('bivouac-guest-agent','bivouac-guest-runner')){throw 'wrong task'};if($d.existing -ceq $TaskName){[pscustomobject]@{State=3}}}
-function Register-ScheduledTask {param($TaskName,$Xml)
- if($TaskName -cne 'bivouac-guest-runner'){throw 'wrong task'}
+function Register-RunnerTask {param($Xml)
  $x=[xml]$Xml;$t=$x.Task
  if($t.Triggers.ChildNodes.Count -ne 0 -or $t.Principals.Principal.Count -gt 1 -or $t.Principals.Principal.UserId -cne ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -or $t.Principals.Principal.LogonType -cne 'InteractiveToken' -or $t.Principals.Principal.RunLevel -cne 'HighestAvailable'){throw 'principal or trigger'}
  if($t.Actions.ChildNodes.Count -ne 1 -or $t.Actions.Exec.Command -cne 'C:\Program Files\Bivouac\bivouac.exe' -or $t.Actions.Exec.Arguments -cne 'guest windows detached' -or $t.Actions.Exec.WorkingDirectory -cne 'C:\ProgramData\Bivouac\Guest'){throw 'action'}

@@ -7,6 +7,16 @@ function Write-SetupStep([int]$Code,[bool]$Failed){
  $fact.video=$videoDiagnostics
  [IO.File]::WriteAllText('C:\Windows\Panther\Unattend\setup-step.json',($fact|ConvertTo-Json -Compress -Depth 8),[Text.UTF8Encoding]::new($false))
 }
+# TASK_CREATE|TASK_DONT_ADD_PRINCIPAL_ACE (0x12) with an interactive-token
+# logon (3). The registration cmdlet would add read access for the principal,
+# and Task Scheduler lets a task's own user, even unelevated, run a task it
+# can read.
+function Register-RunnerTask([string]$Xml){
+ $s=New-Object -ComObject Schedule.Service
+ try{$s.Connect();$f=$s.GetFolder('\')
+  try{$null=$f.RegisterTask('bivouac-guest-runner',$Xml,0x12,$null,$null,3,$null)}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($f)}
+ }finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($s)}
+}
 try{
  # Do not replace a failed/interrupted specialize step with FirstLogon's 10.
  $step=89
@@ -145,7 +155,7 @@ $runnerXml=@'
 </Task>
 '@
 $runnerXml=$runnerXml.Replace('RUNNER_USER_SID',$runnerUser)
-Register-ScheduledTask -TaskName 'bivouac-guest-runner' -Xml $runnerXml | Out-Null
+Register-RunnerTask $runnerXml
 $step=60;Write-SetupStep $step $false
 Start-ScheduledTask -TaskName 'bivouac-guest-agent'
 

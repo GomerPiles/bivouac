@@ -1168,15 +1168,18 @@ ACL and deny-write handles, not hashed per job.
   no triggers, priority 4, PT0S time limit, IgnoreNew, on-demand execution
   enabled, no restart policy and no idle, network or battery conditions.
   Fixed registration XML sets the task DACL to SYSTEM and Administrators full
-  control, owner Administrators; no user ACE comes from the factory. Task
-  Scheduler stores it unprotected, so it also inherits the root task folder's
-  SYSTEM and Administrators entries, and adds read-only access for the task's
-  own principal, which cannot run it. A registration that gave Administrators only
-  read/execute was refused in a live build. The self-test accepts exactly
-  these entries. A filtered same-user process must be refused task activation. The
-  existing guest-directory user full-control ACE remains; narrowing it is
-  outside this change. The task DACL prevents this new elevated launch path
-  from being available to a filtered process.
+  control, owner Administrators (a registration that gave Administrators only
+  read/execute was refused in a live build). The factory registers it through
+  COM with `TASK_DONT_ADD_PRINCIPAL_ACE`: Task Scheduler otherwise adds read
+  access for the task's principal, and a task's own user may run a task it can
+  read even from a filtered token. Task Scheduler stores the DACL unprotected,
+  so it also inherits the root task folder's SYSTEM and Administrators
+  entries. The self-test requires explicit SYSTEM and Administrators full
+  control and accepts inherited entries for those two only (any access); any
+  other principal, explicit or inherited, is refused. That a filtered
+  same-user process is refused task activation is a live gate. The existing
+  guest-directory user full-control ACE remains; narrowing it is outside this
+  change.
 - **Launch safety:** before writing `launch-mode` or the single-use `launched`
   marker, structurally validate the runner task's bounded XML from
   `schtasks /Query /XML`. Runtime performs no PowerShell or descriptor query.

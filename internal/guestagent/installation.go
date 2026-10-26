@@ -13,8 +13,9 @@ type TaskFacts struct {
 	TaskPolicy      bool   `json:"task_policy"`
 	TaskSecurity    bool   `json:"task_security"`
 	// SecurityShape explains a refused descriptor without account identifiers:
-	// "query" when it could not be read, else the owner kind and each entry's
-	// kind (SY, BA, principal P, other X), access mask and flags.
+	// "query" when it could not be read, "parse" when it was not SDDL, else the
+	// owner kind, "protected" if set, "dacl=none" or each entry's kind (SY, BA,
+	// principal P, other X), type, access mask and flags, or "ace=unreadable".
 	SecurityShape string `json:"security_shape,omitempty"`
 }
 
