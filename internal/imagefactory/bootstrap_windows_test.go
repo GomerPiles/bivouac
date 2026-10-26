@@ -147,7 +147,7 @@ func TestGuestBootstrapOutput(t *testing.T) {
 	t.Logf("assignment-only exit len=%d want_len=7", len(b))
 	for _, layout := range []struct{ frame, write int }{{1, 1}, {7, 11}, {7, 0}, {32768, 0}} {
 		t.Run(fmt.Sprintf("frame%d_write%d", layout.frame, layout.write), func(t *testing.T) {
-			framed := fakeFactoryAgentFrames(func(_ []string, input []byte) ([]byte, int) {
+			framed := fakeFactoryAgentFrames(answerInstallation(func(_ []string, input []byte) ([]byte, int) {
 				if len(input) == 0 {
 					return nil, 0
 				} // agent version proof
@@ -163,7 +163,7 @@ func TestGuestBootstrapOutput(t *testing.T) {
 				default:
 					return acknowledgements["2.300.0"], 0
 				}
-			}, layout.frame, layout.write)
+			}), layout.frame, layout.write)
 			r := &record{}
 			if err := prepareGuestWithDial(t.Context(), testConfig(), r, framed); err != nil || r.Manifest.Topology == nil || !r.Manifest.Topology.SyntheticOK() || r.Manifest.RunnerVersion != "2.300.0" {
 				t.Fatal("real report changed in framing or production decoding")
@@ -291,12 +291,12 @@ func TestGuestBootstrapPinnedExitContracts(t *testing.T) {
 					t.Fatal("old bootstrap did not reproduce successful empty output")
 				}
 				t.Log("unpropagated process_exit=0 stdout_len=0; fixed process_exit=16 stdout_len=0")
-				fake = fakeFactoryAgent(func(_ []string, input []byte) ([]byte, int) {
+				fake = fakeFactoryAgent(answerInstallation(func(_ []string, input []byte) ([]byte, int) {
 					if len(input) == 0 {
 						return nil, 0
 					} // version proof
 					return output, code
-				})
+				}))
 				err = prepareGuestWithDial(t.Context(), testConfig(), &record{}, fake)
 				if err == nil || !strings.Contains(err.Error(), "fixed guest operation exited at step 16") || strings.Contains(err.Error(), "invalid topology report") {
 					t.Fatal("empty failure was misreported as malformed topology")
@@ -343,7 +343,7 @@ func TestRealReportShapeFailures(t *testing.T) {
 			}
 			t.Log(shape)
 			// Use the production preparation decoder, not just a test unmarshal.
-			fake := fakeFactoryAgent(func([]string, []byte) ([]byte, int) { return b, 0 })
+			fake := fakeFactoryAgent(answerInstallation(func([]string, []byte) ([]byte, int) { return b, 0 }))
 			err = prepareGuestWithDial(t.Context(), testConfig(), &record{}, fake)
 			if err == nil || err.Error() != "invalid topology report ("+shape+")" {
 				t.Fatal("production decoder or diagnostic changed")

@@ -108,6 +108,19 @@ func fakeFactoryAgentFrames(respond func([]string, []byte) ([]byte, int), frameS
 	}
 }
 
+// answerInstallation lets a preparation fake pass the installation self-test
+// with valid facts and hands every other command to respond.
+func answerInstallation(respond func([]string, []byte) ([]byte, int)) func([]string, []byte) ([]byte, int) {
+	return func(argv []string, input []byte) ([]byte, int) {
+		if slices.Equal(argv, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}) {
+			task := guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+			b, _ := json.Marshal(guestagent.InstallationFacts{AutologonAccountMatches: true, TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: task})
+			return b, 0
+		}
+		return respond(argv, input)
+	}
+}
+
 func TestFactoryAgentConversation(t *testing.T) {
 	var stages []string
 	r := &record{Name: "bivouac-aaaaaaa", Manifest: Manifest{ProbeSHA256: strings.Repeat("a", 64), ValidationSHA256: strings.Repeat("b", 64), AutologonSHA256: strings.Repeat("c", 64)}}
