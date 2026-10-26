@@ -224,3 +224,14 @@ func TestPinnedHelperRefusesMissingAndLinks(t *testing.T) {
 		})
 	}
 }
+
+func TestSecurityShapeHasNoIdentifiers(t *testing.T) {
+	const principal = "S-1-5-21-1-2-3-1001"
+	got := securityShape("O:BAD:P(A;;FA;;;SY)(A;OI;FRFX;;;BA)(A;;FR;;;"+principal+")(A;;FR;;;S-1-5-21-1-2-3-1002)", principal)
+	if got != "owner=BA protected SY:0:1f01ff:0 BA:0:1200a9:1 P:0:120089:0 X:0:120089:0" || strings.Contains(got, "S-1-") {
+		t.Fatal("unexpected descriptor shape", got)
+	}
+	if securityShape("not sddl", principal) != "parse" {
+		t.Fatal("unparsable descriptor shape")
+	}
+}

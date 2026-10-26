@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -198,8 +199,49 @@ func runnerTaskSecurity(text, principal string) bool {
 	return seen["S-1-5-18"] && seen["S-1-5-32-544"]
 }
 
-func taskOutput(ctx context.Context, binary string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+// securityShape describes a descriptor with fixed tokens only, never a SID.
+func securityShape(text, principal string) string {
+	sd, err := windows.SecurityDescriptorFromString(text)
+	if err != nil {
+		return "parse"
+	}
+	kind := func(sid *windows.SID) string {
+		switch {
+		case sid == nil:
+			return "none"
+		case sid.IsWellKnown(windows.WinLocalSystemSid):
+			return "SY"
+		case sid.IsWellKnown(windows.WinBuiltinAdministratorsSid):
+			return "BA"
+		case principal != "" && sid.String() == principal:
+			return "P"
+		}
+		return "X"
+	}
+	owner, _, _ := sd.Owner()
+	shape := "owner=" + kind(owner)
+	control, _, err := sd.Control()
+	if err == nil && control&windows.SE_DACL_PROTECTED != 0 {
+		shape += " protected"
+	}
+	acl, _, err := sd.DACL()
+	if err != nil || acl == nil {
+		return shape + " dacl=none"
+	}
+	for i := uint32(0); i < uint32(acl.AceCount) && i < 16; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if windows.GetAce(acl, i, &ace) != nil {
+			return shape + " ace=unreadable"
+		}
+		// #nosec G103 -- GetAce validates the variable-sized SID.
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		shape += fmt.Sprintf(" %s:%d:%x:%x", kind(sid), ace.Header.AceType, uint32(ace.Mask), ace.Header.AceFlags)
+	}
+	return shape
+}
+
+func taskOutput(ctx context.Context, limit time.Duration, binary string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
@@ -217,7 +259,7 @@ func readTaskDefinition(ctx context.Context, name, user, sid string) (TaskFacts,
 	if err != nil {
 		return TaskFacts{}, errors.New("task facts unavailable")
 	}
-	raw, err := taskOutput(ctx, filepath.Join(system, "schtasks.exe"), "/Query", "/TN", name, "/XML")
+	raw, err := taskOutput(ctx, 10*time.Second, filepath.Join(system, "schtasks.exe"), "/Query", "/TN", name, "/XML")
 	if err != nil {
 		return TaskFacts{}, err
 	}
@@ -248,12 +290,16 @@ func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, erro
 		}
 		// Query the registered object's descriptor; XML registration metadata alone
 		// does not prove that its current DACL still matches. Fixed code, no input.
-		raw, err := taskOutput(ctx, filepath.Join(system, `WindowsPowerShell\v1.0\powershell.exe`), "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop';$s=New-Object -ComObject Schedule.Service;try{$s.Connect();$f=$s.GetFolder('\');try{$t=$f.GetTask('bivouac-guest-runner');try{[Console]::Out.Write($t.GetSecurityDescriptor(5))}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($t)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($f)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($s)}`)
+		raw, err := taskOutput(ctx, time.Minute, filepath.Join(system, `WindowsPowerShell\v1.0\powershell.exe`), "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop';$s=New-Object -ComObject Schedule.Service;try{$s.Connect();$f=$s.GetFolder('\');try{$t=$f.GetTask('bivouac-guest-runner');try{[Console]::Out.Write($t.GetSecurityDescriptor(5))}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($t)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($f)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($s)}`)
 		if err != nil {
 			facts.TaskSecurity = false
+			facts.SecurityShape = "query"
 			return facts, err
 		}
 		facts.TaskSecurity = runnerTaskSecurity(string(raw), sid)
+		if !facts.TaskSecurity {
+			facts.SecurityShape = securityShape(string(raw), sid)
+		}
 	}
 	return facts, nil
 }
