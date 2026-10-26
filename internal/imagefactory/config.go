@@ -322,33 +322,36 @@ func encodeDriverPlan(drivers []Driver) ([]byte, error) {
 
 // Manifest deliberately has no credential or private setup fields.
 type Manifest struct {
-	AgentTask        guestagent.TaskFacts `json:"agent_task"`
-	RunnerTask       guestagent.TaskFacts `json:"runner_task"`
-	Topology         *windesktop.Topology `json:"topology,omitempty"`
-	AgentSHA256      string               `json:"agent_sha256"`
-	WindowsContract  int                  `json:"windows_contract"`
-	BuildID          string               `json:"build_id"`
-	GuestName        string               `json:"guest_name"`
-	GuestUser        string               `json:"guest_user"`
-	Source           string               `json:"source"`
-	SourceSHA256     string               `json:"source_sha256"`
-	Template         string               `json:"template,omitempty"`
-	Output           string               `json:"output"`
-	Size             int64                `json:"size"`
-	SHA256           string               `json:"sha256"`
-	ProbeSHA256      string               `json:"probe_sha256"`
-	ValidationSHA256 string               `json:"validation_sha256"`
-	AutologonSHA256  string               `json:"autologon_sha256"`
-	Assets           map[string]string    `json:"assets"`
-	RunnerVersion    string               `json:"runner_version,omitempty"`
-	Drivers          []Driver             `json:"drivers"`
-	Revision         string               `json:"vcs_revision"`
-	Started          time.Time            `json:"started"`
-	Ended            time.Time            `json:"ended"`
-	PhaseMS          map[string]int64     `json:"phase_ms"`
+	AutologonAccountMatches bool                 `json:"autologon_account_matches"`
+	AgentTask               guestagent.TaskFacts `json:"agent_task"`
+	RunnerTask              guestagent.TaskFacts `json:"runner_task"`
+	Topology                *windesktop.Topology `json:"topology,omitempty"`
+	AgentSHA256             string               `json:"agent_sha256"`
+	WindowsContract         int                  `json:"windows_contract"`
+	BuildID                 string               `json:"build_id"`
+	GuestName               string               `json:"guest_name"`
+	GuestUser               string               `json:"guest_user"`
+	Source                  string               `json:"source"`
+	SourceSHA256            string               `json:"source_sha256"`
+	Template                string               `json:"template,omitempty"`
+	Output                  string               `json:"output"`
+	Size                    int64                `json:"size"`
+	SHA256                  string               `json:"sha256"`
+	ProbeSHA256             string               `json:"probe_sha256"`
+	ValidationSHA256        string               `json:"validation_sha256"`
+	AutologonSHA256         string               `json:"autologon_sha256"`
+	Assets                  map[string]string    `json:"assets"`
+	RunnerVersion           string               `json:"runner_version,omitempty"`
+	Drivers                 []Driver             `json:"drivers"`
+	Revision                string               `json:"vcs_revision"`
+	Started                 time.Time            `json:"started"`
+	Ended                   time.Time            `json:"ended"`
+	PhaseMS                 map[string]int64     `json:"phase_ms"`
 }
 
-func (m Manifest) tasksValid() bool { return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() }
+func (m Manifest) tasksValid() bool {
+	return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() && m.AutologonAccountMatches
+}
 
 // cleanupOwned makes absence the barrier before detaching or removing storage.
 // Termination errors do not override a later authoritative absence observation.

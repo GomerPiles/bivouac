@@ -164,7 +164,7 @@ func TestManifestPublicFields(t *testing.T) {
 	if json.Unmarshal(b, &fields) != nil {
 		t.Fatal("manifest JSON")
 	}
-	for _, required := range []string{"agent_sha256", "windows_contract", "build_id", "guest_name", "guest_user", "source", "source_sha256", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
+	for _, required := range []string{"agent_sha256", "windows_contract", "autologon_account_matches", "build_id", "guest_name", "guest_user", "source", "source_sha256", "output", "size", "sha256", "probe_sha256", "validation_sha256", "autologon_sha256", "assets", "drivers", "vcs_revision", "started", "ended", "phase_ms"} {
 		if _, ok := fields[required]; !ok {
 			t.Fatal("missing", required)
 		}

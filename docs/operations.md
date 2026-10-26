@@ -352,7 +352,7 @@ or owner record. It mounts, grants and boots only files it created.
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks, driver versions and
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and autologon-account agreement, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication

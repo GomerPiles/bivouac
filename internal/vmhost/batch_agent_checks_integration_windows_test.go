@@ -41,7 +41,7 @@ func labWriteFrame(w io.Writer, kind byte, p []byte) error {
 
 func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 	var calls []string
-	good := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: validTaskFixture()}
+	good := guestagent.InstallationFacts{AutologonAccountMatches: true, TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: validTaskFixture()}
 	dial := func(context.Context) (net.Conn, error) {
 		host, guest := net.Pipe()
 		go func() {
@@ -98,6 +98,11 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 		if json.Unmarshal(b, &bad) != nil || bad.valid() {
 			t.Fatal("missing live gate accepted", field)
 		}
+	}
+	badAutologon := facts
+	badAutologon.Installation.AutologonAccountMatches = false
+	if badAutologon.valid() {
+		t.Fatal("lab accepted missing autologon equality proof")
 	}
 	b, _ := json.Marshal(facts)
 	for _, text := range []string{"SID", "C:\\", "imageuser"} {

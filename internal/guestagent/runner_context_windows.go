@@ -30,23 +30,27 @@ func ReadRunnerContext() (RunnerContext, error) {
 		return RunnerContext{}, errors.New("runner context unavailable")
 	}
 	result := RunnerContext{UserSID: f.user, ProcessSession: f.process, ConsoleSession: f.console, Elevated: f.elevated, Elevation: f.elevation}
+	result.ExpectedSID, err = readAutologonSID()
+	return result, err
+}
+
+func readAutologonSID() (string, error) {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, registry.QUERY_VALUE)
 	if err != nil {
-		return result, errors.New("runner account unavailable")
+		return "", errors.New("runner account unavailable")
 	}
 	defer func() { _ = key.Close() }()
 	user, _, err := key.GetStringValue("DefaultUserName")
 	if err != nil || user == "" || len(user) > 256 {
-		return result, errors.New("runner account unavailable")
+		return "", errors.New("runner account unavailable")
 	}
 	domain, _, err := key.GetStringValue("DefaultDomainName")
 	if err != nil || domain == "" || len(domain) > 256 {
-		return result, errors.New("runner account unavailable")
+		return "", errors.New("runner account unavailable")
 	}
 	sid, _, kind, err := windows.LookupSID("", domain+`\`+user)
 	if err != nil || kind != windows.SidTypeUser {
-		return result, errors.New("runner account unavailable")
+		return "", errors.New("runner account unavailable")
 	}
-	result.ExpectedSID = sid.String()
-	return result, nil
+	return sid.String(), nil
 }

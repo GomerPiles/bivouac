@@ -146,8 +146,15 @@ func TestCancellationPublicationInterleavings(t *testing.T) {
 			if order == "stop after recheck" {
 				stop()
 			}
-			if stopSignals+listenerSignals == 0 {
-				t.Fatal("cancellation was lost")
+			wantSignals := 1
+			if order == "stop after publication" {
+				// Accepted fallback: the intent record has no atomic sender claim.
+				// Even checking "requested" cannot arbitrate overlapping senders:
+				// both may observe the empty record before either sends/writes it.
+				wantSignals = 2
+			}
+			if stopSignals+listenerSignals != wantSignals {
+				t.Fatal("unexpected cancellation count", stopSignals, listenerSignals)
 			}
 			if order == "stop before publication" && (stopSignals != 0 || listenerSignals != 1) {
 				t.Fatal("listener failed to self-cancel")

@@ -101,7 +101,7 @@ func TestFactoryAgentConversation(t *testing.T) {
 		}
 		if slices.Equal(argv, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}) {
 			stages = append(stages, "installation")
-			f := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}}
+			f := guestagent.InstallationFacts{AutologonAccountMatches: true, TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}}
 			b, _ := json.Marshal(f)
 			return b, 0
 		}
@@ -136,8 +136,36 @@ func TestFactoryAgentConversation(t *testing.T) {
 	if err := prepareGuestWithDial(t.Context(), testConfig(), r, dial); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(stages, []string{"proof", "installation", "validate", "runner", "installation", "sanitize"}) || r.Manifest.Topology == nil || r.Manifest.RunnerVersion != "2.300.0" {
+	if !slices.Equal(stages, []string{"proof", "installation", "validate", "runner", "installation", "sanitize"}) || r.Manifest.Topology == nil || r.Manifest.RunnerVersion != "2.300.0" || !r.Manifest.AutologonAccountMatches {
 		t.Fatal("wrong factory conversation")
+	}
+}
+
+func TestFactoryInstallationRequiresAutologonAgreement(t *testing.T) {
+	goodTask := guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+	for _, mode := range []string{"matching", "mismatch", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			f := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: goodTask, AutologonAccountMatches: mode == "matching"}
+			raw, _ := json.Marshal(f)
+			if mode == "missing" {
+				var fields map[string]any
+				_ = json.Unmarshal(raw, &fields)
+				delete(fields, "autologon_account_matches")
+				raw, _ = json.Marshal(fields)
+			}
+			dial := fakeFactoryAgent(func(argv []string, input []byte) ([]byte, int) {
+				if !slices.Equal(argv, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}) || len(input) != 0 {
+					t.Error("unexpected inspection command")
+					return nil, 1
+				}
+				return raw, 0
+			})
+			var manifest Manifest
+			err := inspectInstallation(t.Context(), dial, &manifest)
+			if (err == nil) != (mode == "matching") || manifest.AutologonAccountMatches != (mode == "matching") {
+				t.Fatal("installation/manifest accepted missing equality proof")
+			}
+		})
 	}
 }
 
