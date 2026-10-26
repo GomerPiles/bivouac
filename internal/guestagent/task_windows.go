@@ -155,7 +155,11 @@ func taskFacts(raw []byte, name, user, sid string, resolve func(string) string) 
 }
 
 // Compare effective task-object DACL entries, not a textual SDDL spelling.
-func runnerTaskSecurity(text string) bool {
+// SYSTEM and Administrators have full control. Task Scheduler stores the DACL
+// without the protected flag and adds read-only access for the task's own
+// principal (observed on Windows 11 26300); read access cannot run the task.
+// No other or inherited entry is accepted.
+func runnerTaskSecurity(text, principal string) bool {
 	sd, err := windows.SecurityDescriptorFromString(text)
 	if err != nil {
 		return false
@@ -164,12 +168,8 @@ func runnerTaskSecurity(text string) bool {
 	if err != nil || (!owner.IsWellKnown(windows.WinLocalSystemSid) && !owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)) {
 		return false
 	}
-	control, _, err := sd.Control()
-	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
-		return false
-	}
 	acl, _, err := sd.DACL()
-	if err != nil || acl == nil || acl.AceCount != 2 {
+	if err != nil || acl == nil || acl.AceCount < 2 || acl.AceCount > 3 {
 		return false
 	}
 	seen := map[string]bool{}
@@ -185,17 +185,17 @@ func runnerTaskSecurity(text string) bool {
 			return false
 		}
 		seen[key] = true
-		mask := uint32(0x1f01ff)
-		if sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
-			mask = 0x1200a9
-		} else if !sid.IsWellKnown(windows.WinLocalSystemSid) {
+		mask := uint32(0x1f01ff) // FILE_ALL_ACCESS
+		if principal != "" && key == principal {
+			mask = 0x120089 // FILE_GENERIC_READ
+		} else if !sid.IsWellKnown(windows.WinLocalSystemSid) && !sid.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
 			return false
 		}
 		if uint32(ace.Mask) != mask {
 			return false
 		}
 	}
-	return true
+	return seen["S-1-5-18"] && seen["S-1-5-32-544"]
 }
 
 func taskOutput(ctx context.Context, binary string, args ...string) ([]byte, error) {
@@ -253,7 +253,7 @@ func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, erro
 			facts.TaskSecurity = false
 			return facts, err
 		}
-		facts.TaskSecurity = runnerTaskSecurity(string(raw))
+		facts.TaskSecurity = runnerTaskSecurity(string(raw), sid)
 	}
 	return facts, nil
 }

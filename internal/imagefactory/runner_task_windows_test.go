@@ -34,7 +34,7 @@ function Register-ScheduledTask {param($TaskName,$Xml)
  if($t.Settings.Priority -cne '4' -or $t.Settings.ExecutionTimeLimit -cne 'PT0S' -or $t.Settings.MultipleInstancesPolicy -cne 'IgnoreNew' -or $null -ne $t.Settings.RestartOnFailure){throw 'settings'}
  foreach($name in @('DisallowStartIfOnBatteries','StopIfGoingOnBatteries','RunOnlyIfIdle','RunOnlyIfNetworkAvailable')){if($t.Settings.$name -cne 'false'){throw 'condition'}}
  foreach($name in @('AllowStartOnDemand','Enabled')){if($t.Settings.$name -cne 'true'){throw 'disabled'}}
- if($t.RegistrationInfo.SecurityDescriptor -cne 'O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)'){throw 'security'}
+ if($t.RegistrationInfo.SecurityDescriptor -cne 'O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)'){throw 'security'}
  $script:registered=$true
 }
 try{

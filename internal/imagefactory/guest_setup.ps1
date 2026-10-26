@@ -137,7 +137,7 @@ Register-ScheduledTask -TaskName 'bivouac-guest-agent' -Principal $principal -Ac
 $runnerUser=[Security.SecurityElement]::Escape(([Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
 $runnerXml=@'
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-<RegistrationInfo><SecurityDescriptor>O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)</SecurityDescriptor></RegistrationInfo>
+<RegistrationInfo><SecurityDescriptor>O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)</SecurityDescriptor></RegistrationInfo>
 <Triggers/>
 <Principals><Principal id="Runner"><UserId>RUNNER_USER_SID</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
 <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>false</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><RunOnlyIfIdle>false</RunOnlyIfIdle><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority></Settings>
