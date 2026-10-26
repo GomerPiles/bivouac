@@ -38,7 +38,7 @@ func TestTaskFactsAreFixedAndRequireActualSettings(t *testing.T) {
 					b = binary.LittleEndian.AppendUint16(b, word)
 				}
 			}
-			facts, err := taskFacts(b, "imageuser", "user-sid", resolve)
+			facts, err := taskFacts(b, WindowsTaskName, "imageuser", "user-sid", resolve)
 			valid := err == nil && facts.TaskUser && facts.TaskHighest && facts.TaskInteractive && facts.TaskAction && facts.TaskPriority == 4
 			if valid != (mode == "valid" || mode == "utf16") {
 				t.Fatal("invalid task facts decision")
@@ -76,7 +76,7 @@ func TestTaskFactsUserID(t *testing.T) {
 				}
 				return ""
 			}
-			facts, err := taskFacts([]byte(raw), "imageuser", agentSID, resolve)
+			facts, err := taskFacts([]byte(raw), WindowsTaskName, "imageuser", agentSID, resolve)
 			if err != nil {
 				t.Fatal(err)
 			}

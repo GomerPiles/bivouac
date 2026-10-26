@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/GomerPiles/bivouac/internal/guestagent"
+	"github.com/GomerPiles/bivouac/internal/winrunner"
 )
 
 func labReadFrame(r io.Reader) (byte, []byte, error) {
@@ -40,7 +41,7 @@ func labWriteFrame(w io.Writer, kind byte, p []byte) error {
 
 func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 	var calls []string
-	good := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true}
+	good := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: validTaskFixture()}
 	dial := func(context.Context) (net.Conn, error) {
 		host, guest := net.Pipe()
 		go func() {
@@ -68,11 +69,11 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 			case "lab-start":
 				result = map[string]bool{"started": true}
 			case "lab-status":
-				result = map[string]bool{"alive": true, "outside_job": true}
+				result = winrunner.LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: true, AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, Sentinel: true, GrandchildSentinel: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
 			case "lab-task-cycle", "lab-agent-cycle":
-				result = map[string]bool{"scheduled": true}
+				result = map[string]any{"scheduled": true, "id": "fixture-id"}
 			case "lab-task-result", "lab-agent-result":
-				result = map[string]bool{"complete": true, "restarted": true}
+				result = map[string]any{"complete": true, "restarted": true, "id": "fixture-id"}
 			}
 			b, _ := json.Marshal(result)
 			if labWriteFrame(guest, 'O', b) != nil {
@@ -87,7 +88,7 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 	if err != nil || !facts.valid() || !slices.Equal(calls, want) {
 		t.Fatal("incorrect live-gate command sequence", err, calls)
 	}
-	for _, field := range []string{"loopback_refused", "probe_outside_job", "task_restart_survived", "agent_kill_survived"} {
+	for _, field := range []string{"loopback_refused", "task_restart_survived", "agent_kill_survived"} {
 		b, _ := json.Marshal(facts)
 		var value map[string]any
 		_ = json.Unmarshal(b, &value)

@@ -20,14 +20,14 @@ import (
 )
 
 func TestDetachedListenerLaunchContract(t *testing.T) {
-	cmd := detachedListenerCommand()
+	cmd := runnerChildCommand(filepath.Join(guestBase, "bivouac.exe"), "listener")
 	want := []string{filepath.Join(guestBase, "bivouac.exe"), "guest", "windows", "listener"}
 	if !reflect.DeepEqual(cmd.Args, want) || cmd.Dir != guestBase || cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
 		t.Fatal("detached listener inherited request streams or changed argv")
 	}
 	flags := cmd.SysProcAttr.CreationFlags
-	if flags&windows.CREATE_BREAKAWAY_FROM_JOB == 0 || flags&windows.DETACHED_PROCESS == 0 || flags&windows.CREATE_NEW_CONSOLE != 0 {
-		t.Fatal("listener supervisor is not detached from the command job")
+	if flags&windows.CREATE_BREAKAWAY_FROM_JOB != 0 || flags&windows.DETACHED_PROCESS == 0 || flags&windows.CREATE_NEW_CONSOLE != 0 {
+		t.Fatal("listener supervisor has unexpected process flags")
 	}
 }
 
@@ -172,5 +172,18 @@ func TestPrepareRefusesHostExecution(t *testing.T) {
 	// Preparing on the host must refuse before touching the guest directory.
 	if err := RunGuest(t.Context(), "prepare", io.Discard); err == nil {
 		t.Fatal("prepare ran on the host")
+	}
+}
+
+func TestTrampolineRefusesHostExecution(t *testing.T) {
+	if err := RunGuest(t.Context(), "detached", io.Discard); err == nil {
+		t.Fatal("trampoline ran from an uninstalled executable")
+	}
+	cmd, err := runnerTaskCommand(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Args) != 4 || cmd.Args[1] != "/Run" || cmd.Args[2] != "/TN" || cmd.Args[3] != "bivouac-guest-runner" || cmd.Stdin != nil || cmd.Stdout != nil || cmd.Stderr != nil {
+		t.Fatal("dispatch argv or streams changed")
 	}
 }

@@ -15,17 +15,19 @@ import (
 type agentLiveFacts struct {
 	LoopbackRefused     bool                         `json:"loopback_refused"`
 	Installation        guestagent.InstallationFacts `json:"installation"`
-	OutsideJob          bool                         `json:"probe_outside_job"`
+	Probe               winrunner.LabProbeFacts      `json:"probe"`
+	GateStage           string                       `json:"gate_stage"`
 	TaskRestartSurvived bool                         `json:"task_restart_survived"`
 	AgentKillSurvived   bool                         `json:"agent_kill_survived"`
 }
 
 func (f agentLiveFacts) valid() bool {
-	return f.LoopbackRefused && f.Installation.Valid() && f.OutsideJob && f.TaskRestartSurvived && f.AgentKillSurvived
+	return f.LoopbackRefused && f.Installation.Valid() && f.Probe.Valid() && f.TaskRestartSurvived && f.AgentKillSurvived
 }
 
 func labAgentCommand(ctx context.Context, dial guestagent.Dialer, argv []string, result any) error {
-	attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// Definition/ACL inspection includes bounded Task Scheduler queries.
+	attempt, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	output := &validationOutput{steps: map[string]int64{}, begun: time.Now()}
 	if guestagent.Run(attempt, dial, argv, nil, output) != nil {
@@ -38,6 +40,7 @@ func labAgentCommand(ctx context.Context, dial guestagent.Dialer, argv []string,
 }
 
 func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLiveFacts, err error) {
+	facts.GateStage = "loopback"
 	var loopback struct {
 		Refused bool `json:"loopback_refused"`
 	}
@@ -48,6 +51,7 @@ func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLi
 	if !facts.LoopbackRefused {
 		return facts, errors.New("guest loopback was not refused")
 	}
+	facts.GateStage = "installation"
 	if err = labAgentCommand(ctx, dial, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}, &facts.Installation); err != nil {
 		return
 	}
@@ -60,6 +64,7 @@ func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLi
 	var started struct {
 		Started bool `json:"started"`
 	}
+	facts.GateStage = "probe-start"
 	if err = command(ctx, "lab-start", &started); err != nil {
 		return
 	}
@@ -71,36 +76,38 @@ func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLi
 		defer cancel()
 		err = errors.Join(err, labAgentCommand(cleanup, dial, []string{guestagent.WindowsPath, "guest", "windows", "lab-stop"}, nil))
 	}()
+	facts.GateStage = "probe-facts"
 	if err = waitLabFacts(ctx, func(checkCtx context.Context) bool {
-		var probe winrunner.LabProbeFacts
-		return command(checkCtx, "lab-status", &probe) == nil && probe.Alive && probe.OutsideJob
+		return command(checkCtx, "lab-status", &facts.Probe) == nil && facts.Probe.Valid()
 	}); err != nil {
 		return
 	}
-	facts.OutsideJob = true
+	baseline := facts.Probe
 	for _, cycle := range []struct {
 		start, result string
 		passed        *bool
 	}{{"lab-task-cycle", "lab-task-result", &facts.TaskRestartSurvived}, {"lab-agent-cycle", "lab-agent-result", &facts.AgentKillSurvived}} {
 		var scheduled struct {
-			Scheduled bool `json:"scheduled"`
+			Scheduled bool   `json:"scheduled"`
+			ID        string `json:"id"`
 		}
+		facts.GateStage = cycle.start
 		if err = command(ctx, cycle.start, &scheduled); err != nil {
 			return
 		}
-		if !scheduled.Scheduled {
+		if !scheduled.Scheduled || scheduled.ID == "" {
 			return facts, errors.New("agent cycle was not scheduled")
 		}
 		err = waitLabFacts(ctx, func(checkCtx context.Context) bool {
 			var result struct {
-				Complete  bool `json:"complete"`
-				Restarted bool `json:"restarted"`
+				Complete  bool   `json:"complete"`
+				Restarted bool   `json:"restarted"`
+				ID        string `json:"id"`
 			}
-			if command(checkCtx, cycle.result, &result) != nil || !result.Complete || !result.Restarted {
+			if command(checkCtx, cycle.result, &result) != nil || !result.Complete || !result.Restarted || result.ID != scheduled.ID {
 				return false
 			}
-			var probe winrunner.LabProbeFacts
-			return command(checkCtx, "lab-status", &probe) == nil && probe.Alive && probe.OutsideJob
+			return command(checkCtx, "lab-status", &facts.Probe) == nil && facts.Probe.Valid() && facts.Probe.SameTree(baseline)
 		})
 		if err != nil {
 			return
@@ -109,6 +116,9 @@ func agentLiveChecks(ctx context.Context, dial guestagent.Dialer) (facts agentLi
 	}
 	if !facts.valid() {
 		err = errors.New("agent live gates failed")
+	}
+	if err == nil {
+		facts.GateStage = "complete"
 	}
 	return
 }

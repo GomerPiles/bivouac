@@ -79,6 +79,9 @@ func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestag
 	if err := waitAgent(ctx, dial); err != nil {
 		return err
 	}
+	if err := inspectInstallation(ctx, dial, &r.Manifest); err != nil {
+		return err
+	}
 	data := map[string]any{"name": r.Name, "user": c.GuestUser, "sha256": r.Manifest.ProbeSHA256, "script_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "require_setup": true, "prepared": false}
 	b, err := guestRun(ctx, dial, validateEntry, data)
 	if err != nil {
@@ -109,10 +112,29 @@ func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestag
 		r.Manifest.RunnerVersion = string(b)
 	}
 	data = map[string]any{"name": r.Name, "user": c.GuestUser, "probe_sha256": r.Manifest.ProbeSHA256, "validation_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "sanitize_sha256": hashBytes([]byte(imageSanitize))}
+	// Repeat just before sanitation/publication: preparation facts alone cannot
+	// certify that setup or validation left the installed definitions intact.
+	if err := inspectInstallation(ctx, dial, &r.Manifest); err != nil {
+		return err
+	}
 	b, err = guestRun(ctx, dial, sanitizeEntry, data)
 	if err != nil || string(b) != "sanitized-shutdown-scheduled" {
 		return errors.New("guest sanitation and shutdown acknowledgement failed")
 	}
+	return nil
+}
+
+func inspectInstallation(ctx context.Context, dial guestagent.Dialer, m *Manifest) error {
+	var out boundedGuestOutput
+	if guestagent.Run(ctx, dial, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}, nil, &out) != nil {
+		return errors.New("image installation selftest failed")
+	}
+	var f guestagent.InstallationFacts
+	if json.Unmarshal(out.data, &f) != nil || !f.Valid() {
+		return errors.New("image installation facts invalid")
+	}
+	m.AgentTask = guestagent.TaskFacts{TaskUser: f.TaskUser, TaskHighest: f.TaskHighest, TaskInteractive: f.TaskInteractive, TaskAction: f.TaskAction, TaskPriority: f.TaskPriority}
+	m.RunnerTask = f.RunnerTask
 	return nil
 }
 

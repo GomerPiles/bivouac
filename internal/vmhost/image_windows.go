@@ -4,6 +4,7 @@ package vmhost
 
 import (
 	"encoding/json"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,11 +28,13 @@ func imageContract(image string, check func(string) error) int {
 		return 0
 	}
 	var manifest struct {
-		WindowsContract int    `json:"windows_contract"`
-		Output          string `json:"output"`
+		WindowsContract int                  `json:"windows_contract"`
+		Output          string               `json:"output"`
+		AgentTask       guestagent.TaskFacts `json:"agent_task"`
+		RunnerTask      guestagent.TaskFacts `json:"runner_task"`
 	}
 	d := json.NewDecoder(io.LimitReader(f, 65537))
-	if d.Decode(&manifest) != nil || d.Decode(new(any)) != io.EOF || !strings.EqualFold(manifest.Output, image) || manifest.WindowsContract < 1 {
+	if d.Decode(&manifest) != nil || d.Decode(new(any)) != io.EOF || !strings.EqualFold(manifest.Output, image) || manifest.WindowsContract < 1 || !manifest.AgentTask.ValidAgent() || !manifest.RunnerTask.Valid() {
 		return 0
 	}
 	return manifest.WindowsContract

@@ -425,24 +425,6 @@ func TestWindowsCommandHelper(t *testing.T) {
 		if err := receive(t.Context(), args[1], args[2], size, args[4], os.Stdin); err != nil {
 			os.Exit(44)
 		}
-	case "check-breakaway":
-		if CheckBreakaway() != nil {
-			os.Exit(44)
-		}
-	case "deny-breakaway":
-		job, err := windows.CreateJobObject(nil, nil)
-		if err != nil {
-			os.Exit(45)
-		}
-		if windows.AssignProcessToJobObject(job, windows.CurrentProcess()) != nil {
-			_ = windows.CloseHandle(job)
-			os.Exit(46)
-		}
-		refused := CheckBreakaway() != nil
-		_ = windows.CloseHandle(job)
-		if !refused {
-			os.Exit(47)
-		}
 	case "sleep":
 		time.Sleep(time.Minute)
 	case "tree", "breakaway":
@@ -562,7 +544,7 @@ func TestWindowsArgvStreamsAndExit(t *testing.T) {
 	}
 }
 
-func TestWindowsJobKillsTreeAndAllowsExplicitBreakaway(t *testing.T) {
+func TestWindowsJobKillsTreeAndRefusesEscape(t *testing.T) {
 	for _, mode := range []string{"tree", "breakaway"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -575,7 +557,17 @@ func TestWindowsJobKillsTreeAndAllowsExplicitBreakaway(t *testing.T) {
 			defer p.Close()
 			defer func() { _ = r.Close(); _ = w.Close() }()
 			var pid uint32
-			if _, err := fmt.Fscanln(r, &pid); err != nil || pid == 0 {
+			if _, err := fmt.Fscanln(r, &pid); err != nil {
+				t.Fatal("descendant proof missing", err)
+			}
+			if mode == "breakaway" {
+				if pid != 0 {
+					t.Fatal("command job allowed escape")
+				}
+				_, _ = p.Wait()
+				return
+			}
+			if pid == 0 {
 				t.Fatal("descendant launch failed", err)
 			}
 			h, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE, false, pid)
@@ -598,9 +590,7 @@ func TestWindowsJobKillsTreeAndAllowsExplicitBreakaway(t *testing.T) {
 			if mode == "tree" && state != windows.WAIT_OBJECT_0 {
 				t.Fatal("descendant survived job close")
 			}
-			if mode == "breakaway" && state != uint32(windows.WAIT_TIMEOUT) {
-				t.Fatal("explicit breakaway was killed")
-			}
+
 		})
 	}
 }

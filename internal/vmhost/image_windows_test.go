@@ -13,6 +13,10 @@ import (
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 )
 
+func validTaskFixture() guestagent.TaskFacts {
+	return guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+}
+
 func TestProtectedImageContractFacts(t *testing.T) {
 	dir := t.TempDir()
 	image := filepath.Join(dir, "disk.vhdx")
@@ -20,7 +24,7 @@ func TestProtectedImageContractFacts(t *testing.T) {
 	for _, mode := range []string{"matching", "missing", "old", "future", "malformed", "trailing", "oversize", "unprotected", "wrong image"} {
 		t.Run(mode, func(t *testing.T) {
 			_ = os.Remove(manifest)
-			value := map[string]any{"windows_contract": guestagent.WindowsContract, "output": image, "agent_sha256": strings.Repeat("a", 64)}
+			value := map[string]any{"windows_contract": guestagent.WindowsContract, "output": image, "agent_sha256": strings.Repeat("a", 64), "agent_task": validTaskFixture(), "runner_task": validTaskFixture()}
 			switch mode {
 			case "old":
 				delete(value, "windows_contract")
@@ -69,7 +73,7 @@ func TestInfoReportsEachConfiguredImageContract(t *testing.T) {
 	server, _ := serverFixture(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "disk.vhdx")
-	data, _ := json.Marshal(map[string]any{"windows_contract": guestagent.WindowsContract, "output": path})
+	data, _ := json.Marshal(map[string]any{"windows_contract": guestagent.WindowsContract, "output": path, "agent_task": validTaskFixture(), "runner_task": validTaskFixture()})
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}

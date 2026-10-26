@@ -154,8 +154,11 @@ func TestAgentInspectionFacts(t *testing.T) {
 	if err := os.WriteFile(task, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(task), "bivouac-guest-runner"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	facts := filesystemFacts(t, root)
-	if !facts.AgentPresent || !facts.AgentTaskPresent || facts.AgentSHA256 != hashBytes([]byte("public-agent")) {
+	if !facts.AgentPresent || !facts.AgentTaskPresent || !facts.RunnerTaskPresent || facts.AgentSHA256 != hashBytes([]byte("public-agent")) {
 		t.Fatal("agent facts missing")
 	}
 	facts.SystemSetupInProgress, facts.OOBEInProgress = 1, 1
@@ -166,5 +169,13 @@ func TestAgentInspectionFacts(t *testing.T) {
 	facts.AgentPresent = false
 	if facts.Eligible() {
 		t.Fatal("agent logon task accepted as template")
+	}
+	facts.AgentTaskPresent = false
+	if facts.Eligible() {
+		t.Fatal("runner task accepted as template")
+	}
+	facts.RunnerTaskPresent = false
+	if !facts.Eligible() {
+		t.Fatal("clean template refused")
 	}
 }

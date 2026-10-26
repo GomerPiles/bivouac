@@ -52,6 +52,7 @@ function Read-FactoryFiles([string]$Root,$Facts) {
  # Any existing install directory, even incomplete, refuses template reuse.
  $Facts.agent_present=Test-Path -LiteralPath $agentDirectory
  $Facts.agent_task_present=Test-Path -LiteralPath (Join-Path $Root 'Windows\System32\Tasks\bivouac-guest-agent')
+ $Facts.runner_task_present=Test-Path -LiteralPath (Join-Path $Root 'Windows\System32\Tasks\bivouac-guest-runner')
  $Facts.agent_sha256=''
  if(Test-Path -LiteralPath $agent){
   $file=Get-Item -Force -LiteralPath $agent

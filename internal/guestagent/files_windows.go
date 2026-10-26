@@ -2,7 +2,27 @@
 
 package guestagent
 
-import "io"
+import (
+	"golang.org/x/sys/windows"
+	"io"
+	"os"
+)
+
+// GuestDirectoryPin holds all ancestor handles without taking the receive lock.
+// The scheduler trampoline must coexist with start holding that lock.
+type GuestDirectoryPin struct{ directory *guestDir }
+
+func PinGuestDirectory() (*GuestDirectoryPin, error) {
+	d, err := openGuestDirectory(guestDirectory)
+	if err != nil {
+		return nil, err
+	}
+	return &GuestDirectoryPin{d}, nil
+}
+func (p *GuestDirectoryPin) Close() error { p.directory.Close(); return nil }
+func (p *GuestDirectoryPin) OpenHelper() (*os.File, error) {
+	return p.directory.open("bivouac.exe", windows.GENERIC_READ, windows.OPEN_EXISTING, windows.FILE_SHARE_READ)
+}
 
 // LockGuestDirectory pins and verifies the receiver's protected directory and
 // serializes adapter preparation/launch with delivery. The caller must retain

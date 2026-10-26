@@ -229,19 +229,6 @@ func guestPrepare(ctx context.Context, out io.Writer) error {
 	return json.NewEncoder(out).Encode(proof)
 }
 
-func detachedListenerCommand() *exec.Cmd {
-	return detachedGuestCommand(filepath.Join(guestBase, "bivouac.exe"), "listener")
-}
-
-func detachedGuestCommand(binary, mode string) *exec.Cmd {
-	cmd := exec.Command(binary, "guest", "windows", mode)
-	cmd.Dir = guestBase
-	// Nil standard streams use independent NUL handles. No agent pipe or job
-	// lifetime is inherited; failure to break away is terminal, never retried.
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_BREAKAWAY_FROM_JOB | windows.DETACHED_PROCESS}
-	return cmd
-}
-
 func guestStart(ctx context.Context, cfg Config) error {
 	guard, err := guestagent.LockGuestDirectory()
 	if err != nil {
@@ -256,13 +243,7 @@ func guestStart(ctx context.Context, cfg Config) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := startChecked(root, guestagent.CheckBreakaway, func() error {
-		cmd := detachedListenerCommand()
-		if err := cmd.Start(); err != nil {
-			return errors.New("detached listener could not start")
-		}
-		return cmd.Process.Release()
-	}); err != nil {
+	if err := dispatchRunner(ctx, root, "listener"); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
