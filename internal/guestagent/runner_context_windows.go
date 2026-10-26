@@ -44,7 +44,12 @@ func readAutologonSID() (string, error) {
 	if err != nil || user == "" || len(user) > 256 {
 		return "", errors.New("runner account unavailable")
 	}
+	// Windows setup's own autologon may record no domain; sanitation writes the
+	// computer name. Either way the image's account is a local account.
 	domain, _, err := key.GetStringValue("DefaultDomainName")
+	if errors.Is(err, registry.ErrNotExist) || (err == nil && domain == "") {
+		domain, err = windows.ComputerName()
+	}
 	if err != nil || domain == "" || len(domain) > 256 {
 		return "", errors.New("runner account unavailable")
 	}

@@ -130,8 +130,14 @@ func inspectInstallation(ctx context.Context, dial guestagent.Dialer, m *Manifes
 		return errors.New("image installation selftest failed")
 	}
 	var f guestagent.InstallationFacts
-	if json.Unmarshal(out.data, &f) != nil || !f.Valid() {
+	if json.Unmarshal(out.data, &f) != nil {
 		return errors.New("image installation facts invalid")
+	}
+	if !f.Valid() {
+		// Installation facts are fixed booleans and priorities, with no account
+		// identifiers, so the whole set can explain which check refused.
+		b, _ := json.Marshal(f)
+		return fmt.Errorf("image installation facts invalid %s", b)
 	}
 	m.AgentTask = guestagent.TaskFacts{TaskUser: f.TaskUser, TaskHighest: f.TaskHighest, TaskInteractive: f.TaskInteractive, TaskAction: f.TaskAction, TaskPriority: f.TaskPriority}
 	m.RunnerTask = f.RunnerTask

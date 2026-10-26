@@ -165,6 +165,9 @@ func TestFactoryInstallationRequiresAutologonAgreement(t *testing.T) {
 			if (err == nil) != (mode == "matching") || manifest.AutologonAccountMatches != (mode == "matching") {
 				t.Fatal("installation/manifest accepted missing equality proof")
 			}
+			if err != nil && !strings.Contains(err.Error(), `"autologon_account_matches":false`) {
+				t.Fatal("refusal does not name the failing installation fact")
+			}
 		})
 	}
 }
