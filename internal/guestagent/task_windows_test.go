@@ -35,11 +35,14 @@ func TestRunnerTaskSecuritySeparateFromRuntimeDefinition(t *testing.T) {
 	good := "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)"
 	// The form Task Scheduler stores after registering good (observed live).
 	stored := good + "(A;;FR;;;" + principal + ")"
-	accepted := map[string]bool{good: true, stored: true, strings.ReplaceAll(stored, "O:BA", "O:SY"): true, strings.ReplaceAll(stored, "D:", "D:P"): true}
-	for _, text := range []string{good, stored, strings.ReplaceAll(stored, "O:BA", "O:SY"), strings.ReplaceAll(stored, "D:", "D:P"), "",
+	// The root task folder's form, as a live guest stored it.
+	rooted := "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;ID;0x1f019f;;;BA)(A;ID;0x1f019f;;;SY)(A;ID;FA;;;BA)(A;;FR;;;" + principal + ")"
+	accepted := map[string]bool{good: true, stored: true, rooted: true, strings.ReplaceAll(stored, "O:BA", "O:SY"): true, strings.ReplaceAll(stored, "D:", "D:P"): true}
+	for _, text := range []string{good, stored, rooted, strings.ReplaceAll(stored, "O:BA", "O:SY"), strings.ReplaceAll(stored, "D:", "D:P"), "",
 		strings.ReplaceAll(stored, "O:BA", "O:BU"), stored + "(A;;FR;;;BU)", strings.ReplaceAll(stored, "FR;;;"+principal, "FRFX;;;"+principal),
 		strings.ReplaceAll(stored, principal, "S-1-5-21-1-2-3-1002"), strings.ReplaceAll(stored, "FA;;;BA", "FRFX;;;BA"), strings.ReplaceAll(stored, "FA;;;SY", "FRFX;;;SY"),
-		"O:BAD:(A;;FA;;;SY)(A;;FR;;;" + principal + ")", strings.ReplaceAll(stored, "(A;;FA;;;BA)", "(A;ID;FA;;;BA)"), "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;SY)"} {
+		"O:BAD:(A;;FA;;;SY)(A;;FR;;;" + principal + ")", "O:BAD:(A;;FA;;;SY)(A;ID;FA;;;BA)(A;;FR;;;" + principal + ")", "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;SY)",
+		rooted + "(A;ID;FRFX;;;AU)", rooted + "(A;ID;FR;;;" + principal + ")", strings.ReplaceAll(rooted, "(A;ID;FA;;;BA)", "(A;CIID;FA;;;BA)")} {
 		if runnerTaskSecurity(text, principal) != accepted[text] {
 			t.Fatal("unexpected installation DACL decision", text)
 		}
