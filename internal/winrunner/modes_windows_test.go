@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -16,8 +17,76 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/engine"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"golang.org/x/sys/windows"
 )
+
+func TestGuestListenerRefusesExistingCancellation(t *testing.T) {
+	root := guestTestRoot(t)
+	if err := createRecord(root, "cancelled", false); err != nil {
+		t.Fatal(err)
+	}
+	err := guestListener(t.Context(), Config{}, listenerOptions{base: root.Name(), desktop: func() error { t.Fatal("cancelled listener reached desktop/input/process setup"); return nil }, cancel: func() error { t.Fatal("absent listener signalled"); return nil }})
+	if err == nil || err.Error() != "listener launch cancelled" {
+		t.Fatal("guestListener ignored cancellation", err)
+	}
+	if raw, e := root.ReadFile("runner.exit"); e != nil || string(raw) != `{"code":1}` {
+		t.Fatal("missing cancellation exit record", e)
+	}
+	for _, name := range []string{"launch-once", "listener.json", "runner.log"} {
+		if _, e := root.Lstat(name); !os.IsNotExist(e) {
+			t.Fatal("cancelled listener consumed setup state")
+		}
+	}
+}
+
+func TestStopRecordsCancellationWhileReceiveLockHeld(t *testing.T) {
+	root := guestTestRoot(t)
+	path, err := windows.UTF16PtrFromString(filepath.Join(root.Name(), ".receive.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := windows.CreateFile(path, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.CloseHandle(lock) }()
+	if err := stopGuest(root, func() error { t.Fatal("listener does not exist"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := guestFileExists(root, "cancelled"); err != nil || !exists {
+		t.Fatal("stop failed during start's receive lock")
+	}
+}
+
+func TestTrampolineInjectedContextRefusals(t *testing.T) {
+	good := detachedContext{Session: guestagent.RunnerContext{UserSID: "S-1-5-21-1-2-3-1001", ExpectedSID: "S-1-5-21-1-2-3-1001", ProcessSession: 2, ConsoleSession: 2, Elevated: true, Elevation: 2}, Desktop: true}
+	for _, mode := range []string{"valid", "wrong SID", "unelevated", "wrong session", "wrong desktop", "unavailable"} {
+		t.Run(mode, func(t *testing.T) {
+			facts := good
+			switch mode {
+			case "wrong SID":
+				facts.Session.UserSID = "S-1-5-21-1-2-3-1002"
+			case "unelevated":
+				facts.Session.Elevated = false
+			case "wrong session":
+				facts.Session.ProcessSession = 3
+			case "wrong desktop":
+				facts.Desktop = false
+			}
+			reached := false
+			err := detachedInContext(guestagent.WindowsPath, func() (detachedContext, error) {
+				if mode == "unavailable" {
+					return facts, errors.New("native details")
+				}
+				return facts, nil
+			}, func() error { reached = true; return nil })
+			if reached != (mode == "valid") || (err == nil) != (mode == "valid") {
+				t.Fatal("trampoline context decision differs")
+			}
+		})
+	}
+}
 
 func TestDetachedListenerLaunchContract(t *testing.T) {
 	cmd := runnerChildCommand(filepath.Join(guestBase, "bivouac.exe"), "listener")

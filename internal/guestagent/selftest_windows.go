@@ -6,14 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-
 	"errors"
 	"io"
-
 	"path/filepath"
-
 	"time"
-
 	"unsafe"
 
 	"github.com/GomerPiles/bivouac/internal/hvsock"
@@ -117,15 +113,9 @@ func selftest(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return errors.New("agent selftest unavailable")
 		}
-		agent, err := readTaskFacts(ctx, WindowsTaskName, user, tokenUser.User.Sid.String())
-		if err != nil {
-			return err
-		}
-		runner, err := readTaskFacts(ctx, WindowsRunnerTaskName, user, tokenUser.User.Sid.String())
-		if err != nil {
-			return err
-		}
-		facts := InstallationFacts{TaskUser: agent.TaskUser, TaskHighest: agent.TaskHighest, TaskInteractive: agent.TaskInteractive, TaskAction: agent.TaskAction, TaskPriority: agent.TaskPriority, RunnerTask: runner}
+		facts := inspectTaskFacts(func(name string) (TaskFacts, error) {
+			return readTaskFacts(ctx, name, user, tokenUser.User.Sid.String())
+		})
 		facts.OwnerTrusted, facts.ACLProtected, facts.ACLExpected = installationACL(WindowsPath)
 		owner, protected, expected := installationACL(filepath.Dir(WindowsPath))
 		facts.OwnerTrusted = facts.OwnerTrusted && owner
@@ -134,4 +124,19 @@ func selftest(ctx context.Context, args []string, out io.Writer) error {
 		return json.NewEncoder(out).Encode(facts)
 	}
 	return errors.New("invalid agent selftest")
+}
+
+// Failure of either independent query leaves fixed false predicates for that
+// task, while preserving the other task's facts. No raw query error is emitted.
+func inspectTaskFacts(query func(string) (TaskFacts, error)) InstallationFacts {
+	agent, agentErr := query(WindowsTaskName)
+	if agentErr != nil {
+		agent = TaskFacts{}
+	}
+	runner, err := query(WindowsRunnerTaskName)
+	// A descriptor-query failure may still leave useful structural facts.
+	if err != nil {
+		runner.TaskSecurity = false
+	}
+	return InstallationFacts{TaskUser: agent.TaskUser, TaskHighest: agent.TaskHighest, TaskInteractive: agent.TaskInteractive, TaskAction: agent.TaskAction, TaskPriority: agent.TaskPriority, RunnerTask: runner}
 }

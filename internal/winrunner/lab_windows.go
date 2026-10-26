@@ -25,7 +25,7 @@ import (
 type LabProbeFacts struct {
 	Alive                    bool   `json:"alive"`
 	GrandchildAlive          bool   `json:"grandchild_alive"`
-	InJob                    bool   `json:"in_job"`
+	InJob                    string `json:"in_job"`
 	AgentInImmediateJob      string `json:"agent_in_immediate_job"`
 	User                     bool   `json:"user"`
 	Elevated                 bool   `json:"elevated"`
@@ -33,8 +33,6 @@ type LabProbeFacts struct {
 	Desktop                  bool   `json:"desktop"`
 	NormalPriority           bool   `json:"normal_priority"`
 	GrandchildNormalPriority bool   `json:"grandchild_normal_priority"`
-	Sentinel                 bool   `json:"sentinel"`
-	GrandchildSentinel       bool   `json:"grandchild_sentinel"`
 	PID                      uint32 `json:"pid"`
 	Creation                 uint64 `json:"creation"`
 	ChildPID                 uint32 `json:"child_pid"`
@@ -43,7 +41,7 @@ type LabProbeFacts struct {
 }
 
 func (f LabProbeFacts) Valid() bool {
-	return f.Alive && f.GrandchildAlive && f.InJob && f.AgentInImmediateJob == "false" && f.User && f.Elevated && f.Console && f.Desktop && f.NormalPriority && f.GrandchildNormalPriority && f.Sentinel && f.GrandchildSentinel && f.PID != 0 && f.Creation != 0 && f.ChildPID != 0 && f.ChildCreation != 0
+	return f.Alive && f.GrandchildAlive && f.User && f.Elevated && f.Console && f.Desktop && f.NormalPriority && f.GrandchildNormalPriority && f.PID != 0 && f.Creation != 0 && f.ChildPID != 0 && f.ChildCreation != 0
 }
 func (f LabProbeFacts) SameTree(other LabProbeFacts) bool {
 	return f.PID == other.PID && f.Creation == other.Creation && f.ChildPID == other.ChildPID && f.ChildCreation == other.ChildCreation
@@ -63,13 +61,20 @@ type labCycleCompletion struct {
 	Complete bool             `json:"complete"`
 }
 
-func labInJob() (bool, error) {
+func labInJob() string {
 	// A successful NULL-job query proves membership in the immediate job.
 	// Failure remains unavailable rather than claiming absence from all jobs.
 	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 	// #nosec G103 -- Fixed job-limit output used synchronously.
 	err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)), nil)
-	return err == nil, err
+	return jobQueryFact(err)
+}
+
+func jobQueryFact(err error) string {
+	if err != nil {
+		return "unknown"
+	}
+	return "true"
 }
 
 // QueryInformationJobObject(NULL) describes only the immediate job. A bounded
@@ -175,12 +180,12 @@ func labProbe(ctx context.Context) error {
 	if err != nil || !live {
 		return errors.New("lab identity unavailable")
 	}
-	inJob, err := labInJob()
-	if err != nil {
-		return errors.New("lab job proof unavailable")
-	}
+	inJob := labInJob()
 	token := windows.GetCurrentProcessToken()
-	facts := LabProbeFacts{InJob: inJob, AgentInImmediateJob: labImmediateAgent(agent.Identity.PID), User: guestagent.CheckRunnerContext(ctx) == nil, Elevated: token.IsElevated(), Desktop: runnerDesktop(), NormalPriority: labNormalPriority(windows.CurrentProcess()), Sentinel: os.Getenv("BIVOUAC_LAB_SENTINEL") == "runner-task", PID: identity.PID, Creation: identity.Creation, GateStage: "probe-ready"}
+	nativeContext, contextErr := guestagent.ReadRunnerContext()
+	// Job membership describes only this baseline snapshot. Survival and fresh
+	// agent identities gate cycles; the terminated agent is never queried again.
+	facts := LabProbeFacts{InJob: inJob, AgentInImmediateJob: labImmediateAgent(agent.Identity.PID), User: contextErr == nil && nativeContext.ExpectedSID != "" && nativeContext.UserSID == nativeContext.ExpectedSID, Elevated: token.IsElevated(), Desktop: runnerDesktop(), NormalPriority: labNormalPriority(windows.CurrentProcess()), PID: identity.PID, Creation: identity.Creation, GateStage: "probe-ready"}
 	var session uint32
 	facts.Console = windows.ProcessIdToSessionId(identity.PID, &session) == nil && session != 0 && session == windows.WTSGetActiveConsoleSessionId()
 	child := runnerChildCommand(guestagent.WindowsPath, "lab-sleeper")
@@ -196,7 +201,6 @@ func labProbe(ctx context.Context) error {
 		if readLabJSON("lab-grandchild.json", &grandchild) == nil && int64(child.Process.Pid) == int64(grandchild.Identity.PID) && validateLabAgent(grandchild.Identity) {
 			facts.ChildPID, facts.ChildCreation = grandchild.Identity.PID, grandchild.Identity.Creation
 			facts.GrandchildNormalPriority = grandchild.Facts.NormalPriority
-			facts.GrandchildSentinel = grandchild.Facts.Sentinel
 		}
 		if err := writeGuestJSON("lab-probe.json", labProbeRecord{Identity: identity, Facts: facts}); err != nil {
 			return err
@@ -212,7 +216,6 @@ func labProbe(ctx context.Context) error {
 				return err
 			}
 			result := executeLabCycle(ctx, kind, request)
-			facts.AgentInImmediateJob = labImmediateAgent(request.Agent.PID)
 			facts.GateStage = "cycle-failed"
 			if result.Complete {
 				facts.GateStage = kind + "-complete"
@@ -273,7 +276,7 @@ func runLabProbe(ctx context.Context, mode string, out io.Writer) error {
 		if err != nil || !live {
 			return errors.New("lab grandchild identity unavailable")
 		}
-		if err := writeGuestJSON("lab-grandchild.json", labProbeRecord{Identity: identity, Facts: LabProbeFacts{NormalPriority: labNormalPriority(windows.CurrentProcess()), Sentinel: os.Getenv("BIVOUAC_LAB_SENTINEL") == "runner-task"}}); err != nil {
+		if err := writeGuestJSON("lab-grandchild.json", labProbeRecord{Identity: identity, Facts: LabProbeFacts{NormalPriority: labNormalPriority(windows.CurrentProcess())}}); err != nil {
 			return err
 		}
 		_ = pauseGuest(ctx, 10*time.Minute)

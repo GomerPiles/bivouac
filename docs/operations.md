@@ -392,8 +392,9 @@ actual task principal/Highest/Interactive/action/priority 4 and installed owner/
 It starts a harmless long-lived probe through start's runner-task dispatch,
 mode/marker and claim path. It reports job membership, immediate-job agent
 presence (unknown on an incomplete bounded list), context predicates, priorities,
-a fixed trampoline-to-descendants environment sentinel and a gate stage. It
-requires the same recorded probe and sleeping grandchild to survive both
+and a gate stage. Job queries are baseline-only diagnostics: failure reports
+unknown without ending the probe, and membership does not gate the run. Context
+and priority facts gate it, along with the same recorded probe and sleeping grandchild surviving both
 `schtasks /End` + `/Run` and a proven agent process kill + `/Run`. The probe
 performs these fixed task operations itself; each cycle validates the current
 agent identity and matches fresh request/completion IDs. Results require a

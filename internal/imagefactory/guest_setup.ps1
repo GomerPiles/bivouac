@@ -122,15 +122,18 @@ $agent='C:\Program Files\Bivouac\bivouac.exe'
 if(!(Test-Path -LiteralPath $agent -PathType Leaf) -or ((Get-Item -LiteralPath $agent).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'agent installation'}
 $user=$env:USERNAME
 if($user -notmatch '^[A-Za-z0-9_-]{1,20}$'){throw 'agent account'}
+# Check both tasks before registering either; an existing runner must not
+# leave a newly registered agent task behind after refusal.
+foreach($taskName in @('bivouac-guest-agent','bivouac-guest-runner')){
+ if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){throw 'guest task already exists'}
+}
 $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 # Task Scheduler stores arguments as one string; the account above is a validated identifier.
 $action=New-ScheduledTaskAction -Execute $agent -Argument ('guest-agent --user '+$user)
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings=New-ScheduledTaskSettingsSet -Priority 4 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-if(Get-ScheduledTask -TaskName 'bivouac-guest-agent' -ErrorAction SilentlyContinue){throw 'agent task already exists'}
 Register-ScheduledTask -TaskName 'bivouac-guest-agent' -Principal $principal -Action $action -Trigger $trigger -Settings $settings | Out-Null
 # Fixed XML applies the DACL at registration, before the task can run.
-if(Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction SilentlyContinue){throw 'runner task already exists'}
 $runnerUser=[Security.SecurityElement]::Escape(([Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
 $runnerXml=@'
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">

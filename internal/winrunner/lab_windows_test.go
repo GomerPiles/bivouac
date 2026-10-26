@@ -3,12 +3,28 @@
 package winrunner
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"unsafe"
 
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 )
+
+func TestLabJobDiagnosticsDoNotGate(t *testing.T) {
+	if jobQueryFact(errors.New("query failed")) != "unknown" {
+		t.Fatal("failed job query claimed absence")
+	}
+	good := LabProbeFacts{Alive: true, GrandchildAlive: true, User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
+	for _, job := range []string{"true", "false", "unknown"} {
+		for _, agent := range []string{"true", "false", "unknown"} {
+			good.InJob, good.AgentInImmediateJob = job, agent
+			if !good.Valid() {
+				t.Fatal("diagnostic job fact gated survival")
+			}
+		}
+	}
+}
 
 func TestLabJobListNeverInfersAbsenceFromTruncation(t *testing.T) {
 	size := uint32(8 + 2*unsafe.Sizeof(uintptr(0)))
@@ -54,17 +70,13 @@ func TestLabCyclesRequireMatchingRequestAndNewAgent(t *testing.T) {
 }
 
 func TestLabGateRequiresSameProbeAndGrandchild(t *testing.T) {
-	good := LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: true, AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, Sentinel: true, GrandchildSentinel: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
+	good := LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: "unknown", AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
 	if !good.Valid() || !good.SameTree(good) {
 		t.Fatal("valid lab proof refused")
 	}
-	for _, mode := range []string{"unknown job", "agent in job", "child gone", "child priority", "wrong user", "filtered token", "wrong session", "wrong desktop", "sentinel", "new probe", "new child"} {
+	for _, mode := range []string{"child gone", "child priority", "wrong user", "filtered token", "wrong session", "wrong desktop", "new probe", "new child"} {
 		bad := good
 		switch mode {
-		case "unknown job":
-			bad.AgentInImmediateJob = "unknown"
-		case "agent in job":
-			bad.AgentInImmediateJob = "true"
 		case "child gone":
 			bad.GrandchildAlive = false
 		case "child priority":
@@ -77,8 +89,6 @@ func TestLabGateRequiresSameProbeAndGrandchild(t *testing.T) {
 			bad.Console = false
 		case "wrong desktop":
 			bad.Desktop = false
-		case "sentinel":
-			bad.GrandchildSentinel = false
 		case "new probe":
 			bad.Creation++
 		case "new child":

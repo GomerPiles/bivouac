@@ -15,8 +15,10 @@ type TaskFacts struct {
 }
 
 func (f TaskFacts) Valid() bool {
-	return f.ValidAgent() && f.TaskPolicy && f.TaskSecurity
+	return f.ValidDefinition() && f.TaskSecurity
 }
+
+func (f TaskFacts) ValidDefinition() bool { return f.ValidAgent() && f.TaskPolicy }
 
 // ValidAgent checks the existing agent-task contract. Policy and Security are
 // additional runner-task predicates; they make no claim about the agent DACL.
