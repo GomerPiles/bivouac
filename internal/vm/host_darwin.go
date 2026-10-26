@@ -250,5 +250,15 @@ func (h Store) Delete(name string) error {
 	if socket, err := h.SocketPath(name); err == nil {
 		_ = os.Remove(socket)
 	}
+	if socket, err := h.CacheSocketPath(name); err == nil {
+		if info, err := os.Lstat(socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(socket)
+		}
+	}
+	if socket, err := h.RevocationSocketPath(name); err == nil {
+		if info, err := os.Lstat(socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			_ = os.Remove(socket)
+		}
+	}
 	return os.RemoveAll(dir)
 }

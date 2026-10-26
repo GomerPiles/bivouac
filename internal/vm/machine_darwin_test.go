@@ -153,3 +153,45 @@ func TestConfigurationsValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestAttachmentMTUGuardAndReadback(t *testing.T) {
+	f, err := openFramework()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Default MTU does not even inspect a receiver, so older APIs remain valid.
+	if err := f.setNetworkMTU(0, 1500); err != nil {
+		t.Fatal(err)
+	}
+	dummy, err := f.make("NSObject", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.send(dummy, "release")
+	if err := f.setNetworkMTU(dummy, 9000); err == nil {
+		t.Fatal("missing MTU selector accepted")
+	}
+	fds, err := networkSocketpair(65535)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Close(fds[0]); _ = unix.Close(fds[1]) }()
+	handle, err := f.make("NSFileHandle", "initWithFileDescriptor:closeOnDealloc:", int32(fds[0]), false) //nolint:gosec // A socketpair FD.
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.send(handle, "release")
+	attachment, err := f.make("VZFileHandleNetworkDeviceAttachment", "initWithFileHandle:", handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.send(attachment, "release")
+	if !objc.Send[bool](attachment, f.sel("respondsToSelector:"), f.sel("setMaximumTransmissionUnit:")) {
+		t.Skip("MTU API unavailable; guard tested")
+	}
+	for _, mtu := range []int{9000, 65535} {
+		if err := f.setNetworkMTU(attachment, mtu); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

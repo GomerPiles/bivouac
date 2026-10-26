@@ -147,11 +147,14 @@ func TestHelperArgumentsRoundTrip(t *testing.T) {
 	dir, sock := abs("a"), abs("a.sock")
 	for _, o := range []RunOptions{
 		{Dir: dir, AgentPort: 7, AgentSocket: sock},
-		{Dir: dir, Share: abs("share"), Input: true, AgentPort: 9, AgentSocket: sock, Softnet: &SoftnetOptions{Binary: abs("softnet"), Sudo: true, Block: "@host,10.0.0.0/8"}},
+		{Dir: dir, Share: abs("share"), Input: true, AgentPort: 9, AgentSocket: sock, RootlessNetwork: true},
 		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 1920, Height: 1080}, DiskSync: "none"}},
 		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Display: Display{Width: 2560, Height: 1600, PPI: 144}, DiskSync: "fsync"}},
 		{Dir: dir, AgentPort: 7, AgentSocket: sock, Machine: MachineOptions{Nested: true}},
 	} {
+		if o.RootlessNetwork {
+			o.Network = o.Network.WithDefaults()
+		}
 		got, err := ParseArgs(o.Args())
 		if err != nil {
 			t.Fatal(err)

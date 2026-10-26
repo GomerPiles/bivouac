@@ -35,10 +35,10 @@ HOOK
     export BIVOUAC_CACHE_CONFIG=/tmp/bivouac/cache-config.json
     export NODE_OPTIONS="${NODE_OPTIONS:-} --require=/tmp/bivouac-cache-preload.cjs"
     if [ -f /tmp/bivouac-cache-env ]; then
-      { read -r proxy_endpoint; read -r cache_host; } < /tmp/bivouac-cache-env
+      { read -r proxy_endpoint; read -r cache_bypass; } < /tmp/bivouac-cache-env
       export http_proxy="$proxy_endpoint" https_proxy="$proxy_endpoint"
       export HTTP_PROXY="$proxy_endpoint" HTTPS_PROXY="$proxy_endpoint"
-      export no_proxy="127.0.0.1,localhost,$cache_host${no_proxy:+,$no_proxy}"
+      export no_proxy="127.0.0.1,localhost,$cache_bypass${no_proxy:+,$no_proxy}"
       export NO_PROXY="$no_proxy${NO_PROXY:+,$NO_PROXY}"
       export SSL_CERT_FILE=/tmp/bivouac-cache-roots.pem
       export CURL_CA_BUNDLE=/tmp/bivouac-cache-roots.pem

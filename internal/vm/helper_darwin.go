@@ -2,18 +2,20 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/rootnet"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,6 +31,18 @@ const connectTimeout = 5 * time.Second
 //
 // Output is host-side status only; the guest console is never attached.
 func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
+	bounded := &cappedLog{out: log, left: (1 << 20) - 8192, reserved: 8192}
+	log = bounded
+	terminal := "helper exited"
+	var finalStats func() rootnet.Snapshot
+	defer func() {
+		if finalStats != nil {
+			b, _ := json.Marshal(finalStats())
+			bounded.terminal([]byte(fmt.Sprintf("%s bivouac vm: %s; final counters %s\n", time.Now().UTC().Format(time.RFC3339), terminal, b)))
+		} else {
+			bounded.terminal([]byte(terminal + "\n"))
+		}
+	}()
 	logf := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(log, "%s bivouac vm: %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 	}
@@ -67,15 +81,34 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	defer signal.Stop(signals)
 
-	mopts := machineOptions{share: opts.Share, networkFD: -1, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested}
-	var sn *softnet
-	if opts.Softnet != nil {
-		sn, err = startSoftnet(*opts.Softnet, c.MAC, log)
+	mopts := machineOptions{share: opts.Share, networkFD: -1, networkMTU: opts.Network.WithDefaults().MTU, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested}
+	var networkDone <-chan error
+	var networkUpdates <-chan struct{}
+	var rootNetwork *networkProcess
+	if opts.RootlessNetwork {
+		cachePath, revocationPath := "", ""
+		if c.OS == "darwin" {
+			cachePath, err = Store(filepath.Dir(opts.Dir)).CacheSocketPath(filepath.Base(opts.Dir))
+			if err != nil {
+				return err
+			}
+		}
+		if cachePath != "" {
+			revocationPath, err = Store(filepath.Dir(opts.Dir)).RevocationSocketPath(filepath.Base(opts.Dir))
+			if err != nil {
+				return err
+			}
+		}
+		network, vmFile, err := startRootless(ctx, c.MAC, cachePath, revocationPath, opts.Network, opts.CacheMaxConnections)
 		if err != nil {
 			return err
 		}
-		defer sn.stop()
-		mopts.networkFD = sn.vmFD
+		rootNetwork = network
+		finalStats = network.Stats
+		defer func() { network.Close(); _ = vmFile.Close() }()
+		networkDone = network.done
+		networkUpdates = network.updates
+		mopts.networkFD = int(vmFile.Fd())
 	}
 	m, err := newMachine(f, opts.Dir, c, mopts)
 	if err != nil {
@@ -107,13 +140,11 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	}()
 	defer func() { _ = listener.Close() }()
 
-	var softnetDone <-chan struct{}
-	if sn != nil {
-		softnetDone = sn.done
-	}
 	cancelled := ctx.Done()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
+	var counterLog counterLogState
+	networkLog := slog.New(slog.NewJSONHandler(log, nil))
 	for {
 		select {
 		case <-cancelled:
@@ -122,18 +153,25 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 		case <-signals:
 			logf("powering off")
 			_ = m.stop()
-		case <-softnetDone:
-			logf("softnet exited; powering off")
-			softnetDone = nil
+		case networkErr := <-networkDone:
+			_ = networkErr
 			_ = m.stop()
+			terminal = "rootless network lost; guest retired"
+			return errors.New(terminal)
+		case <-networkUpdates:
+			if rootNetwork != nil && counterLog.due(time.Now(), rootNetwork.Stats()) {
+				networkLog.Info("rootless network counters", "counters", rootNetwork.Stats())
+			}
 		case <-tick.C:
 		}
 		switch m.state() {
 		case stateStopped:
+			terminal = "guest stopped"
 			logf("guest stopped")
 			return nil
 		case stateError:
-			return errors.New("VM stopped with an error")
+			terminal = "VM stopped with an error"
+			return errors.New(terminal)
 		}
 	}
 }
@@ -169,58 +207,4 @@ func (m *machine) proxy(host net.Conn, port uint32) {
 		_ = c.CloseWrite()
 	}
 	wg.Wait()
-}
-
-// softnet is the privileged packet filter process between the guest and
-// vmnet, connected over a datagram socket pair with Softnet's end as its
-// stdin, the interface Softnet defines.
-type softnet struct {
-	cmd  *exec.Cmd
-	vmFD int
-	done chan struct{}
-}
-
-func startSoftnet(o SoftnetOptions, mac string, log io.Writer) (*softnet, error) {
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
-	if err != nil {
-		return nil, err
-	}
-	// Apple recommends a receive buffer of at least four times the send buffer.
-	for _, fd := range fds {
-		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_SNDBUF, 1<<20)
-		_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, 4<<20)
-		unix.CloseOnExec(fd)
-	}
-	peer := os.NewFile(uintptr(fds[1]), "softnet")
-	args := []string{"--vm-fd", "0", "--vm-mac-address", mac, "--block", o.Block}
-	name := o.Binary
-	if o.Sudo {
-		name, args = "/usr/bin/sudo", append([]string{"-n", o.Binary}, args...)
-	}
-	cmd := exec.Command(name, args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = peer, log, log
-	if err := cmd.Start(); err != nil {
-		_ = peer.Close()
-		_ = unix.Close(fds[0])
-		return nil, fmt.Errorf("start softnet: %w", err)
-	}
-	_ = peer.Close()
-	s := &softnet{cmd: cmd, vmFD: fds[0], done: make(chan struct{})}
-	go func() { _ = cmd.Wait(); close(s.done) }()
-	return s, nil
-}
-
-func (s *softnet) stop() {
-	select {
-	case <-s.done:
-	default:
-		_ = s.cmd.Process.Signal(os.Interrupt)
-		select {
-		case <-s.done:
-		case <-time.After(5 * time.Second):
-			_ = s.cmd.Process.Kill()
-			<-s.done
-		}
-	}
-	_ = unix.Close(s.vmFD)
 }

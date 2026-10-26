@@ -109,7 +109,18 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 	}()
 	policy, err := NetworkPolicy()
 	if err != nil || policy != r.Policy {
-		return errors.New("host network changed before relay startup")
+		return errors.New("container pair isolation identity differs")
+	}
+	prove := func() error {
+		for _, member := range []string{r.Name, r.Name + "-engine"} {
+			if err := rt.ProveIsolation(member, r.Policy); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := prove(); err != nil {
+		return err
 	}
 	mac, err := rt.Duplex(ctx, r.Name, []string{guestHelper, "engine", "listen"})
 	if err != nil {
@@ -125,7 +136,7 @@ func RunRelay(ctx context.Context, input io.Reader) error {
 				return
 			case <-t.C:
 				policy, err := NetworkPolicy()
-				if err != nil || policy != r.Policy || r.verify() != nil {
+				if err != nil || policy != r.Policy || r.verify() != nil || prove() != nil {
 					cancel()
 					return
 				}

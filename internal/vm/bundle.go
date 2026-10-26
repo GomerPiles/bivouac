@@ -66,6 +66,15 @@ func (s Store) SocketPath(name string) (string, error) {
 	return p, nil
 }
 
+// CacheSocketPath is a domain-separated, per-VM cache capability. It has
+// the same fixed path length as the guest agent socket.
+func (s Store) CacheSocketPath(name string) (string, error) { return s.SocketPath("cache\x00" + name) }
+
+// RevocationSocketPath is distinct from both payload and agent capabilities.
+func (s Store) RevocationSocketPath(name string) (string, error) {
+	return s.SocketPath("cache-crl\x00" + name)
+}
+
 // CheckSocketPath fails when this store's guest agent sockets cannot fit
 // sun_path. Their length depends only on the store path, so one check covers
 // every VM before any guest starts.

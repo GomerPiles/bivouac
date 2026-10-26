@@ -220,3 +220,25 @@ func TestPartialHelperInstallationFallsBackOnlyAfterRemoval(t *testing.T) {
 		}
 	}
 }
+
+type cacheCleanupFailure struct{ cacheInstallFailure }
+
+func (f cacheCleanupFailure) Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	if strings.Contains(strings.Join(args, " "), "rm -f /tmp/bivouac/cache-config.json") {
+		return errors.New("synthetic cache cleanup uncertainty")
+	}
+	return f.cacheInstallFailure.Run(ctx, args, stdin, stdout)
+}
+func TestCacheFallbackRequiresProvenRemovalBeforeJIT(t *testing.T) {
+	p, r := ownedFixture(t)
+	p.rt = callRuntime{cacheCleanupFailure{cacheInstallFailure{r}}}
+	enableFixtureCache(t, p)
+	if err := p.StartRunner(context.Background(), fixtureName, []byte("synthetic-private-jit")); err == nil {
+		t.Fatal("uncertain cache cleanup accepted JIT")
+	}
+	for _, call := range r.calls {
+		if len(call) > 3 && call[0] == "Exec" && call[2] == guestPath && call[3] == "start" {
+			t.Fatal("JIT delivery attempted despite uncertain cache cleanup")
+		}
+	}
+}

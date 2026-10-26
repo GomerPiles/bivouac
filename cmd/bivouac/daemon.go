@@ -22,6 +22,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/redact"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 // run is the foreground daemon. launchd runs the same thing.
@@ -107,6 +108,7 @@ func (e env) run(ctx context.Context, args []string) error {
 		if cacheErr != nil {
 			log.Warn("cache service unavailable; guests use upstream downloads")
 		} else {
+			service.SetEndpointLimit(cfg.Cache.MaxConnections)
 			cacheService = service
 			defer service.Close()
 			for _, p := range providers {
@@ -183,6 +185,11 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 			}
 			out[name] = hp
 		case "vz":
+			count := cfg.Budget.MaxInstances
+			if err := vm.EnsureNetworkFDs(count*(max(256, cfg.Cache.MaxConnections)+32) + 256); err != nil {
+				closeProviders(out)
+				return nil, err
+			}
 			tp, err := vz.New(name, *p.VZ, store.ControllerID(), vms, nil, log)
 			if err != nil {
 				closeProviders(out)

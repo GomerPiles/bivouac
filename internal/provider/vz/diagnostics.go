@@ -68,7 +68,7 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 	}
 	if pid := p.LaunchPID(name); pid > 0 {
 		ps := CLI{Binary: "/bin/ps"}
-		if out, err := output(ctx, ps, []string{"-o", "args=", "-p", strconv.Itoa(pid)}, 4<<10); err == nil {
+		if out, err := output(ctx, ps, []string{"-o", "args=", "-p", strconv.Itoa(pid)}); err == nil {
 			_ = os.WriteFile(filepath.Join(dir, "launch-process.txt"), redact.Bytes(out), 0o600)
 		}
 	}

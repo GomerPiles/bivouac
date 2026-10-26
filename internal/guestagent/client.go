@@ -43,6 +43,12 @@ func (e *ExitError) Error() string { return fmt.Sprintf("guest command exited wi
 // command and is returned. The guest's stderr is discarded: an untrusted
 // guest must not reach host logs or errors.
 func Run(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdout io.Writer) error {
+	return RunWithStderr(ctx, dial, argv, stdin, stdout, io.Discard)
+}
+
+// RunWithStderr is the explicit diagnostic variant of Run. Callers must bound
+// stderr and redact at any logging sink; normal guest commands discard it.
+func RunWithStderr(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	conn, err := start(ctx, dial, argv, stdin != nil)
 	if err != nil {
 		return err
@@ -76,6 +82,9 @@ func Run(ctx context.Context, dial Dialer, argv []string, stdin io.Reader, stdou
 				return err
 			}
 		case frameStderr:
+			if _, err := stderr.Write(p); err != nil {
+				return err
+			}
 		case frameExit:
 			return exitResult(p)
 		case frameFailed:
@@ -144,15 +153,26 @@ func exitResult(p []byte) error {
 // to the command's stdin, reads come from its stdout, and the stream ends
 // when the command exits. Closing the stream kills the command.
 func Duplex(ctx context.Context, dial Dialer, argv []string) (net.Conn, error) {
+	return startDuplex(ctx, dial, argv, nil)
+}
+
+// DuplexWithStderr captures diagnostic stderr and reports nonzero command exits
+// when the stream is drained. The caller owns a bounded, redacted stderr sink.
+func DuplexWithStderr(ctx context.Context, dial Dialer, argv []string, stderr io.Writer) (net.Conn, error) {
+	return startDuplex(ctx, dial, argv, stderr)
+}
+
+func startDuplex(ctx context.Context, dial Dialer, argv []string, stderr io.Writer) (net.Conn, error) {
 	conn, err := start(ctx, dial, argv, true)
 	if err != nil {
 		return nil, err
 	}
-	return &duplex{conn: conn}, nil
+	return &duplex{conn: conn, stderr: stderr}, nil
 }
 
 type duplex struct {
 	conn    net.Conn
+	stderr  io.Writer // nil preserves the ordinary opaque stream's exit behavior
 	readMu  sync.Mutex
 	pending []byte
 	ended   error
@@ -177,8 +197,20 @@ func (d *duplex) Read(p []byte) (int, error) {
 		case kind == frameStdout:
 			d.pending = payload
 		case kind == frameStderr:
+			if d.stderr != nil {
+				_, d.ended = d.stderr.Write(payload)
+			}
 		case kind == frameExit || kind == frameFailed:
 			d.ended = io.EOF
+			if d.stderr != nil {
+				if kind == frameExit {
+					if err := exitResult(payload); err != nil {
+						d.ended = err
+					}
+				} else {
+					d.ended = parseFailure(payload)
+				}
+			}
 			var version *VersionError
 			if kind == frameFailed && errors.As(parseFailure(payload), &version) {
 				d.ended = version

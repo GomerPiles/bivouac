@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/GomerPiles/bivouac/internal/config"
 )
 
 // RunOptions are the helper's arguments.
@@ -17,9 +19,11 @@ type RunOptions struct {
 	Input     bool   // attach keyboard and pointing devices
 	AgentPort uint32 // guest agent vsock port
 	// AgentSocket is the Unix socket the helper serves AgentPort on.
-	AgentSocket string
-	Softnet     *SoftnetOptions
-	Machine     MachineOptions
+	AgentSocket         string
+	RootlessNetwork     bool
+	Network             config.VZNetwork
+	CacheMaxConnections int
+	Machine             MachineOptions
 }
 
 // MachineOptions are typed overrides of how one VM runs; zero values keep
@@ -78,13 +82,6 @@ func (o MachineOptions) Validate() error {
 	return o.Display.Validate()
 }
 
-// SoftnetOptions isolate the guest behind Softnet instead of shared NAT.
-type SoftnetOptions struct {
-	Binary string // resolved softnet path
-	Sudo   bool   // run through `sudo -n` when the binary is not SUID root
-	Block  string // comma-separated CIDRs and @host
-}
-
 func (o RunOptions) validate() error {
 	if !filepath.IsAbs(o.Dir) {
 		return errors.New("VM directory must be absolute")
@@ -98,8 +95,11 @@ func (o RunOptions) validate() error {
 	if !filepath.IsAbs(o.AgentSocket) || len(o.AgentSocket) > maxSocketPath {
 		return fmt.Errorf("guest agent socket must be an absolute path of at most %d bytes", maxSocketPath)
 	}
-	if s := o.Softnet; s != nil && (!filepath.IsAbs(s.Binary) || s.Block == "") {
-		return errors.New("softnet needs an absolute binary and a block list")
+	if err := o.Network.Validate(); err != nil {
+		return err
+	}
+	if o.CacheMaxConnections < 0 || o.CacheMaxConnections > 65536 {
+		return errors.New("invalid cache connection bound")
 	}
 	return o.Machine.Validate()
 }
@@ -145,10 +145,11 @@ func (o RunOptions) Args() []string {
 	if o.Input {
 		args = append(args, "--input")
 	}
-	if s := o.Softnet; s != nil {
-		args = append(args, "--softnet", s.Binary, "--softnet-block", s.Block)
-		if s.Sudo {
-			args = append(args, "--softnet-sudo")
+	if o.RootlessNetwork {
+		args = append(args, "--rootless-network")
+		args = append(args, NetworkArgs(o.Network)...)
+		if o.CacheMaxConnections != 0 {
+			args = append(args, "--cache-max-connections", strconv.Itoa(o.CacheMaxConnections))
 		}
 	}
 	if d := o.Machine.Display; d.Width != 0 {
@@ -169,16 +170,14 @@ func ParseArgs(args []string) (RunOptions, error) {
 	fs.SetOutput(io.Discard)
 	var o RunOptions
 	var port uint64
-	var softnet, block string
-	var sudo bool
 	fs.StringVar(&o.Dir, "dir", "", "")
 	fs.Uint64Var(&port, "agent-port", 0, "")
 	fs.StringVar(&o.AgentSocket, "agent-socket", "", "")
 	fs.StringVar(&o.Share, "share", "", "")
 	fs.BoolVar(&o.Input, "input", false, "")
-	fs.StringVar(&softnet, "softnet", "", "")
-	fs.StringVar(&block, "softnet-block", "", "")
-	fs.BoolVar(&sudo, "softnet-sudo", false, "")
+	fs.BoolVar(&o.RootlessNetwork, "rootless-network", false, "")
+	networkFlags(fs, &o.Network)
+	fs.IntVar(&o.CacheMaxConnections, "cache-max-connections", 0, "")
 	var display string
 	fs.StringVar(&display, "display", "", "")
 	fs.StringVar(&o.Machine.DiskSync, "disk-sync", "", "")
@@ -197,8 +196,36 @@ func ParseArgs(args []string) (RunOptions, error) {
 		}
 		o.Machine.Display = d
 	}
-	if softnet != "" || block != "" || sudo {
-		o.Softnet = &SoftnetOptions{Binary: softnet, Block: block, Sudo: sudo}
-	}
 	return o, o.validate()
+}
+
+// NetworkArgs carries only typed settings, never raw provider launch options.
+func NetworkArgs(n config.VZNetwork) []string {
+	n = n.WithDefaults()
+	args := []string{"--network-memory-mb", strconv.Itoa(n.MemoryMB), "--network-max-flows", strconv.Itoa(n.MaxFlows), "--network-tcp-idle", n.TCPIdleTimeout.String(), "--network-udp-idle", n.UDPIdleTimeout.String(), "--network-mtu", strconv.Itoa(n.MTU)}
+	for _, server := range n.DNSServers {
+		args = append(args, "--network-dns-server", server)
+	}
+	return args
+}
+func networkFlags(fs *flag.FlagSet, n *config.VZNetwork) {
+	fs.IntVar(&n.MemoryMB, "network-memory-mb", 0, "")
+	fs.IntVar(&n.MaxFlows, "network-max-flows", 0, "")
+	fs.DurationVar(&n.TCPIdleTimeout.Duration, "network-tcp-idle", 0, "")
+	fs.DurationVar(&n.UDPIdleTimeout.Duration, "network-udp-idle", 0, "")
+	fs.IntVar(&n.MTU, "network-mtu", 0, "")
+	fs.Func("network-dns-server", "", func(s string) error { n.DNSServers = append(n.DNSServers, s); return nil })
+}
+func ParseNetworkArgs(args []string) (config.VZNetwork, error) {
+	var n config.VZNetwork
+	fs := flag.NewFlagSet("vm network", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	networkFlags(fs, &n)
+	if err := fs.Parse(args); err != nil {
+		return n, err
+	}
+	if fs.NArg() != 0 {
+		return n, errors.New("invalid network arguments")
+	}
+	return n, n.Validate()
 }

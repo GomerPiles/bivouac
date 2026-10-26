@@ -28,8 +28,10 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/paths"
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
@@ -42,6 +44,9 @@ func TestRealGuest(t *testing.T) {
 	if exe == "" {
 		t.Skip("BIVOUAC_EXE not set")
 	}
+	if os.Getenv("BIVOUAC_HOME") == "" || os.Getenv("BIVOUAC_VZ_CAPACITY_CONFIRMED") != "1" {
+		t.Fatal("real guest validation requires an isolated home and confirmed CPU/memory/macOS slot reservations")
+	}
 	layout, err := paths.Resolve()
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +57,23 @@ func TestRealGuest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(layout.State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := (control.Files{Dir: layout.State}).Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lock.Release() })
+	records, err := state.Open(layout.State, func() string { return "integration-ctl" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records.List()) != 0 {
+		t.Fatal("isolated validation home has retained instances; finish cleanup before testing")
+	}
+	p.controllerID = records.ControllerID()
+	p.SetRecords(records)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
@@ -63,7 +85,20 @@ func TestRealGuest(t *testing.T) {
 	var sentinelName string
 	for round := 1; round <= 2; round++ {
 		name := "bivouac-macos-it" + strconv.FormatInt(time.Now().Unix(), 36)
-		spec := provider.Spec{Name: name, Baseline: baseline, Meta: provider.Metadata{ControllerID: "integration-ctl", InstanceID: name, CreatedAt: time.Now().UTC().Format(time.RFC3339)}}
+		spec := provider.Spec{Name: name, Baseline: baseline, Meta: provider.Metadata{ControllerID: records.ControllerID(), InstanceID: name, CreatedAt: time.Now().UTC().Format(time.RFC3339)}}
+		if err := records.Put(&state.Instance{ID: name, Name: name, Provider: "macos", Phase: state.PhaseCreating}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			cleanup, done := context.WithTimeout(context.Background(), time.Minute)
+			defer done()
+			if st, err := p.Status(cleanup, name); err == nil && st.Exists && st.Owned {
+				_ = p.Stop(cleanup, name, time.Second)
+				if err := p.Delete(cleanup, name); err != nil {
+					t.Error("disposable guest cleanup failed")
+				}
+			}
+		})
 		t0 := time.Now()
 		if err := p.Create(ctx, spec); err != nil {
 			t.Fatal(err)
@@ -78,6 +113,7 @@ func TestRealGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		boot := time.Since(t1)
+		validateGuestIsolation(t, ctx, p, name)
 
 		// The launched process carries exactly our argument array.
 		pid := p.LaunchPID(name)
@@ -91,12 +127,12 @@ func TestRealGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		if want := strings.Join(append([]string{exe}, launchArgs...), " "); args != want {
-			t.Fatalf("launched process %q, want %q", args, want)
+			t.Fatal("VM helper argument array differs from the rootless launch plan")
 		}
 		if holder, err := vm.Holder(store.Dir(name)); err != nil || holder != pid {
 			t.Fatalf("lock holder = %d, %v; want helper %d", holder, err, pid)
 		}
-		t.Logf("round %d: helper process: %s", round, args)
+		t.Logf("round %d: rootless helper argument array and lock verified", round)
 
 		// The guest agent runs commands in the Aqua session.
 		out, err := p.output(ctx, name, []string{guestPath, "session"}, nil)
@@ -129,6 +165,9 @@ func TestRealGuest(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := p.Delete(ctx, name); err != nil {
+			t.Fatal(err)
+		}
+		if err := records.Remove(name); err != nil {
 			t.Fatal(err)
 		}
 		teardown := time.Since(t2)

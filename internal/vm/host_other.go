@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"io"
+
+	"github.com/GomerPiles/bivouac/internal/config"
 )
 
 // Clone is unavailable off macOS.
@@ -37,3 +39,9 @@ var ErrForeignHolder = errors.New("VM is held by a process that is not its bivou
 
 // HelperPID is unavailable off macOS.
 func HelperPID(string) (int, error) { return 0, ErrUnsupported }
+
+func ProveIsolation(string, string) error { return ErrUnsupported }
+
+func RunNetwork(context.Context, string, config.VZNetwork) error { return ErrUnsupported }
+
+func NetworkChildPID(string) (int, error) { return 0, ErrUnsupported }

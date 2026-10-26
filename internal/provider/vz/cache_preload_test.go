@@ -29,6 +29,7 @@ func TestCachePreloadStreamAndFailOpen(t *testing.T) {
 		t.Run(map[bool]string{false: "local", true: "upstream"}[unavailable], func(t *testing.T) {
 			const token = "test-capability"
 			const upstream = "https://example.blob.core.windows.net/archive?sig=fixture"
+			var cacheURL string
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/lease" {
 					if r.Header.Get("Authorization") != "Bearer "+token {
@@ -38,20 +39,21 @@ func TestCachePreloadStreamAndFailOpen(t *testing.T) {
 						w.WriteHeader(http.StatusServiceUnavailable)
 						return
 					}
-					_, _ = io.WriteString(w, `{"url":"https://cache.example/object/lease"}`)
+					_ = json.NewEncoder(w).Encode(map[string]string{"url": cacheURL + "/object/lease"})
 					return
 				}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = io.WriteString(w, `{"ok":true,"matched_key":"original-key","signed_download_url":"`+upstream+`"}`)
 			}))
 			defer server.Close()
+			cacheURL = server.URL
 			dir := t.TempDir()
 			preload := filepath.Join(dir, "preload.cjs")
 			configPath := filepath.Join(dir, "config.json")
 			script := filepath.Join(dir, "check.cjs")
 			_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "https://"))
 			data, _ := json.Marshal(map[string]string{"url": server.URL, "token": token, "ca": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}))})
-			expected := "https://cache.example/object/lease"
+			expected := cacheURL + "/object/lease"
 			if unavailable {
 				expected = upstream
 			}

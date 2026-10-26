@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
@@ -38,6 +39,8 @@ func (c callRuntime) Clone(ctx context.Context, baseline, name string, opts vm.C
 }
 
 // Start records the VM name last.
+func (c callRuntime) ProveIsolation(name, policy string) error { return nil }
+
 func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink io.Writer) (Process, error) {
 	call := []string{"Start"}
 	if launch.Input {
@@ -46,8 +49,8 @@ func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink
 	if launch.Share != "" {
 		call = append(call, "share="+launch.Share)
 	}
-	if launch.Softnet != nil {
-		call = append(call, "softnet-block="+launch.Softnet.Block)
+	if launch.RootlessNetwork {
+		call = append(call, "rootless-network")
 	}
 	if d := launch.Machine.Display; d.Width != 0 {
 		call = append(call, fmt.Sprintf("display=%dx%d@%d", d.Width, d.Height, d.PPI))
@@ -58,6 +61,9 @@ func (c callRuntime) Start(ctx context.Context, name string, launch Launch, sink
 	if launch.Machine.Nested {
 		call = append(call, "nested")
 	}
+	if launch.Network.MTU != 0 {
+		call = append(call, "mtu="+strconv.Itoa(launch.Network.MTU))
+	}
 	return c.calls.Start(ctx, append(call, name), sink)
 }
 
@@ -66,6 +72,11 @@ func (c callRuntime) Exec(ctx context.Context, name string, argv []string, stdin
 }
 
 func (c callRuntime) Duplex(ctx context.Context, name string, argv []string) (net.Conn, error) {
+	if len(argv) == 3 && argv[1] == "cache" && argv[2] == "endpoint" {
+		host, guest := net.Pipe()
+		go func() { _ = cache.RunGuestEndpoint(context.WithoutCancel(ctx), guest); _ = guest.Close() }()
+		return host, nil
+	}
 	return nil, c.calls.Run(ctx, append([]string{"Duplex", name}, argv...), nil, io.Discard)
 }
 
@@ -218,7 +229,7 @@ func (r *recorder) Start(_ context.Context, args []string, sink io.Writer) (Proc
 // writeTestManifest makes dir a VM of guestOS with the current guest agent.
 func writeTestManifest(t *testing.T, dir, guestOS string) {
 	t.Helper()
-	m := vm.Manifest{Version: vm.ManifestVersion, OS: guestOS, Arch: "arm64", CPU: 2, MemoryMiB: 4096, MAC: "02:00:00:00:00:01", Guest: vm.Guest{AgentVersion: guestagent.Version}}
+	m := vm.Manifest{Version: vm.ManifestVersion, OS: guestOS, Arch: "arm64", CPU: 2, MemoryMiB: 4096, MAC: "02:00:00:00:00:01", Guest: vm.Guest{Sudo: true, AgentVersion: guestagent.Version}}
 	if guestOS == "darwin" {
 		m.MacOS = &vm.MacOSPlatform{HardwareModel: []byte("hw"), MachineID: []byte("id")}
 		m.Guest.RunnerDir = "/Users/admin/actions-runner"
@@ -252,6 +263,7 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.checkIsolation = func(context.Context) error { return nil }
 	return p
 }
 
@@ -280,7 +292,7 @@ func TestLifecycleArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := r.calls[len(r.calls)-1]
-	if got := strings.Join(run, " "); got != "Start input bivouac-macos-abc" {
+	if got := strings.Join(run, " "); got != "Start input rootless-network bivouac-macos-abc" {
 		t.Fatalf("start = %q", got)
 	}
 	if err := p.WaitReady(ctx, spec.Name); err != nil {
@@ -440,7 +452,7 @@ func TestRunnerLaunchCarriesMachineOptions(t *testing.T) {
 	if err := p.Start(context.Background(), fixtureName, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(r.calls[len(r.calls)-1], " "); got != "Start input display=1920x1080@144 disk-sync=none "+fixtureName {
+	if got := strings.Join(r.calls[len(r.calls)-1], " "); got != "Start input rootless-network display=1920x1080@144 disk-sync=none "+fixtureName {
 		t.Fatalf("start = %q", got)
 	}
 }
@@ -504,4 +516,17 @@ func TestRuntimeRefusesStoreTooLongForAgentSockets(t *testing.T) {
 	if err := p.CheckRuntime(context.Background()); err == nil || !strings.Contains(err.Error(), "socket path") {
 		t.Fatal("over-long VM store accepted at startup", err)
 	}
+}
+
+func (c callRuntime) CacheListeners(string) (net.Listener, net.Listener, error) {
+	payload, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, err
+	}
+	revocation, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		_ = payload.Close()
+		return nil, nil, err
+	}
+	return payload, revocation, nil
 }

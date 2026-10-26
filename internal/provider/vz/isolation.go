@@ -4,117 +4,29 @@ import (
 	"context"
 	"debug/elf"
 	"errors"
-	"net"
-	"net/netip"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
-	"sort"
-	"strings"
-	"time"
 
-	"github.com/GomerPiles/bivouac/internal/vm"
+	"github.com/GomerPiles/bivouac/internal/macnetwork"
+	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/rootnet"
+	"github.com/GomerPiles/bivouac/internal/state"
 )
 
-// NetworkPolicy includes every local IPv4 address/subnet (including public
-// addresses), and denies private/reserved space and Softnet's default gateway
-// exception. No --allow rules or port forwards are ever supplied.
-func NetworkPolicy() (string, error) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return "", err
-	}
-	rules := []string{"@host", "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4"}
-	var reserved []netip.Prefix
-	for _, r := range rules[1:] {
-		reserved = append(reserved, netip.MustParsePrefix(r))
-	}
-	for _, i := range ifs {
-		addrs, err := i.Addrs()
-		if err != nil {
-			return "", err
-		}
-		for _, a := range addrs {
-			p, err := netip.ParsePrefix(a.String())
-			if err != nil {
-				return "", errors.New("unrecognised host interface address")
-			}
-			if p.Addr().Is4() {
-				covered := false
-				for _, r := range reserved {
-					if r.Contains(p.Masked().Addr()) && r.Bits() <= p.Bits() {
-						covered = true
-						break
-					}
-				}
-				if !covered {
-					rules = append(rules, p.Masked().String(), netip.PrefixFrom(p.Addr(), 32).String())
-				}
-			}
-		}
-	}
-	sort.Strings(rules)
-	return strings.Join(compact(rules), ","), nil
-}
-func compact(a []string) []string {
-	out := a[:0]
-	for _, v := range a {
-		if len(out) == 0 || out[len(out)-1] != v {
-			out = append(out, v)
-		}
-	}
-	return out
-}
+// NetworkPolicy identifies the enforced transport. Destination policy is checked
+// live by the rootless stack, rather than frozen into an old launch snapshot.
+func NetworkPolicy() (string, error) { return rootnet.PolicyID, nil }
 
-// CheckIsolation does not create a network or modify privilege configuration.
-// Softnet's hidden probe exits before vmnet/DHCP initialization. The result
-// is how the VM helper runs softnet, with the current block list.
-func CheckIsolation(ctx context.Context) (vm.SoftnetOptions, error) {
+// CheckIsolation observes host policy availability without privileges, subprocess
+// probes or VM launch. The helper must successfully create its own rootless stack.
+func CheckIsolation(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return vm.SoftnetOptions{}, errors.New("isolated container pairs require Apple Silicon macOS")
+		return errors.New("isolated runners require Apple Silicon macOS")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	found, err := exec.LookPath("softnet")
-	if err != nil {
-		return vm.SoftnetOptions{}, errors.New("softnet is required; no NAT fallback")
-	}
-	bin, err := filepath.EvalSymlinks(found)
-	if err == nil {
-		bin, err = filepath.Abs(bin)
-	}
-	if err != nil {
-		return vm.SoftnetOptions{}, errors.New("resolve softnet")
-	}
-	helper := CLI{Binary: bin}
-	h, err := output(ctx, helper, []string{"--help"}, defaultOutputLimit)
-	if err != nil || !strings.Contains(string(h), "@host") || !strings.Contains(string(h), "--block") {
-		return vm.SoftnetOptions{}, errors.New("softnet must support --block and @host")
-	}
-	probe := []string{"--vm-fd", "0", "--vm-mac-address", "02:00:00:00:00:01", "--sudo-escalation-probing"}
-	fi, err := os.Stat(bin)
-	if err != nil {
-		return vm.SoftnetOptions{}, err
-	}
-	suid := fi.Mode()&os.ModeSetuid != 0
-	if suid {
-		if !rootSUID(fi) {
-			return vm.SoftnetOptions{}, errors.New("softnet SUID binary must be root-owned and not group/world-writable")
-		}
-		// A SUID binary can probe directly; softnet refuses if it is not root.
-		_, err = output(ctx, helper, probe, defaultOutputLimit)
-	} else {
-		_, err = output(ctx, CLI{Binary: "/usr/bin/sudo"}, append([]string{"-n", bin}, probe...), defaultOutputLimit)
-	}
-	if err != nil {
-		return vm.SoftnetOptions{}, errors.New("softnet privilege probe failed; configure privileges outside bivouac, no VM started")
-	}
-	policy, err := NetworkPolicy()
-	if err != nil {
-		return vm.SoftnetOptions{}, err
-	}
-	return vm.SoftnetOptions{Binary: bin, Sudo: !suid, Block: policy}, nil
+	_, err := macnetwork.Policy()
+	return err
 }
 
 func (p *Provider) preflightEngine(ctx context.Context) error {
@@ -134,16 +46,58 @@ func (p *Provider) preflightEngine(ctx context.Context) error {
 	if f.Machine != elf.EM_AARCH64 || f.Class != elf.ELFCLASS64 {
 		return errors.New("container helper architecture mismatch")
 	}
-	_, err = p.isolation(ctx)
+	err = p.isolation(ctx)
 	return err
 }
 
 // CheckContainers is the read-only doctor/pre-admission check. It never boots
 // a baseline, opens a container daemon, or changes privilege configuration.
 func (p *Provider) CheckContainers(ctx context.Context) error { return p.preflightEngine(ctx) }
-func (p *Provider) isolation(ctx context.Context) (vm.SoftnetOptions, error) {
+func (p *Provider) isolation(ctx context.Context) error {
 	if p.checkIsolation != nil {
 		return p.checkIsolation(ctx)
 	}
 	return CheckIsolation(ctx)
+}
+
+// runnerIsolation is repeated before private bootstrap/JIT and on adoption.
+// Cleanup deliberately uses raw ownership/status, so an obsolete NAT guest can
+// still be retired without claiming that it satisfies the new policy.
+func (p *Provider) runnerIsolation(name string) error {
+	if err := p.ownsGuest(name); err != nil {
+		return err
+	}
+	m, _ := p.readMeta(name)
+	if _, local := p.rt.(*local); local {
+		if p.records == nil {
+			return provider.ErrNotOwned
+		}
+		found := false
+		for _, i := range p.records.List() {
+			if i.Name == name && i.ID == m.InstanceID && i.Provider == p.name && i.Phase != state.PhaseDeregistering && p.records.ControllerID() == m.ControllerID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return provider.ErrNotOwned
+		}
+	}
+	policy, err := NetworkPolicy()
+	if err != nil || m.NetworkPolicy != policy {
+		return errors.New("guest network policy differs; drain and replace the guest")
+	}
+	if proof, ok := p.rt.(interface{ ProveIsolation(string, string) error }); ok {
+		return proof.ProveIsolation(name, policy)
+	}
+	return errors.New("runtime cannot prove network isolation")
+}
+
+func (p *Provider) preflightRunner(ctx context.Context) error {
+	_, err := CheckBaseline(string(p.store), p.cfg.Baseline, "darwin")
+	if err != nil {
+		return err
+	}
+	err = p.isolation(ctx)
+	return err
 }
