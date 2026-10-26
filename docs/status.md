@@ -4,17 +4,70 @@ Bivouac runs real CI for a downstream project on a macOS host and a
 Windows host (HCS Windows guests and Crosvm Linux GPU guests). This
 page records what is validated live, what only tests cover, and the open
 gates. No provider is ready for untrusted (for example fork) pull requests.
-The latest review fixes are covered by tests only, not yet validated live.
+Rootless macOS networking has disposable-guest evidence below; the complete
+production migration gates remain open.
 
 ## Checks
 
 Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
 `go build ./...`, `go test -race ./...`, cgo-disabled builds for macOS
 arm64/amd64, Windows amd64 and Linux amd64, and PowerShell 5.1/7 parsing.
-The hosted Linux/macOS/Windows workflow has not yet checked the host-provider
-removal. Unit tests and cross-builds do not establish live provider behavior.
+Local macOS rootless checks pass `gofmt`, normal/integration `go vet`,
+`golangci-lint`, full race tests, a host build, and Windows
+amd64/Linux arm64 cross-builds. Hosted CI checks each PR revision on macOS,
+Ubuntu and Windows.
+Unit tests and cross-builds do not establish live provider behavior.
 
 ## macOS
+
+Managed macOS networking uses gVisor in a credential-free Seatbelt child, with
+fail-closed ownership/readiness/adoption proof and no NAT fallback. Socket
+admission denies private, special, host and explicitly routed local IPv4;
+IPv6, fragments and ICMP are unsupported. Ordinary read-only bootstrap shares
+are opt-in; container pairs prohibit them. Defaults: 4096 general flows, 24 h
+TCP and 60 s UDP idle (15 min after half-close), 256 cache connections,
+`memory_mb = 1024` (128 KiB TCP buffers per direction) and MTU 16384.
+
+Validated in disposable guests:
+
+- DHCP MTU adoption at 1500, 9000, 16384 and 65535 with no queue drops; 16384
+  gave the most consistent local raw TCP (about 1.7× MTU 1500, single runs).
+- Host-resolver DNS: A, empty AAAA, TXT and NXDOMAIN.
+- Public forwarding and download, owned-host-listener denial, cold/warm cache,
+  cache-outage fallback and network-child loss retiring the VM.
+- Flow ceiling: excess connects are refused and counted as `flow_limit` while
+  reserved DNS keeps answering. A freshly booted guest holds about 130–160
+  flows of its own, so ceilings far below that fail from background traffic.
+- On the previous rootless revision, not repeated since: host/metadata/IPv6
+  denials, Aqua/AppKit input, Metal readback, cache saturation and fresh-state
+  cleanup.
+
+Real scale-set jobs on an isolated home and test scale set passed on this
+code, one guest at a time: a downstream project's macOS jobs, controller
+SIGKILL with adoption of the live guest, and every cache fixture mode except
+soak (save, restore, mixed, outage, interrupt, oversize and caching
+disabled). Saves relayed and stored with no fallbacks, restores hit locally,
+and stopping the controller mid-transfer let jobs finish directly.
+
+Covered by tests only: TCP half-close, counter logging, refusal counters and
+gauges, parent-brokered DNS envelope/filtering, limit and MTU plumbing. Native
+Seatbelt tests deny loopback and bound host interfaces with positive controls;
+hosted macOS CI shows denial of loopback and non-loopback aliases added before
+or after sandbox activation.
+
+Known limits: DNS uses primary `/etc/resolv.conf` resolvers or overrides, not
+scoped macOS DNS, and guests can see internal DNS metadata through them, with
+bounded but unrated query concurrency. Large guest UDP datagrams may fragment on
+the real path without ICMP feedback. Public NAT/tunnel endpoints and the
+non-atomic 250 ms route observation window remain admission limitations.
+Seatbelt APIs are deprecated: repeat sandbox and guest gates after macOS upgrades.
+
+Open: cache and idle limits under sustained load, ICMP, compositor
+presentation/capture, host hardware input, owner-controlled private and
+routed-public peers, Docker pulls and live container pairs (engine members
+stay at MTU 1500 until their adoption is validated). No untrusted-workload
+readiness or production migration is claimed. Production observations below
+describe the earlier NAT/cache transport.
 
 Bivouac runs macOS guests itself (Virtualization.framework through
 purego, its own guest agent). Production runs on this runtime from an
@@ -37,9 +90,10 @@ storage on. Validated on this runtime with real scale-set jobs:
   5–10 s, teardown 1.3–1.8 s (power-off).
 
 Passed on the earlier Tart CLI runtime but not yet repeated on this one:
-the REST JIT fallback (idle pool of one), off/on with queued work, retained
-cleanup across restart, the Actions archive cache with fallback when its
-endpoint stops mid-job, and windowed Metal, focus, and input tests.
+the REST JIT fallback (idle pool of one), off/on with queued work, and retained
+cleanup across restart. Compositor presentation/capture and host-to-guest
+hardware input remain unverified; current AppKit focus/input and Metal readback
+evidence is described above.
 
 Tests only: the `vz` provider name and bivouac's own VM store with hashed
 agent socket paths; VM manifests, `vz import`, baseline rejection, and the
@@ -67,18 +121,15 @@ the LaunchAgent policy is not in the source baseline.
 
 Open:
 
-- Softnet launched by the VM helper (container pairs) and Linux guests on
+- Rootless container-pair networking and privileged-container behavior on
   this runtime.
 - Host reboot persistence of drain, stop, and off.
 - Repository-scoped registration, custom runner groups, GHES, pools larger
   than one, multiple providers, and simultaneous failures.
 - Docker/Podman engine companions are implemented but not validated: they
-  need a Linux baseline with the guest agent, Softnet privileges, public-only network checks
+  need a Linux baseline with the guest agent, public-only network checks
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
-- Native VM-helper process-group launch and the cache bind to `guest_host`
-  remain unverified on a real host; the guest agent's runner process lifetime
-  was checked separately above.
 
 ## Windows host controls
 
@@ -327,10 +378,10 @@ Categorized store, fill and delivery diagnostics passed isolated Windows-host
 jobs; object labels and in-flight SSH loss reports are covered by tests only.
 SSH revocation tests cover accepted guest sockets still awaiting forwarding.
 
-Open parity item across providers: cache admission rejects private
-and special addresses but does not use the host's dynamic interface prefixes.
-A publicly addressed host or LAN prefix is therefore not refused through the
-proxy. Native guest NIC denial does not cover those host-side proxy connections.
+The macOS adapter additionally rejects current host/route prefixes
+and IPv6 through its cache proxy. Windows-hosted adapters still do not use the
+host's dynamic interface prefixes for cache admission; their native guest NIC
+denial does not cover those host-side proxy connections.
 
 Upload storage (`store_uploads`) passed every fixture mode live on isolated
 macOS guests, with production cache limits (4 GiB, 512 MiB objects). The host
