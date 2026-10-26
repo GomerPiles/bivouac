@@ -70,14 +70,24 @@ try{
   $ep=New-Partition -DiskNumber $disk.Number -Size 200MB -GptType $espType
   $null=Format-Volume -Partition $ep -FileSystem FAT32 -Confirm:$false
   $volumes=@(Get-Volume -Partition $ep)
-  if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){throw 'ESP drive letter'}
+  if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){
+   if($volumes.Count -eq 1 -and [string]$volumes[0].DriveLetter -cmatch '^[A-Za-z]$'){
+    try{$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $ep.PartitionNumber -AccessPath (([string]$volumes[0].DriveLetter)+':\') -ErrorAction Stop}catch{}
+   }
+   throw 'ESP drive letter'
+  }
   $step=42
   $mp=New-Partition -DiskNumber $disk.Number -Size 16MB -GptType $msrType
   $step=43
   $wp=New-Partition -DiskNumber $disk.Number -UseMaximumSize -GptType $basicType
   $null=Format-Volume -Partition $wp -FileSystem NTFS -Confirm:$false
   $volumes=@(Get-Volume -Partition $wp)
-  if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){throw 'Windows drive letter'}
+  if($volumes.Count -ne 1 -or $volumes[0].DriveLetter){
+   if($volumes.Count -eq 1 -and [string]$volumes[0].DriveLetter -cmatch '^[A-Za-z]$'){
+    try{$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $wp.PartitionNumber -AccessPath (([string]$volumes[0].DriveLetter)+':\') -ErrorAction Stop}catch{}
+   }
+   throw 'Windows drive letter'
+  }
   $step=44
   $parts=@(Get-Partition -DiskNumber $disk.Number | Sort-Object Offset)
   $expected=@($ep,$mp,$wp)

@@ -86,7 +86,13 @@ const storageFixturePS = `
   elseif($AccessPath -eq ((Join-Path $fixture.workspace 'base-esp')+'\')){Trace 'access_esp';$state.esp_access=$true}
   else{throw 'foreign access path'};Save-Fixture
  }
- function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
+ function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath,$ErrorAction)
+  if($AccessPath -eq 'Q:\'){
+   $state.letter_removals+=@{disk=$DiskNumber;partition=$PartitionNumber;path=$AccessPath};Save-Fixture;Trace 'remove_letter'
+   $expected=1;if($fixture.refuse -eq 'windows_letter'){$expected=3}
+   if($DiskNumber -ne 123 -or $PartitionNumber -ne $expected -or $ErrorAction -cne 'Stop'){throw 'foreign letter removal'}
+   return
+  }
   switch($AccessPath){
    ((Join-Path $fixture.workspace 'base-windows')+'\') {Trace 'remove_windows';$state.windows_access=$false}
    ((Join-Path $fixture.workspace 'base-esp')+'\') {Trace 'remove_esp';$state.esp_access=$false}
@@ -170,6 +176,7 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 	}
 	f.state = map[string]any{"style": style, "parts": parts, "offline": true, "base_attached": later, "iso_attached": mode != "media", "child_attached": false, "windows_access": later, "esp_access": later, "inspection_access": false, "staging_access": false, "auto": "", "tool_args": []string{}}
 	f.state["tool_calls"] = []any{}
+	f.state["letter_removals"] = []any{}
 	if later {
 		createBootFixtureFiles(t, workspace)
 	}
@@ -285,21 +292,39 @@ func TestBaseRefusesAutomaticDriveLetters(t *testing.T) {
 		name string
 		step int
 	}{{"esp_letter", 41}, {"windows_letter", 43}} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newStorageFixture(t, "layout")
-			f.options["refuse"] = tc.name
-			_, err := f.run(baseDisk, f.data("layout"))
-			requireScriptStep(t, err, tc.step)
-			if slices.Contains(f.trace(), "access_windows") || slices.Contains(f.trace(), "access_esp") {
-				t.Fatal("added access path after unexpected drive letter")
-			}
-			if _, err := f.cleanup(); err != nil {
-				t.Fatal("letter refusal prevented owned detach", err)
-			}
-			if f.readState()["base_attached"] != false || f.readState()["iso_attached"] != false {
-				t.Fatal("native attachment retained")
-			}
-		})
+		for _, removalFails := range []bool{false, true} {
+			t.Run(tc.name+"/removal_fails="+strconv.FormatBool(removalFails), func(t *testing.T) {
+				f := newStorageFixture(t, "layout")
+				f.options["refuse"] = tc.name
+				if removalFails {
+					f.options["fail"] = "remove_letter"
+				}
+				_, err := f.run(baseDisk, f.data("layout"))
+				requireScriptStep(t, err, tc.step)
+				var removals []struct {
+					Disk      int    `json:"disk"`
+					Partition int    `json:"partition"`
+					Path      string `json:"path"`
+				}
+				raw, _ := json.Marshal(f.readState()["letter_removals"])
+				wantPartition := 1
+				if tc.name == "windows_letter" {
+					wantPartition = 3
+				}
+				if json.Unmarshal(raw, &removals) != nil || len(removals) != 1 || removals[0].Disk != 123 || removals[0].Partition != wantPartition || removals[0].Path != `Q:\` {
+					t.Fatal("letter removal did not target only the proven owned partition")
+				}
+				if slices.Contains(f.trace(), "access_windows") || slices.Contains(f.trace(), "access_esp") {
+					t.Fatal("added access path after unexpected drive letter")
+				}
+				if _, err := f.cleanup(); err != nil {
+					t.Fatal("letter refusal prevented owned detach", err)
+				}
+				if f.readState()["base_attached"] != false || f.readState()["iso_attached"] != false {
+					t.Fatal("native attachment retained")
+				}
+			})
+		}
 	}
 }
 

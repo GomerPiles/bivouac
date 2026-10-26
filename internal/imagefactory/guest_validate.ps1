@@ -292,6 +292,32 @@ public static class DesktopProbe {
  function Get-RenderProbeWaitSeconds([bool]$RequireSetup) {
   if($RequireSetup){return $FactoryRenderWaitSeconds};return $LabRenderWaitSeconds
  }
+ function Initialize-RenderDirectory {
+  if('RenderOutputDirectory' -as [type]){return}
+  $null=Add-Type -TypeDefinition @"
+using System;using System.Runtime.InteropServices;
+public static class RenderOutputDirectory {
+ [StructLayout(LayoutKind.Sequential)] struct Attributes {public uint length;public IntPtr descriptor;public int inherit;}
+ [DllImport("kernel32.dll",EntryPoint="CreateDirectoryW",CharSet=CharSet.Unicode,ExactSpelling=true,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool CreateDirectory(string path,ref Attributes attributes);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text,uint revision,out IntPtr descriptor,out uint size);
+ [DllImport("kernel32.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern IntPtr LocalFree(IntPtr memory);
+ public static int Create(string path,string sddl) {
+  IntPtr sd;uint size;
+  if(!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl,1,out sd,out size))return Marshal.GetLastWin32Error();
+  try{Attributes attributes=new Attributes();attributes.length=(uint)Marshal.SizeOf(typeof(Attributes));attributes.descriptor=sd;
+   return CreateDirectory(path,ref attributes)?0:Marshal.GetLastWin32Error();
+  }finally{LocalFree(sd);}
+ }
+}
+"@
+ }
+ function Assert-RenderDirectory([string]$Path,[Security.AccessControl.DirectorySecurity]$Expected){
+  $item=Get-Item -Force -LiteralPath $Path
+  if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'probe directory type'}
+  $actual=Get-Acl -LiteralPath $Path
+  if(!$actual.AreAccessRulesProtected -or !$actual.GetOwner([Security.Principal.SecurityIdentifier]).Equals($Expected.GetOwner([Security.Principal.SecurityIdentifier])) -or $actual.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $Expected.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)){throw 'probe directory security'}
+  if(@(Get-ChildItem -Force -LiteralPath $Path | Select-Object -First 1).Count){throw 'probe directory not empty'}
+ }
  function Write-RenderProbeFailure([ref]$Written,[string]$Task,[uint32]$Session,$Budget,[uint32]$WaitSeconds) {
   if($Written.Value){return};$Written.Value=$true
   try {
@@ -336,8 +362,12 @@ public static class DesktopProbe {
  if(Test-Path -LiteralPath $spikeBase){exit 32}
  $spikeOwned=$false;$renderRegistered=$false;$renderPrimaryStep=0
  try {
-  $null=[IO.Directory]::CreateDirectory($spikeBase,$acl)
+  Initialize-RenderDirectory
+  $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+  $security=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)
+  if([RenderOutputDirectory]::Create($spikeBase,$security) -ne 0){throw 'probe directory creation'}
   $spikeOwned=$true
+  Assert-RenderDirectory $spikeBase $acl
   $step=23
   $task='bivouac-hcs-spike-render'
   if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){$renderPrimaryStep=15;exit 15}

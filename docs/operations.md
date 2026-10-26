@@ -275,6 +275,10 @@ Driver-directory validation remains separate.
 Only the matching owned copy is mounted read-only without a drive letter.
 The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
 16 MiB MSR, remaining NTFS Windows; 512-byte sectors; no recovery partition).
+If formatting assigns an ESP or Windows drive letter, the factory attempts
+to remove that access path only from its proven owned partition, then fails
+the build at step 41 or 43. Removal is best effort; a removal error preserves
+the original failure step.
 An MSR that GPT initialization adds by itself is removed first and recorded
 as `automatic_msr_removed`.
 It verifies disk identity before initialization, applies the selected image
