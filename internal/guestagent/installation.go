@@ -12,6 +12,10 @@ type TaskFacts struct {
 	TaskPriority    uint32 `json:"task_priority"`
 	TaskPolicy      bool   `json:"task_policy"`
 	TaskSecurity    bool   `json:"task_security"`
+	// SecurityShape explains a refused descriptor without account identifiers:
+	// "query" when it could not be read, else the owner kind and each entry's
+	// kind (SY, BA, principal P, other X), access mask and flags.
+	SecurityShape string `json:"security_shape,omitempty"`
 }
 
 func (f TaskFacts) Valid() bool {
