@@ -82,15 +82,20 @@ func labFilteredToken() (windows.Token, error) {
 	return token, nil
 }
 
-// labTokenFiltered proves the token is this account's, not elevated, and holds
-// Administrators only for deny.
+// labTokenFiltered proves the token is this account's, at medium integrity,
+// holding Administrators only for deny. A SAFER token derived from an elevated
+// token keeps that token's elevation type (observed on Windows 11 26300), so
+// the elevation flag is not checked. The UAC-filtered linked token itself
+// cannot start a process without TCB privilege, and holds no more access than
+// this token; a scheduler that trusted the elevation type would accept this
+// token and fail the gate, never pass it.
 func labTokenFiltered(token windows.Token) bool {
 	self, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return false
 	}
 	user, err := token.GetTokenUser()
-	if err != nil || !user.User.Sid.Equals(self.User.Sid) || token.IsElevated() {
+	if err != nil || !user.User.Sid.Equals(self.User.Sid) || !labMediumIntegrity(token) {
 		return false
 	}
 	groups, err := token.GetTokenGroups()
@@ -103,6 +108,22 @@ func labTokenFiltered(token windows.Token) bool {
 		}
 	}
 	return false
+}
+
+func labMediumIntegrity(token windows.Token) bool {
+	var n uint32
+	_ = windows.GetTokenInformation(token, windows.TokenIntegrityLevel, nil, 0, &n)
+	if n == 0 || n > 256 {
+		return false
+	}
+	b := make([]byte, n)
+	if windows.GetTokenInformation(token, windows.TokenIntegrityLevel, &b[0], n, &n) != nil {
+		return false
+	}
+	// #nosec G103 -- The buffer holds one TOKEN_MANDATORY_LABEL of length n.
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&b[0]))
+	medium, err := windows.CreateWellKnownSid(windows.WinMediumLabelSid)
+	return err == nil && label.Label.Sid != nil && label.Label.Sid.Equals(medium)
 }
 
 // runWithToken runs a fixed argv under token with independent NUL streams and
