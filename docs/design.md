@@ -749,9 +749,9 @@ and no IP listener. At startup and each connection it requires the configured
 account's SID, the active nonzero console session, and an elevated full or
 unsplit token. The image's protected logon task must pin that account; commands
 inherit the agent's token, session, desktop and environment. Each command starts
-atomically in a hidden kill-on-close job. Ordinary descendants die with it;
-the runner adapter may explicitly use `CREATE_BREAKAWAY_FROM_JOB` with independent
-standard streams to survive a request. Guest-local logs contain fixed categories
+atomically in a hidden kill-on-close job without permission to break away. All
+descendants die with it. The runner is dispatched through a separate on-demand
+task, independent of the agent task and command jobs. Guest-local logs contain fixed categories
 and numbers only, capped at 1 MiB plus one rotation.
 
 Listener Accept/open failures close the failed listener and re-listen in-process
@@ -808,14 +808,32 @@ come from the same build; there is no legacy script or task-mode compatibility.
   paths, traversal, Windows path aliases, duplicate paths and special/link
   entries are refused. A failed extraction is not reused. The generic runner
   must be present and unconfigured; desktop proof needs no scheduled task.
-- `start` checks single-use state and bounded private JIT input while holding
-  the receiver lock. It flushes `launched` before dispatch, then starts the
-  existing listener supervisor with `CREATE_BREAKAWAY_FROM_JOB` and
-  `DETACHED_PROCESS`, fixed argv and independent NUL streams. Failed or
-  uncertain dispatch retains the marker and is never replayed. Startup waits
-  at most 45 s for a live recorded listener identity. `stop` is an in-process
-  cancel with the existing PID/creation-time/path checks and console recheck;
-  exited or never-launched runners are no-ops.
+- `start` checks the runner task definition, single-use state and bounded
+  private JIT input while holding the receiver lock. It publishes `launch-mode`
+  (`listener`, or `lab-probe` in the lab) by flushed temporary file and rename,
+  then creates and flushes `launched` before invoking system `schtasks.exe`
+  with `/Run /TN bivouac-guest-runner` as an argument array. Failed or uncertain
+  dispatch retains the marker and is never replayed. Startup waits at most
+  45 s for a live recorded listener identity; scheduler acceptance alone is
+  insufficient. `stop` first writes a durable, exclusive `cancelled` record
+  under the guard, including when no listener exists. It then cancels the
+  recorded official listener using PID/creation-time/path and console rechecks.
+  Exited or never-launched listeners need no signal. The trampoline and helper
+  both check cancellation before creating their child; the helper records
+  `runner.exit` when cancelled before listener creation. Provider failure
+  teardown destroys the VM after failed or uncertain startup.
+- Installed `guest windows detached` validates its protected task principal's
+  SID, elevation, active console session and its own `WinSta0\\Default` desktop.
+  It pins the guest directory without taking the receive lock (start holds it
+  while waiting). An absent `launched` consumes nothing. It exact-matches
+  `launch-mode`, claims `detached.claim` with exclusive creation and checks
+  `cancelled`. It opens the delivered helper through the pinned directory,
+  rejecting links, and starts its `guest windows listener` mode with fixed argv,
+  `DETACHED_PROCESS`, hidden window, NUL streams and the guest working directory.
+  The lab token selects the installed agent's harmless probe instead. The
+  trampoline waits and propagates its child's exit code. The supervisor,
+  official listener (with its own cancellation console), worker and job steps
+  belong to the runner task's tree.
 - `clock` accepts one bounded UTC RFC3339 line on stdin and uses
   `SetSystemTime` directly, returning current UTC. It has no local-time/DST
   conversion. The provider refuses a corrected clock more than 5 s from host UTC.
@@ -923,7 +941,7 @@ The `hcs` provider (`internal/provider/hcsvm`) is the manager's half.
   absence revokes the grant, and provider Close closes its cache transports.
   Transport loss uses upstream fallback without reattachment.
 
-The official runner starts once through a detached breakaway supervisor, with
+The official runner starts once through the separate runner task's supervisor, with
 rebuilt machine/user PATH and a default-input-desktop probe. The guest adapter
 records listener PID, executable and process creation time; cancellation
 rechecks that identity before signaling its console. Stop requests official
@@ -1129,25 +1147,49 @@ ACL and deny-write handles, not hashed per job.
   The action executes the installed binary's `guest-agent --user <user>`
   directly; start the task for the build session. No PowerShell runs in the
   persistent task action.
-- **Launch safety:** before writing the single-use `launched` marker, create a
-  suspended trivial child of the current executable with explicit breakaway,
-  terminate it and join it. Failure returns a fixed refusal without consuming
-  the marker or input. The lab's harmless long-lived probe shares this checked
-  marker/launch path and detachment flags. Creation success does not establish
-  survival across agent or Task Scheduler lifetime changes: the opt-in lab must
-  prove that separately with the real task and agent.
+  Also register `bivouac-guest-runner`, refusing either existing task. Its one
+  Exec action is the installed binary's `guest windows detached`, working in
+  the guest directory, for the same InteractiveToken/Highest principal. It has
+  no triggers, priority 4, PT0S time limit, IgnoreNew, on-demand execution
+  enabled, no restart policy and no idle, network or battery conditions.
+  Fixed registration XML sets a protected task DACL: SYSTEM full control,
+  Administrators read/execute only, owner SYSTEM. No user ACE is added by the
+  factory. A filtered same-user process must be refused task activation. The
+  existing guest-directory user full-control ACE remains; narrowing it is
+  outside this change. The task DACL prevents this new elevated launch path
+  from being available to a filtered process.
+- **Launch safety:** before writing `launch-mode` or the single-use `launched`
+  marker, structurally validate the runner task's bounded XML and query its
+  current task-object security descriptor. Principal names resolve to SIDs;
+  extra actions (including non-Exec actions), triggers, restart policies and
+  execution constraints refuse launch. No localized output or racy run-state
+  precheck is used. Failure returns fixed text without consuming input or
+  markers. The claim and existing helper launch-once record enforce single use.
+  The lab shares this dispatch path and requires the same probe and sleeping
+  grandchild to survive both task End/Run and agent kill/Run, each with a fresh
+  request/completion ID and a new validated agent identity. Cycles execute in
+  the probe itself. Facts include job membership, immediate-job agent presence
+  (true/false/unknown; incomplete PID lists are unknown), SID/elevation/session/
+  desktop predicates, normal priorities, a fixed trampoline-to-descendants
+  environment sentinel and a fixed gate stage. Immediate-job absence does not
+  establish absence from shared ancestor jobs; survival is a separate gate.
 - **Sanitation:** rotate the console password into the LSA autologon secret;
   remove answer/setup residue, temporary probes, disposable Guest state and
-  agent logs; retain the agent logon task. Agent logs use separate protected
+  agent logs, launch-mode/claim/cancellation records and lab residue; retain
+  both tasks. Refuse sanitation unless the runner task is Ready (never Running,
+  Queued or unknown). Agent logs use separate protected
   `C:\ProgramData\Bivouac\Agent` storage with delete-shared files, so sanitation
   can remove build logs without interrupting the command transport. No SSH
   configuration or host-key generation is part of sanitation or runtime boot.
 - **Inspection/manifest:** template inspection refuses an existing agent
-  installation, logon task or Guest directory. Public agent presence/hash/task
+  installation, either task or Guest directory. Public agent presence/hash/task
   facts replace legacy service and package facts; template VDD presence remains
   informational. The manifest records source/asset/output/agent hashes, agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
-  and bounded topology observations. Per-file staging inventories are build-local
+  and bounded topology observations, plus public task facts for both definitions.
+  Installation self-test runs at preparation and again before sanitation;
+  publication and the VM host's manifest reader require both task proofs.
+  Per-file staging inventories are build-local
   and excluded from bounded durable records.
 - **Single-display invariant:** exactly one attached-to-desktop display must
   be primary. The hash-pinned validation script carries an inline topology

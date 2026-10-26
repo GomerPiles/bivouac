@@ -276,29 +276,29 @@ func TestStartMarkerBeforeLaunchAndNoReplay(t *testing.T) {
 		}
 		return errors.New("uncertain dispatch")
 	}
-	if err := markAndLaunch(root, launch); err == nil || calls != 1 {
+	if err := markAndLaunch(root, "listener", launch); err == nil || calls != 1 {
 		t.Fatal("expected uncertain dispatch")
 	}
-	if err := markAndLaunch(root, launch); err == nil || calls != 1 {
+	if err := markAndLaunch(root, "listener", launch); err == nil || calls != 1 {
 		t.Fatal("replayed dispatch")
 	}
 }
 
-func TestBreakawayRefusalPrecedesLaunchConsumption(t *testing.T) {
+func TestTaskRefusalPrecedesLaunchConsumption(t *testing.T) {
 	root := guestTestRoot(t)
 	if err := root.WriteFile("jit", []byte("synthetic input"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	called := false
-	err := startChecked(root, func() error { return errors.New("native details") }, func() error { called = true; return nil })
-	if err == nil || err.Error() != "detached listener breakaway unavailable" || called {
-		t.Fatal("breakaway refusal did not prevent dispatch")
+	err := startChecked(root, "listener", func() error { return errors.New("native details") }, func() error { called = true; return nil })
+	if err == nil || err.Error() != "runner task unavailable" || called {
+		t.Fatal("task refusal did not prevent dispatch")
 	}
 	if exists, err := guestFileExists(root, "launched"); err != nil || exists {
-		t.Fatal("breakaway refusal consumed launch marker")
+		t.Fatal("task refusal consumed launch marker")
 	}
 	if data, err := root.ReadFile("jit"); err != nil || string(data) != "synthetic input" {
-		t.Fatal("breakaway refusal consumed input")
+		t.Fatal("task refusal consumed input")
 	}
 }
 
@@ -325,7 +325,7 @@ func TestStartSingleUseAndJITRefusals(t *testing.T) {
 				}
 			}
 			called := false
-			err := markAndLaunch(root, func() error { called = true; return nil })
+			err := markAndLaunch(root, "listener", func() error { called = true; return nil })
 			if marker == "success" {
 				if err != nil || !called {
 					t.Fatal("valid launch refused", err)

@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/redact"
@@ -147,6 +148,9 @@ func checkGuestExecutable() error {
 // loads the host config or touches its credential store. The agent supplies
 // the interactive session; the listener is explicitly detached from the request.
 func RunGuest(ctx context.Context, mode string, out io.Writer) error {
+	if mode == "detached" {
+		return guestDetached(ctx)
+	}
 	if strings.HasPrefix(mode, "lab-") {
 		return runLabProbe(ctx, mode, out)
 	}
@@ -168,6 +172,11 @@ func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 	case "start":
 		return guestStart(ctx, cfg)
 	case "stop":
+		guard, err := guestagent.LockGuestDirectory()
+		if err != nil {
+			return errors.New("guest stop storage unavailable or busy")
+		}
+		defer func() { _ = guard.Close() }()
 		root, err := os.OpenRoot(guestBase)
 		if err != nil {
 			return err
@@ -431,6 +440,20 @@ func guestListener(ctx context.Context, cfg Config) error {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_CONSOLE}
+	if err := listenerCancellation(func() (bool, error) {
+		root, err := os.OpenRoot(guestBase)
+		if err != nil {
+			return false, err
+		}
+		defer func() { _ = root.Close() }()
+		return guestFileExists(root, "cancelled")
+	}, func() error {
+		return writeGuestJSON("runner.exit", struct {
+			Code int `json:"code"`
+		}{1})
+	}); err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return errors.New("official guest runner could not start")
 	}

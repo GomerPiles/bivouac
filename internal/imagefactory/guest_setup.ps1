@@ -129,6 +129,20 @@ $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user
 $settings=New-ScheduledTaskSettingsSet -Priority 4 -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 if(Get-ScheduledTask -TaskName 'bivouac-guest-agent' -ErrorAction SilentlyContinue){throw 'agent task already exists'}
 Register-ScheduledTask -TaskName 'bivouac-guest-agent' -Principal $principal -Action $action -Trigger $trigger -Settings $settings | Out-Null
+# Fixed XML applies the DACL at registration, before the task can run.
+if(Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction SilentlyContinue){throw 'runner task already exists'}
+$runnerUser=[Security.SecurityElement]::Escape(([Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
+$runnerXml=@'
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+<RegistrationInfo><SecurityDescriptor>O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)</SecurityDescriptor></RegistrationInfo>
+<Triggers/>
+<Principals><Principal id="Runner"><UserId>RUNNER_USER_SID</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>false</StartWhenAvailable><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><RunOnlyIfIdle>false</RunOnlyIfIdle><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority></Settings>
+<Actions Context="Runner"><Exec><Command>C:\Program Files\Bivouac\bivouac.exe</Command><Arguments>guest windows detached</Arguments><WorkingDirectory>C:\ProgramData\Bivouac\Guest</WorkingDirectory></Exec></Actions>
+</Task>
+'@
+$runnerXml=$runnerXml.Replace('RUNNER_USER_SID',$runnerUser)
+Register-ScheduledTask -TaskName 'bivouac-guest-runner' -Xml $runnerXml | Out-Null
 $step=60;Write-SetupStep $step $false
 Start-ScheduledTask -TaskName 'bivouac-guest-agent'
 

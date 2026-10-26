@@ -296,6 +296,13 @@ or owner record. It mounts, grants and boots only files it created.
      Highest, priority 4 (normal), three one-minute restarts and no execution
      time limit. Its action runs the binary directly. Build files use
      `C:\ProgramData\Bivouac\Image`.
+     It also registers `bivouac-guest-runner` with no trigger: the installed
+     binary runs `guest windows detached` on demand for the same elevated
+     interactive user, priority 4, IgnoreNew, no restart policy or time limit,
+     and no idle/network/battery conditions. Registration XML sets SYSTEM full
+     control and Administrators read/execute, with a protected DACL. Preparation
+     and publication self-tests check both task definitions and the runner
+     task's current security descriptor. A matching contract-2 image is required.
    - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
      removes VDD nodes/packages and the entire legacy component directory,
      uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
@@ -332,7 +339,7 @@ or owner record. It mounts, grants and boots only files it created.
 3. The offline inspection gates the build. The template must be generalized
    to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
    A configured runner (`.runner`, `.credentials`), anything under its `_work`,
-   an installed bivouac agent/logon task, or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
+   an installed bivouac agent, either guest task, or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
    runner's `_diag` by template preparation are allowed and are deleted during
    setup. The record lists only public facts: agent presence/hash/task, runner state and residue names, never file contents or
    answer-file values.
@@ -345,13 +352,15 @@ or owner record. It mounts, grants and boots only files it created.
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
    VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, driver versions and
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication
    requires one
    active primary display on Hyper-V synthetic video, no VDD nodes and the
-   existing render checks. A published directory is never reused.
+   existing render checks. Sanitation retains both tasks, requires the runner
+   task to be Ready, and removes launch/claim/cancellation and lab residue.
+   A published directory is never reused.
 6. Build records stay in `<image_root>\.builds`. A failed build terminates its
    own guest, confirms it absent and removes its workspace. If it could not
    confirm that, it keeps the workspace; settle it later, elevated:
@@ -380,11 +389,15 @@ through it. The baseline's unelevated child must be refused the ungranted agent
 service; the lazy-memory run grants the manager account and requires connection.
 The lab also requires a guest-loopback HvSocket refusal, fixed facts proving the
 actual task principal/Highest/Interactive/action/priority 4 and installed owner/ACL.
-It starts a harmless long-lived probe through start's breakaway/marker/detached
-launch path, verifies it is outside all jobs, and requires that same recorded
-probe to survive both `schtasks /End` + `/Run` and a proven agent process kill.
-Detached controllers perform these fixed task operations; results require both
-controller completion and a different agent PID/creation identity. Probe cleanup
+It starts a harmless long-lived probe through start's runner-task dispatch,
+mode/marker and claim path. It reports job membership, immediate-job agent
+presence (unknown on an incomplete bounded list), context predicates, priorities,
+a fixed trampoline-to-descendants environment sentinel and a gate stage. It
+requires the same recorded probe and sleeping grandchild to survive both
+`schtasks /End` + `/Run` and a proven agent process kill + `/Run`. The probe
+performs these fixed task operations itself; each cycle validates the current
+agent identity and matches fresh request/completion IDs. Results require a
+different agent PID/creation identity after each cycle. Probe cleanup
 checks recorded identity on the opened process handle. No runner or credentials
 are required. These destructive-in-guest checks run only in the explicit lab;
 ordinary unit checks simulate their command/report sequence. Recovery and timing

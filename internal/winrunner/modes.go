@@ -254,8 +254,11 @@ func guestFileExists(root *os.Root, name string) (bool, error) {
 
 // markAndLaunch is called under the receiver lock. Marker creation is durable
 // before dispatch; a failed or uncertain dispatch is deliberately never replayed.
-func markAndLaunch(root *os.Root, launch func() error) error {
-	for _, name := range []string{"launched", "launch-once", "listener.json", "runner.exit"} {
+func markAndLaunch(root *os.Root, mode string, launch func() error) error {
+	if mode != "listener" && mode != "lab-probe" {
+		return errors.New("invalid launch mode")
+	}
+	for _, name := range []string{"launched", "launch-mode", "detached.claim", "cancelled", "launch-once", "listener.json", "runner.exit"} {
 		exists, err := guestFileExists(root, name)
 		if err != nil || exists {
 			return errors.New("listener launch is single-use")
@@ -264,6 +267,9 @@ func markAndLaunch(root *os.Root, launch func() error) error {
 	jit, err := root.Lstat("jit")
 	if err != nil || !jit.Mode().IsRegular() || jit.Size() == 0 || jit.Size() > 128<<10 {
 		return errors.New("private bounded JIT input is missing")
+	}
+	if err := publishLaunchMode(root, mode); err != nil {
+		return err
 	}
 	f, err := root.OpenFile("launched", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -276,14 +282,17 @@ func markAndLaunch(root *os.Root, launch func() error) error {
 	return launch()
 }
 
-func startChecked(root *os.Root, probe, launch func() error) error {
+func startChecked(root *os.Root, mode string, probe, launch func() error) error {
 	if probe() != nil {
-		return errors.New("detached listener breakaway unavailable")
+		return errors.New("runner task unavailable")
 	}
-	return markAndLaunch(root, launch)
+	return markAndLaunch(root, mode, launch)
 }
 
 func stopGuest(root *os.Root, cancel func() error) error {
+	if err := createRecord(root, "cancelled", true); err != nil {
+		return err
+	}
 	exited, err := guestFileExists(root, "runner.exit")
 	if err != nil || exited {
 		return err
@@ -293,4 +302,86 @@ func stopGuest(root *os.Root, cancel func() error) error {
 		return err
 	}
 	return cancel()
+}
+
+func createRecord(root *os.Root, name string, existingOK bool) error {
+	f, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) && existingOK {
+		exists, e := guestFileExists(root, name)
+		if e == nil && exists {
+			return nil
+		}
+		return errors.New("invalid cancellation record")
+	}
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
+}
+
+func publishLaunchMode(root *os.Root, mode string) error {
+	f, err := root.OpenFile("launch-mode.new", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Remove("launch-mode.new") }()
+	_, writeErr := f.WriteString(mode)
+	if err := errors.Join(writeErr, f.Sync(), f.Close()); err != nil {
+		return err
+	}
+	// Both writers hold the exclusive receiver lock; refuse stale publication.
+	if exists, err := guestFileExists(root, "launch-mode"); err != nil || exists {
+		return errors.New("launch mode already exists")
+	}
+	return root.Rename("launch-mode.new", "launch-mode")
+}
+
+// claimDetached consumes nothing on a premature scheduler run. Once launched
+// is visible, its mode is complete; only one trampoline can claim the tree.
+func claimDetached(root *os.Root, launch func(string) error) error {
+	exists, err := guestFileExists(root, "launched")
+	if err != nil || !exists {
+		return err
+	}
+	if exists, err := guestFileExists(root, "launch-mode"); err != nil || !exists {
+		return errors.New("launch mode unavailable")
+	}
+	f, err := root.Open("launch-mode")
+	if err != nil {
+		return errors.New("launch mode unavailable")
+	}
+	info, statErr := f.Stat()
+	data, readErr := io.ReadAll(io.LimitReader(f, 17))
+	closeErr := f.Close()
+	if statErr != nil || !info.Mode().IsRegular() || readErr != nil || closeErr != nil || len(data) > 16 {
+		return errors.New("invalid launch mode")
+	}
+	mode := string(data)
+	if mode != "listener" && mode != "lab-probe" {
+		return errors.New("invalid launch mode")
+	}
+	if err := createRecord(root, "detached.claim", false); errors.Is(err, os.ErrExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	cancelled, err := guestFileExists(root, "cancelled")
+	if err != nil || cancelled {
+		return err
+	}
+	return launch(mode)
+}
+
+func listenerCancellation(check func() (bool, error), record func() error) error {
+	cancelled, err := check()
+	if err != nil {
+		return err
+	}
+	if cancelled {
+		if err := record(); err != nil {
+			return err
+		}
+		return errors.New("listener launch cancelled")
+	}
+	return nil
 }

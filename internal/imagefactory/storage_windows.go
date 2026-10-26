@@ -156,6 +156,9 @@ func replaceJSON(path string, v any) error {
 	return os.Rename(tmp, path)
 }
 func publishManifest(path string, m Manifest) error {
+	if !m.tasksValid() {
+		return errors.New("publication requires both task definitions")
+	}
 	tmp := path + ".tmp"
 	if err := writeJSON(tmp, m); err != nil {
 		return err

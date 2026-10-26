@@ -14,7 +14,8 @@ only bivouac's guest agent over HvSocket, including delivery, runtime commands
 and its 64-connection cache relay. The factory and vmhost lab batch now use
 the same agent. Factory code installs the pinned executable and logon task,
 stages GPU drivers offline, removes legacy guest components before FirstLogon,
-and sanitizes agent state/logs. Code and tests only; no agent image has been
+and sanitizes agent state/logs. It also registers the separate on-demand
+`bivouac-guest-runner` task. These source changes have unit coverage only; no matching image has been
 built or booted live.
 Rollback uses the previous manager, VM host service binary and image together. This source change is not deployed
 or validated live. Console/OOBE readiness, native static networking, UTC clock
@@ -23,15 +24,29 @@ restarts, cancellation and cache behavior on agent-served guests require live
 validation after the provider and factory switches.
 
 Review fixes add in-process listener re-listening, bounded consecutive session
-refusals, pre-marker breakaway creation proof, Windows-contract admission and
+refusals, pre-marker runner-task definition/DACL proof, Windows-contract admission and
 normal-priority task registration. MSI uninstall precedes server leftovers;
 Windows servicing removes the server capability while the inbox client and
 ssh-agent remain intact. These changes have unit coverage only.
 
+Windows contract 2 requires both tasks and replaces command-job escape with
+the installed `guest windows detached` trampoline. Tests cover bounded structural
+task XML, its current security descriptor, marker ordering, one-time claims,
+cancellation before listener creation, helper link refusal, command-tree
+containment, factory registration/sanitation and manifest admission. Preparation
+and publication both require installation self-test. Older images need rebuilding.
+
 Recovery after an actual agent crash and listener/probe survival across agent
-kills and task End/Run remain unverified. The opt-in vmhost lab now asserts
-loopback refusal, task principal/action/priority, installed owner/ACL, probe job
-membership and survival across both restart paths, with fixed facts only.
+kills and task End/Run remain unverified. The opt-in vmhost lab asserts loopback
+refusal, both task definitions, installed owner/ACL and the same probe and sleeping
+grandchild surviving both restart paths with new agent identities. Cycles run
+inside the probe and match fresh request/completion IDs. Fixed facts include
+immediate-job agent presence (unknown on incomplete lists), context, priorities,
+an environment sentinel and gate stage. These changes have unit coverage only.
+Live gates require a fresh factory image: task DACL/filtered-token refusal,
+premature/duplicate task activation, stop before listener creation, console
+visibility/focus, scheduler latency and session/environment selection, child-tree
+behavior under task End, and restart-on-failure with a surviving descendant.
 Sibling-guest negative testing is out of scope: it requires another live guest,
 extra resource admission and an additional inter-guest test fixture; this phase
 covers guest loopback and host-account authorization on the parent-only service.
@@ -39,8 +54,7 @@ No live image build or timing run has been performed for these fixes.
 
 The task-principal selftest accepts either a parsed SID or an account name
 resolved to the agent token's SID. Both forms and rejection cases have unit
-coverage. The failing lab image's task XML representation is unconfirmed;
-passing the installation and subsequent probe-survival gates still needs a live run.
+coverage; passing installation and probe-survival gates still needs a live run.
 
 Validation now prepares the pinned prebuilt render probe's fixed output
 directory, relocates its bounded report into the protected probe base and

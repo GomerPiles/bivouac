@@ -99,6 +99,12 @@ func TestFactoryAgentConversation(t *testing.T) {
 			stages = append(stages, "proof")
 			return []byte("version"), 0
 		}
+		if slices.Equal(argv, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}) {
+			stages = append(stages, "installation")
+			f := guestagent.InstallationFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}}
+			b, _ := json.Marshal(f)
+			return b, 0
+		}
 		want := []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(guestBootstrap)}
 		if !slices.Equal(argv, want) || len(input) < 4 || int(binary.LittleEndian.Uint32(input)) != len(input)-4 {
 			return nil, 18
@@ -130,7 +136,7 @@ func TestFactoryAgentConversation(t *testing.T) {
 	if err := prepareGuestWithDial(t.Context(), testConfig(), r, dial); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(stages, []string{"proof", "validate", "runner", "sanitize"}) || r.Manifest.Topology == nil || r.Manifest.RunnerVersion != "2.300.0" {
+	if !slices.Equal(stages, []string{"proof", "installation", "validate", "runner", "installation", "sanitize"}) || r.Manifest.Topology == nil || r.Manifest.RunnerVersion != "2.300.0" {
 		t.Fatal("wrong factory conversation")
 	}
 }

@@ -19,10 +19,9 @@ import (
 )
 
 // windowsCommand owns a private unnamed job and all stream/process handles.
-// Commands inherit the agent's token, session, desktop and environment. An
-// adapter that needs a child to survive the request must explicitly create it
-// with CREATE_BREAKAWAY_FROM_JOB and independent standard streams. Ordinary
-// descendants stay in the job; silent breakaway is deliberately not enabled.
+// Commands inherit the agent's token, session, desktop and environment. All
+// descendants remain in the job. Independent runner lifetimes belong to the
+// separate on-demand runner task.
 type windowsCommand struct {
 	job, process windows.Handle
 	jobOnce      sync.Once
@@ -90,7 +89,7 @@ func startCommand(ctx context.Context, req request, stdout, stderr io.Writer) (c
 	p := &windowsCommand{job: job, outputs: []io.Writer{stdout, stderr}}
 	fail := func(err error) (commandProcess, io.WriteCloser, error) { p.Close(); return nil, nil, err }
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
+	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	// #nosec G103 -- Fixed job-limit structure used synchronously.
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
 		return fail(err)
@@ -212,8 +211,7 @@ func (p *windowsCommand) Wait() (int32, error) {
 	if err := windows.GetExitCodeProcess(p.process, &code); err != nil {
 		return 0, errors.New("command status unavailable")
 	}
-	// Normal exit ends ordinary descendants too. A deliberately detached child
-	// has its own streams and remains alive outside this job.
+	// Normal exit ends all descendants too.
 	p.closeJob()
 	timer := time.NewTimer(outputDelay)
 	defer timer.Stop()

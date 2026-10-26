@@ -95,19 +95,3 @@ func TestListenerBackoffCancellation(t *testing.T) {
 		t.Fatal("retry cancellation or error disclosure")
 	}
 }
-
-func TestNativeBreakawayProbeInCommandJob(t *testing.T) {
-	for _, mode := range []string{"check-breakaway", "deny-breakaway"} {
-		t.Run(mode, func(t *testing.T) {
-			p, _, err := startCommand(t.Context(), request{Argv: helperArgs(mode)}, io.Discard, io.Discard)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer p.Close()
-			code, err := p.Wait()
-			if err != nil || code != 0 {
-				t.Fatal("native breakaway proof failed", code, err)
-			}
-		})
-	}
-}

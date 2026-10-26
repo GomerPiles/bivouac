@@ -34,7 +34,7 @@ const WindowsPath = `C:\Program Files\Bivouac\bivouac.exe`
 // WindowsContract pins the Windows agent CLI, receiver and runner adapter modes.
 // Change it whenever a host relies on different Windows command semantics;
 // Version independently describes only the shared framing protocol.
-const WindowsContract = 1
+const WindowsContract = 2
 
 // Version is the request format; the agent refuses any other and names its
 // own in the failure frame, so a host fails fast on an outdated baseline.

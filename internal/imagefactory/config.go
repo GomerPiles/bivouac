@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/windesktop"
 )
 
@@ -167,6 +168,7 @@ type Inspection struct {
 	AgentPresent          bool                     `json:"agent_present"`
 	AgentSHA256           string                   `json:"agent_sha256,omitempty"`
 	AgentTaskPresent      bool                     `json:"agent_task_present"`
+	RunnerTaskPresent     bool                     `json:"runner_task_present"`
 	VDDPresent            *bool                    `json:"vdd_present,omitempty"`
 	RunnerState           string                   `json:"runner_state"`
 	RunnerResidue         map[string]RunnerResidue `json:"runner_residue"`
@@ -261,7 +263,7 @@ func (i Inspection) Generalized() bool {
 }
 
 func (i Inspection) Eligible() bool {
-	return i.Generalized() && !i.GuestStatePresent && !i.AgentPresent && !i.AgentTaskPresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
+	return i.Generalized() && !i.GuestStatePresent && !i.AgentPresent && !i.AgentTaskPresent && !i.RunnerTaskPresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
 }
 
 // diagLogsOnly admits residue that is only regular files in _diag, such as
@@ -320,6 +322,8 @@ func encodeDriverPlan(drivers []Driver) ([]byte, error) {
 
 // Manifest deliberately has no credential or private setup fields.
 type Manifest struct {
+	AgentTask        guestagent.TaskFacts `json:"agent_task"`
+	RunnerTask       guestagent.TaskFacts `json:"runner_task"`
 	Topology         *windesktop.Topology `json:"topology,omitempty"`
 	AgentSHA256      string               `json:"agent_sha256"`
 	WindowsContract  int                  `json:"windows_contract"`
@@ -343,6 +347,8 @@ type Manifest struct {
 	Ended            time.Time            `json:"ended"`
 	PhaseMS          map[string]int64     `json:"phase_ms"`
 }
+
+func (m Manifest) tasksValid() bool { return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() }
 
 // cleanupOwned makes absence the barrier before detaching or removing storage.
 // Termination errors do not override a later authoritative absence observation.

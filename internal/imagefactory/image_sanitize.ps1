@@ -9,6 +9,9 @@ try {
   if(Test-Path -LiteralPath $Path){if((Get-Item -Force -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'link'}}
  }
  $base='C:\ProgramData\Bivouac\Image'
+ # Numeric Task Scheduler state: Ready=3. Refuse Running, Queued or unknown.
+ $runnerTask=Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction Stop
+ if([int]$runnerTask.State -ne 3){exit 33}
  foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\actions-runner')){Assert-Ordinary $path}
  if(Test-Path -LiteralPath 'C:\ProgramData\BivouacHcsSpike'){exit 32}
  if(!(Test-Path -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe' -PathType Leaf)){exit 1}
@@ -57,20 +60,21 @@ try {
   Assert-Ordinary $directory
   if(Test-Path -LiteralPath $directory){
    $entries=@(Get-ChildItem -Force -LiteralPath $directory)
-   if($entries.Count -gt 8){exit 1}
+   if($entries.Count -gt 32){exit 1}
    foreach($entry in $entries){
-    if($entry.PSIsContainer -or $entry.Name -notin @('agent.log','agent.log.1','.receive.lock')){exit 1}
+    if($entry.PSIsContainer -or $entry.Name -notin @('agent.log','agent.log.1','.receive.lock','jit','launched','launch-mode','launch-mode.new','detached.claim','cancelled','launch-once','listener.json','runner.exit','lab-probe.json','lab-grandchild.json','lab-grandchild.json.new','lab-agent.json','lab-agent.json.new','lab-task-request.json','lab-agent-request.json','lab-task-complete.json','lab-agent-complete.json','lab-task-request.json.new','lab-agent-request.json.new','lab-task-complete.json.new','lab-agent-complete.json.new','lab-probe.json.new')){exit 1}
     Assert-Ordinary $entry.FullName;Remove-Item -Force -LiteralPath $entry.FullName
    }
    if($directory -like '*\Guest'){Remove-Item -LiteralPath $directory}
   }
  }
  if(!(Get-ScheduledTask -TaskName 'bivouac-guest-agent' -ErrorAction SilentlyContinue)){exit 1}
+ if(!(Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction SilentlyContinue)){exit 1}
  $marker=Join-Path $base 'hcs-spike-prepared.json';Assert-Ordinary $marker
  if(Test-Path -LiteralPath $marker){exit 1}
  $metadata=[ordered]@{name=$data.name;user=$data.user;probe_sha256=$data.probe_sha256;validation_sha256=$data.validation_sha256;autologon_sha256=$data.autologon_sha256}
  [IO.File]::WriteAllText($marker,($metadata|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
- # Keep the agent's logon task for the next cold boot.
+ # Keep both tasks for the next cold boot.
  & 'C:\Windows\System32\shutdown.exe' @('/s','/t','5','/d','p:0:0') *> $null
  if($LASTEXITCODE){exit 1}
  [Console]::Out.Write('sanitized-shutdown-scheduled');[Console]::Out.Flush()
