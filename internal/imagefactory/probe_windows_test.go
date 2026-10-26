@@ -157,12 +157,12 @@ function Get-PnpDeviceProperty {param($InstanceId,$KeyName,$ErrorAction) [pscust
 			if got != nil || err == nil || err.Error() != fmt.Sprintf("fixed guest operation exited at step %d (%s)", tc.code, shape) {
 				t.Fatal("real diagnostic lost in agent framing")
 			}
-			fake = fakeFactoryAgent(func(_ []string, input []byte) ([]byte, int) {
+			fake = fakeFactoryAgent(answerInstallation(func(_ []string, input []byte) ([]byte, int) {
 				if len(input) == 0 {
 					return nil, 0
 				}
 				return out, tc.code
-			})
+			}))
 			r := &record{}
 			err = prepareGuestWithDial(t.Context(), testConfig(), r, fake)
 			if err == nil || !strings.Contains(err.Error(), shape) || strings.Contains(err.Error(), "invalid topology report") || r.Manifest.Topology != nil {
