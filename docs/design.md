@@ -1203,9 +1203,12 @@ ACL and deny-write handles, not hashed per job.
   the guest directory, for the same InteractiveToken/Highest principal. It has
   no triggers, priority 4, PT0S time limit, IgnoreNew, on-demand execution
   enabled, no restart policy and no idle, network or battery conditions.
-  Fixed registration XML sets a protected task DACL: SYSTEM full control,
-  Administrators read/execute only, owner SYSTEM. No user ACE is added by the
-  factory. A filtered same-user process must be refused task activation. The
+  Fixed registration XML sets the task DACL to SYSTEM and Administrators full
+  control, owner Administrators; no user ACE comes from the factory. Task
+  Scheduler stores it unprotected and adds read-only access for the task's own
+  principal, which cannot run it. A registration that gave Administrators only
+  read/execute was refused in a live build. The self-test accepts exactly
+  these entries. A filtered same-user process must be refused task activation. The
   existing guest-directory user full-control ACE remains; narrowing it is
   outside this change. The task DACL prevents this new elevated launch path
   from being available to a filtered process.

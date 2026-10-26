@@ -31,10 +31,17 @@ func TestTaskSchemaDefaults(t *testing.T) {
 }
 
 func TestRunnerTaskSecuritySeparateFromRuntimeDefinition(t *testing.T) {
-	good := "O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)"
-	for _, text := range []string{good, "", strings.ReplaceAll(good, "O:SY", "O:BU"), strings.ReplaceAll(good, "D:P", "D:"), good + "(A;;FRFX;;;BU)", strings.ReplaceAll(good, "FRFX", "FA"), strings.ReplaceAll(good, "FA;;;SY", "FRFX;;;SY")} {
-		if runnerTaskSecurity(text) != (text == good) {
-			t.Fatal("unexpected installation DACL decision")
+	const principal = "S-1-5-21-1-2-3-1001"
+	good := "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)"
+	// The form Task Scheduler stores after registering good (observed live).
+	stored := good + "(A;;FR;;;" + principal + ")"
+	accepted := map[string]bool{good: true, stored: true, strings.ReplaceAll(stored, "O:BA", "O:SY"): true, strings.ReplaceAll(stored, "D:", "D:P"): true}
+	for _, text := range []string{good, stored, strings.ReplaceAll(stored, "O:BA", "O:SY"), strings.ReplaceAll(stored, "D:", "D:P"), "",
+		strings.ReplaceAll(stored, "O:BA", "O:BU"), stored + "(A;;FR;;;BU)", strings.ReplaceAll(stored, "FR;;;"+principal, "FRFX;;;"+principal),
+		strings.ReplaceAll(stored, principal, "S-1-5-21-1-2-3-1002"), strings.ReplaceAll(stored, "FA;;;BA", "FRFX;;;BA"), strings.ReplaceAll(stored, "FA;;;SY", "FRFX;;;SY"),
+		"O:BAD:(A;;FA;;;SY)(A;;FR;;;" + principal + ")", strings.ReplaceAll(stored, "(A;;FA;;;BA)", "(A;ID;FA;;;BA)"), "O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;SY)"} {
+		if runnerTaskSecurity(text, principal) != accepted[text] {
+			t.Fatal("unexpected installation DACL decision", text)
 		}
 		raw := strings.ReplaceAll(runnerTaskXML, good, text)
 		f, err := taskFacts([]byte(raw), WindowsRunnerTaskName, "imageuser", "S-1-5-21-1-2-3-1001", func(string) string { return "" })
@@ -123,7 +130,7 @@ func TestInstallationAutologonAccountAgreement(t *testing.T) {
 	}
 }
 
-const runnerTaskXML = `<Task><RegistrationInfo><SecurityDescriptor>O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)</SecurityDescriptor></RegistrationInfo><Triggers/><Principals><Principal><UserId>S-1-5-21-1-2-3-1001</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><Priority>4</Priority><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><RunOnlyIfIdle>false</RunOnlyIfIdle><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings><Actions><Exec><Command>C:\Program Files\Bivouac\bivouac.exe</Command><Arguments>guest windows detached</Arguments><WorkingDirectory>C:\ProgramData\Bivouac\Guest</WorkingDirectory></Exec></Actions></Task>`
+const runnerTaskXML = `<Task><RegistrationInfo><SecurityDescriptor>O:BAD:(A;;FA;;;SY)(A;;FA;;;BA)</SecurityDescriptor></RegistrationInfo><Triggers/><Principals><Principal><UserId>S-1-5-21-1-2-3-1001</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><Priority>4</Priority><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><RunOnlyIfIdle>false</RunOnlyIfIdle><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings><Actions><Exec><Command>C:\Program Files\Bivouac\bivouac.exe</Command><Arguments>guest windows detached</Arguments><WorkingDirectory>C:\ProgramData\Bivouac\Guest</WorkingDirectory></Exec></Actions></Task>`
 
 func TestRunnerTaskDefinitionRefusals(t *testing.T) {
 	tests := map[string][2]string{
