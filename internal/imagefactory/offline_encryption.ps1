@@ -43,7 +43,19 @@ public static class FactoryEncryption {
   IntPtr sd;uint size;if(!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl,1,out sd,out size))return 12;
   try{bool present,defaulted;IntPtr dacl;if(!GetSecurityDescriptorDacl(sd,out present,out dacl,out defaulted) || !present || dacl==IntPtr.Zero)return 12;return SetNamedSecurityInfo(path,1,protect?0x80000004u:0x20000004u,IntPtr.Zero,IntPtr.Zero,dacl,IntPtr.Zero)==0?(uint)0:(uint)12;}finally{LocalFree(sd);}
  }
- public static uint Commit(string path){return MoveFileEx(path+".prevent-encryption",path,9)?(uint)0:(uint)8;}
+ static bool RemoveTransactionLogs(string path) {
+  try {
+   var logs=new System.Collections.Generic.List<string>();
+   foreach(string log in new string[]{path+".LOG1",path+".LOG2"}) {
+    if(!System.IO.File.Exists(log) && !System.IO.Directory.Exists(log))continue;
+    if(logs.Count>=16 || (System.IO.File.GetAttributes(log)&(System.IO.FileAttributes.Directory|System.IO.FileAttributes.ReparsePoint))!=0)return false;
+    logs.Add(log);
+   }
+   foreach(string log in logs)System.IO.File.Delete(log);
+   return true;
+  }catch{return false;}
+ }
+ public static uint Commit(string path){if(!MoveFileEx(path+".prevent-encryption",path,9))return 8;return RemoveTransactionLogs(path)?(uint)0:(uint)13;}
 }
 "@
 }

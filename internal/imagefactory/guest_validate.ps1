@@ -334,14 +334,13 @@ public static class DesktopProbe {
  # The pinned prebuilt probe hard-codes this output directory; remove with the Go probe.
  $spikeBase='C:\ProgramData\BivouacHcsSpike'
  if(Test-Path -LiteralPath $spikeBase){exit 32}
- $spikeOwned=$false;$renderRegistered=$false
+ $spikeOwned=$false;$renderRegistered=$false;$renderPrimaryStep=0
  try {
-  New-Item -ItemType Directory -Path $spikeBase | Out-Null
+  $null=[IO.Directory]::CreateDirectory($spikeBase,$acl)
   $spikeOwned=$true
-  Set-Acl -LiteralPath $spikeBase -AclObject $acl
   $step=23
   $task='bivouac-hcs-spike-render'
-  if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){exit 15}
+  if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){$renderPrimaryStep=15;exit 15}
   $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
   $action=New-ScheduledTaskAction -Execute $probe -WorkingDirectory $base
   $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds ($probeWaitSeconds+30)) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
@@ -351,20 +350,20 @@ public static class DesktopProbe {
   Start-ScheduledTask -TaskName $task
   $result=Join-Path $spikeBase 'render.json'
   $probeBudget=[Diagnostics.Stopwatch]::StartNew()
-  while(!(Test-Path -LiteralPath $result)) {if($probeBudget.Elapsed.TotalSeconds -ge $probeWaitSeconds){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;exit 16};Start-Sleep -Milliseconds 200}
+  while(!(Test-Path -LiteralPath $result)) {if($probeBudget.Elapsed.TotalSeconds -ge $probeWaitSeconds){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;$renderPrimaryStep=16;exit 16};Start-Sleep -Milliseconds 200}
   $step=33
   $directory=Get-Item -Force -LiteralPath $spikeBase
-  if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){exit 33}
+  if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){$renderPrimaryStep=33;exit 33}
   $output=Get-Item -Force -LiteralPath $result
-  if($output -isnot [IO.FileInfo] -or $output.LinkType -or ($output.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $output.Length -gt 4096){exit 33}
+  if($output -isnot [IO.FileInfo] -or $output.LinkType -or ($output.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $output.Length -gt 4096){$renderPrimaryStep=33;exit 33}
   $destination=Join-Path $base 'render.json'
-  if(Test-Path -LiteralPath $destination){exit 33}
+  if(Test-Path -LiteralPath $destination){$renderPrimaryStep=33;exit 33}
   Move-Item -LiteralPath $result -Destination $destination
   [IO.Directory]::Delete($spikeBase,$false)
   $spikeOwned=$false
   $result=$destination
   $step=25
-  if((Get-Item -LiteralPath $result).Length -gt 4096){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;exit 25}
+  if((Get-Item -LiteralPath $result).Length -gt 4096){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;$renderPrimaryStep=25;exit 25}
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
   $secureBoot=[bool](Confirm-SecureBootUEFI)
@@ -374,23 +373,22 @@ public static class DesktopProbe {
   $report.bitlocker_conversion_status=$bitlocker.conversion
   $report.bitlocker_protection_status=$bitlocker.protection
   foreach($field in @('topology_valid','virtual_equals_primary','hyperv_video_enabled','hyperv_video_started','probe_foreground','probe_on_primary','probe_input_received','security_window_found','security_on_primary')){
-   if($topology.$field -isnot [bool]){exit 29}
+   if($topology.$field -isnot [bool]){$renderPrimaryStep=29;exit 29}
    $report[$field]=[bool]$topology.$field
   }
   foreach($field in @('active_display_count','primary_display_count','primary_width','primary_height','primary_adapter_kind','vdd_node_count')){
    $report[$field]=[uint32]$topology.$field
   }
   $report=$report | ConvertTo-Json -Compress -Depth 3
-  if([Text.Encoding]::UTF8.GetByteCount($report) -gt 8192){exit 25}
+  if([Text.Encoding]::UTF8.GetByteCount($report) -gt 8192){$renderPrimaryStep=25;exit 25}
   [Console]::Out.Write($report)
   [Console]::Out.Flush()
- } finally {
+ } catch {$renderPrimaryStep=$step;throw} finally {
   try {
    if($renderRegistered){
-    Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $task -Confirm:$false
+    try{Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue}finally{Unregister-ScheduledTask -TaskName $task -Confirm:$false}
    }
-  } finally {
+  }catch{if(!$renderPrimaryStep){$renderPrimaryStep=34}} finally {
    if($spikeOwned){try{
     $directory=Get-Item -Force -LiteralPath $spikeBase
     if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'probe output directory changed'}
@@ -402,8 +400,9 @@ public static class DesktopProbe {
      if($entry.PSIsContainer){[IO.Directory]::Delete($entry.FullName,$false)}else{[IO.File]::Delete($entry.FullName)}
     }
     [IO.Directory]::Delete($spikeBase,$false)
-   }catch{exit 34}}
+   }catch{if(!$renderPrimaryStep){$renderPrimaryStep=34}}}
   }
+  if($renderPrimaryStep -eq 34){exit 34}
  }
  exit 0
 } catch {if($step -in @(24,25)){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds};exit $step}

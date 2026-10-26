@@ -285,6 +285,8 @@ with bootmgfw.efi.mui mapped from each EFI_EX language's bootmgfw_EX.efi.mui.
 If the EX file is absent, the normal embedded PCA 2011 loader is used.
 A present EX file with an invalid or different signer refuses. Every normal
 boot-manager language must have its EX counterpart for the 2023 selection.
+The runtime host's HCS MicrosoftWindows Secure Boot template must trust
+Windows UEFI CA 2023 to boot an image with the 2023 generation.
 Other EFI files, Fonts (not Fonts_EX) and Resources retain their mapping.
 The observed /bootex log explicitly used normal Fonts; further EX remappings
 could not be confirmed and are not inferred. The factory promotes
@@ -320,7 +322,9 @@ Boot helper steps are 61 copy, 62 BCDEdit, 63 device write, 64 artifacts/signatu
 and 65 complete verification. A `bcd_write` failure code is 1 open, 2 occupied
 sibling, 3 missing parent, 4 existing device key, 5 create, 6 value, 7 save,
 8 replace, 9 invalid identity, 10 unexpected failure, 11 Description schema,
-12 System write or 13 FirmwareModified deletion; no hive bytes are reported.
+12 System write, 13 FirmwareModified deletion or 14 transaction-log cleanup;
+no hive bytes are reported. BCD.LOG* are removed only after this build's
+store replacement succeeds; an unreplaced store keeps its logs.
 Complete verification code 28 means Description differs from the exact
 two-value system-store schema (KeyName REG_SZ including its terminator,
 System DWORD 1), including any extra value/subkey.
@@ -351,7 +355,7 @@ the copy log names its creation without spelling out the path. No recovery
 BCD or WinRE registration is created by the factory.
 At apply time there is no recovery partition and the factory does not register
 WinRE. Setup may register it on the OS volume; the manifest makes no claim
-about final installed WinRE state. Effective firmware trust and boot remain live gates.
+about final installed WinRE state. Effective firmware trust must be validated on each runtime host.
 
 1. Write a JSON configuration in an administrator-protected directory. The
    runner/probe inputs stay pinned by hash:
@@ -405,8 +409,11 @@ about final installed WinRE state. Effective firmware trust and boot remain live
      An existing DWORD 1 is accepted without rewriting; other values/types
      refuse. A fresh saved hive inherits the original owner/DACL before
      atomic replacement. The manifest records successful prevention.
-     Guest C: conversion/protection statuses are numeric diagnostics only;
-     4294967295 means unavailable. They do not gate publication this round.
+     Only replacement removes that SYSTEM hive's LOG1/LOG2 transaction logs;
+     already-1 and failed replacements leave them untouched. Log cleanup failure
+     is numeric code 13. Guest C: conversion/protection statuses must be zero
+     when reported (fully decrypted/protection off); nonzero refuses publication.
+     Missing/unreadable values, including 4294967295, remain diagnostic.
    - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
      removes VDD nodes/packages and the entire legacy component directory,
      uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
@@ -453,7 +460,9 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    A guest that exits before preparation completes reports HCS's exit type
    and status. For lab diagnosis, `image build --retain-failed` keeps a
    failed build's workspace (guest absent, disks detached) so its child disk
-   can be inspected offline; remove it afterwards with
+   can be inspected offline. This also retains setup-private\setup.iso and
+   staged answer files containing the build-time guest password. Keep the
+   administrator-only workspace protected and clean it promptly with
    `bivouac image cleanup --config ... --build <id>`.
    Build script stdout contains only deliberate UTF-8 Console writes; the
    bootstrap discards incidental pipeline/host output and suppresses progress.
@@ -501,10 +510,13 @@ about final installed WinRE state. Effective firmware trust and boot remain live
    and removes launch/claim/cancellation and lab residue.
    A published directory is never reused.
 6. Build records stay in `<image_root>\.builds`. After guest preparation fails,
-   cleanup first requests shutdown of its proven guest and waits at most
-   60 seconds total (at most 10 seconds for the request), then terminates as
-   before. A failed/refused request goes straight to termination. The build
-   still fails. Cleanup confirms absence and removes its workspace. If it could not
+   cleanup requests shutdown of its proven guest only if the failure was not
+   memory-reserve cancellation. The request is capped at 10 seconds and the
+   grace at the remaining allocation (normally at most 30 seconds), then it
+   terminates. Reserve loss or an exhausted/refused grace goes straight to
+   termination. Within two minutes, termination/absence has the first minute;
+   diagnostics end by 90 seconds, leaving at least 30 seconds for detach.
+   The build still fails. Cleanup confirms absence and removes its workspace. If it could not
    confirm that, it keeps the workspace; settle it later, elevated:
 
    ```text
@@ -520,16 +532,12 @@ about final installed WinRE state. Effective firmware trust and boot remain live
 Before a separately authorized live build, compare `bcdedit /enum firmware`
 before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
-Require no firmware-entry change. Install-media lab runs reached base layout,
-apply, ESP files, scratch store and child staging, with unchanged firmware
-entries.
-The default selects the image's embedded-signed 2023 EX boot manager,
-falling back to embedded-signed 2011 only when EX is absent. Build 10 reached
-OS boot/ExitBootServices 1.4 seconds after start, powered on GPU-PV and started
-specialize, proving the 2023/plain-GPT boot path. Specialize then rejected the
-unmarked non-system BCD store before RunSynchronous. The next live build must
-prove the system-store marker lets specialize proceed; remaining setup,
-guest-state/security diagnostics and publication gates still apply.
+Require no firmware-entry change. Contract-1 reference-ISO images (builds 15 and 16) have published
+in about seven minutes with Secure Boot enabled, TPM present and ready,
+fully decrypted storage, the 2023 boot manager, one Hyper-V display and
+hardware D3D11. Their lab batch passed all gates except probe survival;
+that failure led to the separate runner-task design. Contract 2 needs a
+fresh factory build and lab run; earlier images do not satisfy its task contract.
 Interrupted-apply cleanup, including
 retry from another session and after a host reboot, remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume

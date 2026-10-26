@@ -115,16 +115,23 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 	}
 	var system *hcs.System
 	preparationStarted := false
+	guardCtx := ctx
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		// Leave a minute after native absence, including at least 30 seconds
+		// after optional offline diagnostics for detach and host-worker joins.
+		stopCtx, cancelStop := cleanupStageContext(cleanupCtx, time.Minute)
+		defer cancelStop()
 		var terminate func() error
 		if system != nil {
 			terminate = func() error {
 				defer system.Close()
-				stop := func() error { return system.Terminate(cleanupCtx) }
-				if preparationStarted && err != nil {
-					return terminateAfterGuestFailure(cleanupCtx, failureShutdownBudget,
+				stop := func() error { return system.Terminate(stopCtx) }
+				if allowFailureShutdown(preparationStarted, err, context.Cause(guardCtx)) {
+					graceCtx, cancelGrace := cleanupStageContext(stopCtx, 30*time.Second)
+					defer cancelGrace()
+					return terminateAfterGuestFailure(graceCtx, failureShutdownBudget,
 						func(ctx context.Context) error {
 							return requestFailureShutdown(ctx, guestagent.DialHvsock(r.RuntimeID))
 						},
@@ -133,9 +140,11 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 				return stop()
 			}
 		}
-		cleanupErr := cleanupOwned(terminate, func() error { return waitAbsent(cleanupCtx, api, r.Name) }, func() error {
+		cleanupErr := cleanupOwned(terminate, func() error { return waitAbsent(stopCtx, api, r.Name) }, func() error {
 			if r.NativeAttempted && !r.GuestCompleted && err != nil {
-				facts, diagnosticErr := inspectOwned(cleanupCtx, c, r, true, runHost)
+				diagnosticCtx, cancelDiagnostic := cleanupStageContext(cleanupCtx, 30*time.Second)
+				facts, diagnosticErr := inspectOwned(diagnosticCtx, c, r, true, runHost)
+				cancelDiagnostic()
 				r.hostError("setup_diagnostics", diagnosticErr)
 				if facts != nil {
 					err = errors.Join(err, r.setupFailure(facts))
@@ -591,7 +600,7 @@ func watchResources(ctx context.Context, c Config, cancel context.CancelCauseFun
 		case <-ticker.C:
 			s, err := perf.NewSampler(c.ImageRoot).Sample()
 			if err != nil || reserveLost(s) {
-				cancel(errors.New("host memory reserve lost; canceling image build"))
+				cancel(&memoryReserveLostError{})
 				return
 			}
 		}

@@ -169,17 +169,25 @@ foreach($mode in @('success','missing','sibling file','sibling directory','missi
   'identity' {$expected=9;$diskArgument='invalid'}
  }
  if($mode -ne 'missing'){[BootHiveFixture]::Seed($path,$seed)}
+ foreach($suffix in @('.LOG','.LOG1','.LOG2','.LOG3','.other.LOG1')){[IO.File]::WriteAllText(($path+$suffix),'preserve')}
  $before='';if(Test-Path -LiteralPath $path){$before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
  $result=[FactoryBoot]::WriteDevices($path,$loader,$diskArgument,$esp,$windows)
  if($result -ne $expected){throw ('write expected={0} got={1}' -f $expected,$result)}
  if($mode -eq 'success'){
   if([FactoryBoot]::Verify($path,$loader,$disk,$esp,$windows,'en-US') -ne 0 -or (Test-Path -LiteralPath ($path+'.plain-gpt'))){throw 'write verification or rename'}
+  if(@(Get-ChildItem -LiteralPath $data.root | Where-Object Name -like 'success.LOG*').Count){throw 'replaced BCD transaction logs remain'}
+  [IO.File]::WriteAllText(($path+'.LOG1'),'preserve')
   $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
   if([FactoryBoot]::WriteDevices($path,$loader,$disk,$esp,$windows) -ne 4){throw 'write repeated existing elements'}
  }
  if($before -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'refusal changed source store'}
+ foreach($suffix in @('.LOG1','.other.LOG1')){if([IO.File]::ReadAllText(($path+$suffix)) -cne 'preserve'){throw 'unreplaced or foreign hive log changed'}}
  if($mode -eq 'sibling file' -and [IO.File]::ReadAllText(($path+'.plain-gpt')) -ne 'preserve'){throw 'sibling overwritten'}
 }
+$path=Join-Path $data.root 'log-refusal';[BootHiveFixture]::Seed($path,44)
+$null=New-Item -ItemType Directory -Path ($path+'.LOG2');[IO.File]::WriteAllText(($path+'.LOG1'),'preserve')
+if([FactoryBoot]::WriteDevices($path,$loader,$disk,$esp,$windows) -ne 14 -or [FactoryBoot]::Verify($path,$loader,$disk,$esp,$windows,'en-US') -ne 0){throw 'log cleanup failure after replacement not reported'}
+if([IO.File]::ReadAllText(($path+'.LOG1')) -cne 'preserve' -or !(Test-Path -LiteralPath ($path+'.LOG2') -PathType Container)){throw 'log preflight followed unexpected entry'}
 foreach($code in @(5,6,7,8,10,12,13)){
  $name='FactoryBootFault'+$code
  $binding=$data.bindings.Replace('public static class FactoryBoot {',('public static class '+$name+' {'))
@@ -196,10 +204,12 @@ foreach($code in @(5,6,7,8,10,12,13)){
  }
  $null=Add-Type -TypeDefinition $binding
  $path=Join-Path $data.root ('write-failure'+$code);[BootHiveFixture]::Seed($path,44)
+ [IO.File]::WriteAllText(($path+'.LOG1'),'preserve')
  $before=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
  $type=[type]$name
  $result=$type::WriteDevices($path,$loader,$disk,$esp,$windows)
  if($result -ne $code -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $before){throw 'native write failure changed source'}
+ if([IO.File]::ReadAllText(($path+'.LOG1')) -cne 'preserve'){throw 'failed replacement removed logs'}
  if($code -eq 8 -and [FactoryBoot]::Verify(($path+'.plain-gpt'),$loader,$disk,$esp,$windows,'en-US') -ne 0){throw 'failed replacement lost saved store'}
 }
 [Console]::Out.Write('verified')

@@ -1205,8 +1205,11 @@ ACL and deny-write handles, not hashed per job.
   order. That same offreg pass validates the Description whitelist, sets
   System=1 and deletes FirmwareModified. It requires absent element keys,
   saves a new sibling hive, closes
-  the source and atomically replaces it on the owned ESP. No temporary
+  the source and atomically replaces it on the owned ESP. Only after replacement
+  are that hive's BCD.LOG* transaction logs removed; other hives keep their logs.
+  No temporary
   drive letters, firmware objects or system-store commands are used.
+  Newly formatted ESP and Windows volumes must have no drive letter.
   The final table must be exactly three partitions in offset order with the
   recorded GUIDs, ESP/MSR/basic-data types and expected sizes. If GPT
   initialization creates its own MSR, the factory removes that one partition
@@ -1233,6 +1236,9 @@ ACL and deny-write handles, not hashed per job.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
+  Publication refuses any reported nonzero C: conversion or protection status;
+  zero means fully decrypted/protection off. Missing/unreadable diagnostics
+  remain best effort and do not block publication.
 - **Ownership and cleanup:** ISO mount, base/child attachment and access paths
   have durable intents before creation. Partitions share the
   owned base attachment's lifetime; their GUIDs are recorded in the layout.
@@ -1274,7 +1280,8 @@ ACL and deny-write handles, not hashed per job.
   SYSTEM\ControlSet<current>\Control\BitLocker, using Select\Current offline.
   An existing value other than DWORD 1 refuses. Offreg saves a fresh sibling
   hive, preserves the source owner/DACL and atomically replaces SYSTEM;
-  already-1 is accepted without rewriting. This policy belongs to the child
+  already-1 is accepted without rewriting. Only a successful replacement removes
+  the replaced SYSTEM hive's LOG1/LOG2; an unchanged hive retains its logs. This policy belongs to the child
   after inspection, leaving the base pristine, and is recorded in the manifest.
   A bounded, protected snapshot of each configured GPU driver tree is copied
   into `Windows\System32\HostDriverStore\FileRepository\<directory name>`.
@@ -1302,12 +1309,14 @@ ACL and deny-write handles, not hashed per job.
   seconds. Observation flags distinguish unavailable facts from zero. Failed
   validation errors append only a strictly decoded, complete schema; malformed,
   oversized or unexpected output adds no guest bytes to errors.
-  After a preparation failure on the proven running guest, cleanup requests
-  guest shutdown through fixed agent argv, allowing at most 60 seconds total
-  for the request and native exit observation (request capped at 10 seconds),
-  then performs the existing terminate/absence cleanup. Refusal or timeout
-  cannot suppress termination or turn the build into success. This gives guest
-  event logs a chance to flush; successful flushing remains a live gate.
+  After a preparation failure, cleanup may request shutdown of its proven
+  running guest through fixed agent argv (request capped at 10 seconds).
+  Memory-reserve cancellation skips grace and terminates immediately.
+  The two-minute cleanup budget reserves the last minute after termination/
+  absence, with the final 30 seconds reserved for detach after diagnostics.
+  Grace ends 30 seconds before the termination/absence deadline; its usual
+  maximum is 30 seconds. Refusal, timeout or an exhausted grace allocation
+  goes straight to termination and cannot turn the build into success.
   The build checks hardware D3D11, presentation and pixel readback, requires
   graceful shutdown, flattens the child and writes the manifest last.
 - **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the
@@ -1317,10 +1326,12 @@ ACL and deny-write handles, not hashed per job.
   protected `C:\ProgramData\Bivouac\Image`.
   The pinned prebuilt render probe still writes its report to the hard-coded
   `C:\ProgramData\BivouacHcsSpike\render.json`. Validation creates that temporary
-  directory with the same protected ACL as `Image\Probe`, refusing an existing
+  directory atomically with the same protected ACL as `Image\Probe`, refusing an existing
   directory. It moves the ordinary, link-free report (at most 4 KiB) into
   `Image\Probe\render.json` and removes the spike directory. Render-step cleanup
-  runs on failure too; sanitation refuses a leftover spike directory. This path
+  runs on failure too; the primary failure step survives cleanup errors, and
+  step 34 reports cleanup failure only after a successful body. Sanitation
+  refuses a leftover spike directory. This path
   bridge goes away when the Go render probe replaces the prebuilt executable.
 - **Specialize:** before FirstLogon, stop/delete the legacy agent service,
   remove every legacy VDD device (including phantom nodes) and its driver
@@ -1419,7 +1430,8 @@ ACL and deny-write handles, not hashed per job.
   effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
   and TPM present (readiness is recorded). It records offline device-encryption
   prevention and numeric C: BitLocker conversion/protection diagnostics;
-  these statuses do not gate publication. It also records agent
+  reported nonzero statuses refuse publication, while missing/unreadable
+  statuses remain diagnostic. It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;
