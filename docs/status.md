@@ -12,10 +12,16 @@ HvSocket. The Windows adapter has unit coverage for preflight, preparation,
 start/stop, clock setting, bounded delivery/extraction and the 64-connection
 cache relay. These agent-runtime source changes are not deployed or validated
 live; rollback uses the previous manager, VM host service and image together.
+Console/OOBE readiness remains a live gate for the agent-served guest.
+In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
+MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
+Recovery after an actual agent crash remains unverified.
 
 Windows contract 2 requires the agent logon task and separate on-demand runner
 task. Installation self-test checks both task definitions and the runner's
-current security descriptor at preparation and publication. Runtime start checks
+current security descriptor at preparation and publication. Installation and
+manifest admission also require a fixed autologon-account/runner-principal/
+agent-token SID equality predicate. Runtime start checks
 structural task XML only; the trampoline checks native context without task
 queries. Tests cover schema defaults, task-query failure facts, mode-before-marker
 ordering, claims, injected context refusals, helper hard-link/junction refusal,
@@ -32,12 +38,13 @@ unknown. The lab conversation is simulated by unit tests; real scheduler and
 process-lifetime behavior remain unverified.
 
 A fresh contract-2 image and live lab are required for task DACL/filtered-token
-refusal, premature/duplicate activation, cancellation during startup, console
+refusal, premature/duplicate activation, cancellation during startup (helper console attach), console
 visibility/focus, scheduler latency, environment/session selection, task End
 descendant behavior and restart-on-failure with a surviving child. Native
 networking, UTC correction, cancellation/result reporting and cache behavior on
 agent-served guests also remain live gates. Sibling-guest negative testing is
 outside this phase's loopback and host-account authorization scope.
+The accepted double Ctrl+C when stop and the helper both signal still needs live validation.
 
 The factory's pinned prebuilt render-probe output-path bridge has script/fixture
 coverage only. Fresh-image render validation and sanitation remain live gates.

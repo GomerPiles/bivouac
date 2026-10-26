@@ -122,9 +122,11 @@ try{
 
 func TestPublicationRequiresBothTaskFacts(t *testing.T) {
 	good := guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
-	for _, mode := range []string{"both", "missing agent", "missing runner", "invalid security"} {
-		m := Manifest{AgentTask: good, RunnerTask: good}
+	for _, mode := range []string{"both", "missing agent", "missing runner", "invalid security", "autologon mismatch"} {
+		m := Manifest{AgentTask: good, RunnerTask: good, AutologonAccountMatches: true}
 		switch mode {
+		case "autologon mismatch":
+			m.AutologonAccountMatches = false
 		case "missing agent":
 			m.AgentTask = guestagent.TaskFacts{}
 		case "missing runner":

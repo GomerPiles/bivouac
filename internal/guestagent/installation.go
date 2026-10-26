@@ -27,17 +27,18 @@ func (f TaskFacts) ValidAgent() bool {
 }
 
 type InstallationFacts struct {
-	TaskUser        bool      `json:"task_user"`
-	TaskHighest     bool      `json:"task_highest"`
-	TaskInteractive bool      `json:"task_interactive"`
-	TaskAction      bool      `json:"task_action"`
-	TaskPriority    uint32    `json:"task_priority"`
-	OwnerTrusted    bool      `json:"owner_trusted"`
-	ACLProtected    bool      `json:"acl_protected"`
-	ACLExpected     bool      `json:"acl_expected"`
-	RunnerTask      TaskFacts `json:"runner_task"`
+	TaskUser                bool      `json:"task_user"`
+	TaskHighest             bool      `json:"task_highest"`
+	TaskInteractive         bool      `json:"task_interactive"`
+	TaskAction              bool      `json:"task_action"`
+	TaskPriority            uint32    `json:"task_priority"`
+	OwnerTrusted            bool      `json:"owner_trusted"`
+	ACLProtected            bool      `json:"acl_protected"`
+	ACLExpected             bool      `json:"acl_expected"`
+	RunnerTask              TaskFacts `json:"runner_task"`
+	AutologonAccountMatches bool      `json:"autologon_account_matches"`
 }
 
 func (f InstallationFacts) Valid() bool {
-	return f.TaskUser && f.TaskHighest && f.TaskInteractive && f.TaskAction && f.TaskPriority == 4 && f.OwnerTrusted && f.ACLProtected && f.ACLExpected && f.RunnerTask.Valid()
+	return f.TaskUser && f.TaskHighest && f.TaskInteractive && f.TaskAction && f.TaskPriority == 4 && f.OwnerTrusted && f.ACLProtected && f.ACLExpected && f.RunnerTask.Valid() && f.AutologonAccountMatches
 }

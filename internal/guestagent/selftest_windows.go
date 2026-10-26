@@ -113,9 +113,9 @@ func selftest(ctx context.Context, args []string, out io.Writer) error {
 		if err != nil {
 			return errors.New("agent selftest unavailable")
 		}
-		facts := inspectTaskFacts(func(name string) (TaskFacts, error) {
+		facts := inspectTaskFacts(tokenUser.User.Sid.String(), func(name string) (TaskFacts, error) {
 			return readTaskFacts(ctx, name, user, tokenUser.User.Sid.String())
-		})
+		}, readAutologonSID)
 		facts.OwnerTrusted, facts.ACLProtected, facts.ACLExpected = installationACL(WindowsPath)
 		owner, protected, expected := installationACL(filepath.Dir(WindowsPath))
 		facts.OwnerTrusted = facts.OwnerTrusted && owner
@@ -128,7 +128,7 @@ func selftest(ctx context.Context, args []string, out io.Writer) error {
 
 // Failure of either independent query leaves fixed false predicates for that
 // task, while preserving the other task's facts. No raw query error is emitted.
-func inspectTaskFacts(query func(string) (TaskFacts, error)) InstallationFacts {
+func inspectTaskFacts(agentSID string, query func(string) (TaskFacts, error), autologonSID func() (string, error)) InstallationFacts {
 	agent, agentErr := query(WindowsTaskName)
 	if agentErr != nil {
 		agent = TaskFacts{}
@@ -138,5 +138,10 @@ func inspectTaskFacts(query func(string) (TaskFacts, error)) InstallationFacts {
 	if err != nil {
 		runner.TaskSecurity = false
 	}
-	return InstallationFacts{TaskUser: agent.TaskUser, TaskHighest: agent.TaskHighest, TaskInteractive: agent.TaskInteractive, TaskAction: agent.TaskAction, TaskPriority: agent.TaskPriority, RunnerTask: runner}
+	sid, sidErr := autologonSID()
+	// TaskUser already proves runner principal SID == agent token SID. Join
+	// that proof with the independently resolved Winlogon account, retaining
+	// only one fixed predicate; no account identifiers leave inspection.
+	match := sidErr == nil && agentSID != "" && sid == agentSID && runner.TaskUser
+	return InstallationFacts{TaskUser: agent.TaskUser, TaskHighest: agent.TaskHighest, TaskInteractive: agent.TaskInteractive, TaskAction: agent.TaskAction, TaskPriority: agent.TaskPriority, RunnerTask: runner, AutologonAccountMatches: match}
 }

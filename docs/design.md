@@ -861,6 +861,10 @@ come from the same build; there is no legacy script or task-mode compatibility.
   official listener through the same identity-checked console cancellation
   path, then records its exit. Stop publishes cancellation before reading
   `listener.json`; at least one side sees the other in either interleaving.
+  A double Ctrl+C is accepted when both sides signal: `cancelled` records
+  intent and `requested` is written only after signaling, so both senders can
+  observe the empty marker before either acts. Checking that text would not
+  atomically assign sender ownership. Repeated-signal behavior remains a live gate.
   Provider failure
   teardown destroys the VM after failed or uncertain startup.
 - Installed `guest windows detached` validates the configured autologon account's
@@ -869,6 +873,7 @@ come from the same build; there is no legacy script or task-mode compatibility.
   `DefaultUserName` and `DefaultDomainName` configuration, never delivered
   configuration or environment identity. The trampoline queries no task definition
   or security descriptor.
+  An interactive logon by another account breaks both autologon and runner start.
   It pins the guest directory without taking the receive lock (start holds it
   while waiting). An absent `launched` consumes nothing. It exact-matches
   `launch-mode`, claims `detached.claim` with exclusive creation and checks
@@ -1247,7 +1252,10 @@ ACL and deny-write handles, not hashed per job.
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;
-  publication and the VM host's manifest reader require both task proofs.
+  its fixed `autologon_account_matches` predicate requires the Winlogon account
+  SID, runner task principal SID and agent token SID to agree. Publication and
+  the VM host's manifest reader require both task proofs and this predicate,
+  which the manifest records without account identifiers.
   Per-file staging inventories are build-local
   and excluded from bounded durable records.
 - **Single-display invariant:** exactly one attached-to-desktop display must

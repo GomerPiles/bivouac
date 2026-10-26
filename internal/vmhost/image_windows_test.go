@@ -21,11 +21,15 @@ func TestProtectedImageContractFacts(t *testing.T) {
 	dir := t.TempDir()
 	image := filepath.Join(dir, "disk.vhdx")
 	manifest := filepath.Join(dir, "manifest.json")
-	for _, mode := range []string{"matching", "missing", "old", "future", "malformed", "trailing", "oversize", "unprotected", "wrong image"} {
+	for _, mode := range []string{"matching", "missing", "old", "future", "malformed", "trailing", "oversize", "unprotected", "wrong image", "missing autologon", "mismatched autologon"} {
 		t.Run(mode, func(t *testing.T) {
 			_ = os.Remove(manifest)
-			value := map[string]any{"windows_contract": guestagent.WindowsContract, "output": image, "agent_sha256": strings.Repeat("a", 64), "agent_task": validTaskFixture(), "runner_task": validTaskFixture()}
+			value := map[string]any{"windows_contract": guestagent.WindowsContract, "output": image, "agent_sha256": strings.Repeat("a", 64), "agent_task": validTaskFixture(), "runner_task": validTaskFixture(), "autologon_account_matches": true}
 			switch mode {
+			case "missing autologon":
+				delete(value, "autologon_account_matches")
+			case "mismatched autologon":
+				value["autologon_account_matches"] = false
 			case "old":
 				delete(value, "windows_contract")
 			case "future":
@@ -73,7 +77,7 @@ func TestInfoReportsEachConfiguredImageContract(t *testing.T) {
 	server, _ := serverFixture(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "disk.vhdx")
-	data, _ := json.Marshal(map[string]any{"windows_contract": guestagent.WindowsContract, "output": path, "agent_task": validTaskFixture(), "runner_task": validTaskFixture()})
+	data, _ := json.Marshal(map[string]any{"windows_contract": guestagent.WindowsContract, "output": path, "agent_task": validTaskFixture(), "runner_task": validTaskFixture(), "autologon_account_matches": true})
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}

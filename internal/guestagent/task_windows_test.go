@@ -3,6 +3,7 @@
 package guestagent
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestInspectReportsEachTaskOnQueryFailure(t *testing.T) {
 	good := TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
 	for _, failed := range []string{WindowsTaskName, WindowsRunnerTaskName, "descriptor"} {
 		var calls []string
-		f := inspectTaskFacts(func(name string) (TaskFacts, error) {
+		f := inspectTaskFacts("agent-sid", func(name string) (TaskFacts, error) {
 			calls = append(calls, name)
 			if name == failed {
 				return TaskFacts{}, errors.New("private query failure")
@@ -56,7 +57,7 @@ func TestInspectReportsEachTaskOnQueryFailure(t *testing.T) {
 				return good, errors.New("private descriptor failure")
 			}
 			return good, nil
-		})
+		}, func() (string, error) { return "agent-sid", nil })
 		if len(calls) != 2 || f.Valid() {
 			t.Fatal("failed task query was hidden")
 		}
@@ -70,6 +71,55 @@ func TestInspectReportsEachTaskOnQueryFailure(t *testing.T) {
 		if failed == "descriptor" && !f.RunnerTask.ValidDefinition() {
 			t.Fatal("structural facts lost after DACL failure")
 		}
+	}
+}
+
+func TestInstallationAutologonAccountAgreement(t *testing.T) {
+	good := TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+	for _, mode := range []string{"matching", "Winlogon mismatch", "runner mismatch", "Winlogon unavailable", "empty Winlogon", "empty token"} {
+		t.Run(mode, func(t *testing.T) {
+			token, autologon := "agent-sid", "agent-sid"
+			runner := good
+			switch mode {
+			case "Winlogon mismatch":
+				autologon = "another-sid"
+			case "runner mismatch":
+				runner.TaskUser = false
+			case "empty Winlogon":
+				autologon = ""
+			case "empty token":
+				token = ""
+			}
+			f := inspectTaskFacts(token, func(name string) (TaskFacts, error) {
+				if name == WindowsRunnerTaskName {
+					return runner, nil
+				}
+				return good, nil
+			}, func() (string, error) {
+				if mode == "Winlogon unavailable" {
+					return "", errors.New("private lookup failure")
+				}
+				return autologon, nil
+			})
+			f.OwnerTrusted, f.ACLProtected, f.ACLExpected = true, true, true
+			if f.AutologonAccountMatches != (mode == "matching") || f.Valid() != (mode == "matching") {
+				t.Fatal("autologon equality admission differs")
+			}
+			raw, err := json.Marshal(f)
+			if err != nil || strings.Contains(string(raw), "agent-sid") || strings.Contains(string(raw), "another-sid") || strings.Contains(string(raw), "private lookup") {
+				t.Fatal("installation facts disclose account or query details")
+			}
+			if mode == "matching" {
+				var fields map[string]any
+				_ = json.Unmarshal(raw, &fields)
+				delete(fields, "autologon_account_matches")
+				raw, _ = json.Marshal(fields)
+				var missing InstallationFacts
+				if json.Unmarshal(raw, &missing) != nil || missing.Valid() {
+					t.Fatal("missing autologon proof admitted")
+				}
+			}
+		})
 	}
 }
 
@@ -143,6 +193,9 @@ func TestPinnedHelperRefusesMissingAndLinks(t *testing.T) {
 				}
 			}
 			if mode == "junction" {
+				// Refused as a directory, not by the file reparse-point predicate.
+				// That predicate is not unit-tested: creating a file symlink needs
+				// a privilege, which ordinary local validation does not request.
 				if err := os.Remove(filepath.Join(directory, "bivouac.exe")); err != nil {
 					t.Fatal(err)
 				}

@@ -135,6 +135,7 @@ func inspectInstallation(ctx context.Context, dial guestagent.Dialer, m *Manifes
 	}
 	m.AgentTask = guestagent.TaskFacts{TaskUser: f.TaskUser, TaskHighest: f.TaskHighest, TaskInteractive: f.TaskInteractive, TaskAction: f.TaskAction, TaskPriority: f.TaskPriority}
 	m.RunnerTask = f.RunnerTask
+	m.AutologonAccountMatches = f.AutologonAccountMatches
 	return nil
 }
 
