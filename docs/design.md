@@ -815,15 +815,25 @@ come from the same build; there is no legacy script or task-mode compatibility.
   with `/Run /TN bivouac-guest-runner` as an argument array. Failed or uncertain
   dispatch retains the marker and is never replayed. Startup waits at most
   45 s for a live recorded listener identity; scheduler acceptance alone is
-  insufficient. `stop` first writes a durable, exclusive `cancelled` record
-  under the guard, including when no listener exists. It then cancels the
+  insufficient. `stop` takes no receive lock, so it can run during start's
+  wait. It first creates and flushes an exclusive `cancelled` record
+  (an existing record is fine), including when no listener exists. It then cancels the
   recorded official listener using PID/creation-time/path and console rechecks.
   Exited or never-launched listeners need no signal. The trampoline and helper
   both check cancellation before creating their child; the helper records
-  `runner.exit` when cancelled before listener creation. Provider failure
+  `runner.exit` when cancelled before listener creation. After publishing
+  `listener.json`, the helper checks cancellation again and signals its own
+  official listener through the same identity-checked console cancellation
+  path, then records its exit. Stop publishes cancellation before reading
+  `listener.json`; at least one side sees the other in either interleaving.
+  Provider failure
   teardown destroys the VM after failed or uncertain startup.
-- Installed `guest windows detached` validates its protected task principal's
-  SID, elevation, active console session and its own `WinSta0\\Default` desktop.
+- Installed `guest windows detached` validates the configured autologon account's
+  SID, elevation, active console session and its own `WinSta0\Default` desktop.
+  The account is resolved from the published image's public machine Winlogon
+  `DefaultUserName` and `DefaultDomainName` configuration, never delivered
+  configuration or environment identity. The trampoline queries no task definition
+  or security descriptor.
   It pins the guest directory without taking the receive lock (start holds it
   while waiting). An absent `launched` consumes nothing. It exact-matches
   `launch-mode`, claims `detached.claim` with exclusive creation and checks
@@ -1159,20 +1169,33 @@ ACL and deny-write handles, not hashed per job.
   outside this change. The task DACL prevents this new elevated launch path
   from being available to a filtered process.
 - **Launch safety:** before writing `launch-mode` or the single-use `launched`
-  marker, structurally validate the runner task's bounded XML and query its
-  current task-object security descriptor. Principal names resolve to SIDs;
+  marker, structurally validate the runner task's bounded XML from
+  `schtasks /Query /XML`. Runtime performs no PowerShell or descriptor query.
+  Installation self-test verifies the current task-object security descriptor
+  at factory preparation and publication. Runtime trusts that published
+  descriptor: each clone uses an immutable image with its own differencing
+  disk, and only bivouac code runs before start. A runtime trampoline check
+  cannot establish who triggered an already elevated task and adds no security.
+  Principal names resolve to SIDs;
   extra actions (including non-Exec actions), triggers, restart policies and
   execution constraints refuse launch. No localized output or racy run-state
   precheck is used. Failure returns fixed text without consuming input or
-  markers. The claim and existing helper launch-once record enforce single use.
+  markers. Missing XML settings use schema defaults where those match the
+  required values: on-demand/enabled true, idle/network conditions false,
+  IgnoreNew and no restart policy. Priority 4, PT0S and both battery flags
+  false must be explicit because their defaults differ. Duplicate or malformed
+  explicit settings refuse launch. The claim and existing helper launch-once
+  record enforce single use.
   The lab shares this dispatch path and requires the same probe and sleeping
   grandchild to survive both task End/Run and agent kill/Run, each with a fresh
   request/completion ID and a new validated agent identity. Cycles execute in
-  the probe itself. Facts include job membership, immediate-job agent presence
-  (true/false/unknown; incomplete PID lists are unknown), SID/elevation/session/
-  desktop predicates, normal priorities, a fixed trampoline-to-descendants
-  environment sentinel and a fixed gate stage. Immediate-job absence does not
-  establish absence from shared ancestor jobs; survival is a separate gate.
+  the probe itself. SID/elevation/session/desktop predicates and normal
+  priorities for probe and grandchild gate the run. Job membership and
+  immediate-job agent presence are baseline-only diagnostics (true/false/unknown;
+  failed queries and incomplete PID lists are unknown and never end the probe).
+  They do not gate survival and are not recomputed against a terminated agent.
+  A fixed gate stage identifies progress. Immediate-job absence does not
+  establish absence from shared ancestor jobs.
 - **Sanitation:** rotate the console password into the LSA autologon secret;
   remove answer/setup residue, temporary probes, disposable Guest state and
   agent logs, launch-mode/claim/cancellation records and lab residue; retain

@@ -69,7 +69,7 @@ func TestAgentLiveChecksUseOnlyFixedAgentCommands(t *testing.T) {
 			case "lab-start":
 				result = map[string]bool{"started": true}
 			case "lab-status":
-				result = winrunner.LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: true, AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, Sentinel: true, GrandchildSentinel: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
+				result = winrunner.LabProbeFacts{Alive: true, GrandchildAlive: true, InJob: "unknown", AgentInImmediateJob: "false", User: true, Elevated: true, Console: true, Desktop: true, NormalPriority: true, GrandchildNormalPriority: true, PID: 1, Creation: 2, ChildPID: 3, ChildCreation: 4}
 			case "lab-task-cycle", "lab-agent-cycle":
 				result = map[string]any{"scheduled": true, "id": "fixture-id"}
 			case "lab-task-result", "lab-agent-result":

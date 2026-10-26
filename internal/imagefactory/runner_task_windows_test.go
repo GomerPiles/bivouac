@@ -17,10 +17,15 @@ func TestRunnerTaskRegistrationXML(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("registration block unavailable")
 	}
-	for _, exists := range []bool{false, true} {
-		input, _ := json.Marshal(map[string]bool{"exists": exists})
+	guardStart, guardEnd := strings.Index(guestSetup, "# Check both tasks"), strings.Index(guestSetup, "$principal=New-ScheduledTaskPrincipal")
+	if guardStart < 0 || guardEnd <= guardStart || guardEnd > strings.Index(guestSetup, "Register-ScheduledTask") {
+		t.Fatal("task prechecks do not precede registration")
+	}
+	for _, existing := range []string{"", "bivouac-guest-agent", "bivouac-guest-runner"} {
+		exists := existing != ""
+		input, _ := json.Marshal(map[string]string{"existing": existing})
 		script := `$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$registered=$false;$refused=$false
-function Get-ScheduledTask {param($TaskName,$ErrorAction) if($TaskName -cne 'bivouac-guest-runner'){throw 'wrong task'};if($d.exists){[pscustomobject]@{State=3}}}
+function Get-ScheduledTask {param($TaskName,$ErrorAction) if($TaskName -cnotin @('bivouac-guest-agent','bivouac-guest-runner')){throw 'wrong task'};if($d.existing -ceq $TaskName){[pscustomobject]@{State=3}}}
 function Register-ScheduledTask {param($TaskName,$Xml)
  if($TaskName -cne 'bivouac-guest-runner'){throw 'wrong task'}
  $x=[xml]$Xml;$t=$x.Task
@@ -33,7 +38,7 @@ function Register-ScheduledTask {param($TaskName,$Xml)
  $script:registered=$true
 }
 try{
-` + guestSetup[start:end] + `
+` + guestSetup[guardStart:guardEnd] + guestSetup[start:end] + `
 }catch{$refused=$true}
 [Console]::Out.Write((@{registered=$registered;refused=$refused}|ConvertTo-Json -Compress))`
 		var facts struct{ Registered, Refused bool }

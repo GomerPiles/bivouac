@@ -49,6 +49,13 @@ func (e taskElement) value(name string) string {
 	return c.Text
 }
 
+func (e taskElement) setting(name, defaultValue string) string {
+	if len(e.elements(name)) == 0 {
+		return defaultValue
+	}
+	return e.value(name) // Duplicates and malformed explicit values never default.
+}
+
 // Bound bytes, depth and node count before decoding. Directives, duplicate
 // sections and additional action types cannot disappear in struct decoding.
 func taskFacts(raw []byte, name, user, sid string, resolve func(string) string) (TaskFacts, error) {
@@ -131,11 +138,16 @@ func taskFacts(raw []byte, name, user, sid string, resolve func(string) string) 
 	}
 	if name == WindowsRunnerTaskName {
 		facts.TaskAction = strings.EqualFold(a.value("Command"), WindowsPath) && a.value("Arguments") == "guest windows detached" && strings.EqualFold(a.value("WorkingDirectory"), guestDirectory)
+		// Task Scheduler settingsType schema defaults: AllowStartOnDemand and
+		// Enabled=true; RunOnlyIfIdle and RunOnlyIfNetworkAvailable=false;
+		// MultipleInstancesPolicy=IgnoreNew; RestartOnFailure is optional.
+		// Priority defaults to 7, time limit to PT72H, both battery flags to
+		// true, so those four must explicitly override their defaults.
+		// https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema
 		facts.TaskPolicy = len(task.elements("Triggers")) <= 1 && len(task.one("Triggers").Children) == 0 &&
-			settings.value("MultipleInstancesPolicy") == "IgnoreNew" && settings.value("ExecutionTimeLimit") == "PT0S" && len(settings.elements("RestartOnFailure")) == 0 &&
-			settings.value("AllowStartOnDemand") == "true" && settings.value("Enabled") == "true" && settings.value("RunOnlyIfIdle") == "false" &&
-			settings.value("RunOnlyIfNetworkAvailable") == "false" && settings.value("DisallowStartIfOnBatteries") == "false" && settings.value("StopIfGoingOnBatteries") == "false"
-		facts.TaskSecurity = runnerTaskSecurity(task.one("RegistrationInfo").value("SecurityDescriptor"))
+			len(task.elements("Settings")) == 1 && settings.setting("MultipleInstancesPolicy", "IgnoreNew") == "IgnoreNew" && settings.value("ExecutionTimeLimit") == "PT0S" && len(settings.elements("RestartOnFailure")) == 0 &&
+			settings.setting("AllowStartOnDemand", "true") == "true" && settings.setting("Enabled", "true") == "true" && settings.setting("RunOnlyIfIdle", "false") == "false" &&
+			settings.setting("RunOnlyIfNetworkAvailable", "false") == "false" && settings.value("DisallowStartIfOnBatteries") == "false" && settings.value("StopIfGoingOnBatteries") == "false"
 	} else if name != WindowsTaskName {
 		return TaskFacts{}, bad
 	}
@@ -200,7 +212,7 @@ func taskOutput(ctx context.Context, binary string, args ...string) ([]byte, err
 	return b.Bytes(), nil
 }
 
-func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, error) {
+func readTaskDefinition(ctx context.Context, name, user, sid string) (TaskFacts, error) {
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
 		return TaskFacts{}, errors.New("task facts unavailable")
@@ -219,12 +231,27 @@ func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, erro
 	if err != nil {
 		return facts, err
 	}
+	return facts, nil
+}
+
+// Only installation self-test queries the current DACL. Runtime trusts the
+// descriptor verified before publication of the immutable source image.
+func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, error) {
+	facts, err := readTaskDefinition(ctx, name, user, sid)
+	if err != nil {
+		return facts, err
+	}
 	if name == WindowsRunnerTaskName {
+		system, err := windows.GetSystemDirectory()
+		if err != nil {
+			return facts, err
+		}
 		// Query the registered object's descriptor; XML registration metadata alone
 		// does not prove that its current DACL still matches. Fixed code, no input.
-		raw, err = taskOutput(ctx, filepath.Join(system, `WindowsPowerShell\v1.0\powershell.exe`), "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop';$s=New-Object -ComObject Schedule.Service;try{$s.Connect();$f=$s.GetFolder('\');try{$t=$f.GetTask('bivouac-guest-runner');try{[Console]::Out.Write($t.GetSecurityDescriptor(5))}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($t)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($f)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($s)}`)
+		raw, err := taskOutput(ctx, filepath.Join(system, `WindowsPowerShell\v1.0\powershell.exe`), "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop';$s=New-Object -ComObject Schedule.Service;try{$s.Connect();$f=$s.GetFolder('\');try{$t=$f.GetTask('bivouac-guest-runner');try{[Console]::Out.Write($t.GetSecurityDescriptor(5))}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($t)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($f)}}finally{[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($s)}`)
 		if err != nil {
-			return TaskFacts{}, err
+			facts.TaskSecurity = false
+			return facts, err
 		}
 		facts.TaskSecurity = runnerTaskSecurity(string(raw))
 	}
@@ -241,19 +268,9 @@ func CheckRunnerTask(ctx context.Context) error {
 	if err != nil {
 		return errors.New("runner task unavailable")
 	}
-	facts, err := readTaskFacts(ctx, WindowsRunnerTaskName, name, user.User.Sid.String())
-	if err != nil || !facts.Valid() {
+	facts, err := readTaskDefinition(ctx, WindowsRunnerTaskName, name, user.User.Sid.String())
+	if err != nil || !facts.ValidDefinition() {
 		return errors.New("runner task unavailable")
 	}
 	return nil
-}
-
-// CheckRunnerContext uses the protected task principal as the configured SID,
-// independently of the replaceable delivered configuration.
-func CheckRunnerContext(ctx context.Context) error {
-	f, err := currentSession()
-	if err != nil || !sessionAllowed(f, f.user) {
-		return errors.New("runner context refused")
-	}
-	return CheckRunnerTask(ctx)
 }

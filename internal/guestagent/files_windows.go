@@ -3,9 +3,10 @@
 package guestagent
 
 import (
-	"golang.org/x/sys/windows"
 	"io"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
 // GuestDirectoryPin holds all ancestor handles without taking the receive lock.

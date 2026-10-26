@@ -7,60 +7,40 @@ gates. No provider is ready for untrusted (for example fork) pull requests.
 Rootless macOS networking has disposable-guest evidence below; the complete
 production migration gates remain open.
 
-The Windows guest adapter's Go preflight/prepare/start/stop/clock modes and
-64-connection cache listener have unit coverage, including launch/delivery
-serialization, bounded extraction and relay closure. The HCS provider now uses
-only bivouac's guest agent over HvSocket, including delivery, runtime commands
-and its 64-connection cache relay. The factory and vmhost lab batch now use
-the same agent. Factory code installs the pinned executable and logon task,
-stages GPU drivers offline, removes legacy guest components before FirstLogon,
-and sanitizes agent state/logs. It also registers the separate on-demand
-`bivouac-guest-runner` task. These source changes have unit coverage only; no matching image has been
-built or booted live.
-Rollback uses the previous manager, VM host service binary and image together. This source change is not deployed
-or validated live. Console/OOBE readiness, native static networking, UTC clock
-setting, listener survival across request/agent
-restarts, cancellation and cache behavior on agent-served guests require live
-validation after the provider and factory switches.
+The HCS provider, image factory and vmhost lab use bivouac's guest agent over
+HvSocket. The Windows adapter has unit coverage for preflight, preparation,
+start/stop, clock setting, bounded delivery/extraction and the 64-connection
+cache relay. These agent-runtime source changes are not deployed or validated
+live; rollback uses the previous manager, VM host service and image together.
 
-Review fixes add in-process listener re-listening, bounded consecutive session
-refusals, pre-marker runner-task definition/DACL proof, Windows-contract admission and
-normal-priority task registration. MSI uninstall precedes server leftovers;
-Windows servicing removes the server capability while the inbox client and
-ssh-agent remain intact. These changes have unit coverage only.
+Windows contract 2 requires the agent logon task and separate on-demand runner
+task. Installation self-test checks both task definitions and the runner's
+current security descriptor at preparation and publication. Runtime start checks
+structural task XML only; the trampoline checks native context without task
+queries. Tests cover schema defaults, task-query failure facts, mode-before-marker
+ordering, claims, injected context refusals, helper hard-link/junction refusal,
+stop during a locked start, and both listener/cancellation interleavings.
+The listener checks cancellation before creation and after identity publication.
+Factory registration, sanitation and manifest admission have unit coverage.
 
-Windows contract 2 requires both tasks and replaces command-job escape with
-the installed `guest windows detached` trampoline. Tests cover bounded structural
-task XML, its current security descriptor, marker ordering, one-time claims,
-cancellation before listener creation, helper link refusal, command-tree
-containment, factory registration/sanitation and manifest admission. Preparation
-and publication both require installation self-test. Older images need rebuilding.
+The opt-in vmhost lab gates on loopback refusal, both-task installation facts,
+probe SID/elevation/console/desktop context, normal probe/grandchild priority,
+the same probe and grandchild surviving both restart paths, and new agent
+identities. Cycles run inside the probe with matching fresh request/completion
+IDs. Job membership is baseline-only diagnostic data; failed queries report
+unknown. The lab conversation is simulated by unit tests; real scheduler and
+process-lifetime behavior remain unverified.
 
-Recovery after an actual agent crash and listener/probe survival across agent
-kills and task End/Run remain unverified. The opt-in vmhost lab asserts loopback
-refusal, both task definitions, installed owner/ACL and the same probe and sleeping
-grandchild surviving both restart paths with new agent identities. Cycles run
-inside the probe and match fresh request/completion IDs. Fixed facts include
-immediate-job agent presence (unknown on incomplete lists), context, priorities,
-an environment sentinel and gate stage. These changes have unit coverage only.
-Live gates require a fresh factory image: task DACL/filtered-token refusal,
-premature/duplicate task activation, stop before listener creation, console
-visibility/focus, scheduler latency and session/environment selection, child-tree
-behavior under task End, and restart-on-failure with a surviving descendant.
-Sibling-guest negative testing is out of scope: it requires another live guest,
-extra resource admission and an additional inter-guest test fixture; this phase
-covers guest loopback and host-account authorization on the parent-only service.
-No live image build or timing run has been performed for these fixes.
+A fresh contract-2 image and live lab are required for task DACL/filtered-token
+refusal, premature/duplicate activation, cancellation during startup, console
+visibility/focus, scheduler latency, environment/session selection, task End
+descendant behavior and restart-on-failure with a surviving child. Native
+networking, UTC correction, cancellation/result reporting and cache behavior on
+agent-served guests also remain live gates. Sibling-guest negative testing is
+outside this phase's loopback and host-account authorization scope.
 
-The task-principal selftest accepts either a parsed SID or an account name
-resolved to the agent token's SID. Both forms and rejection cases have unit
-coverage; passing installation and probe-survival gates still needs a live run.
-
-Validation now prepares the pinned prebuilt render probe's fixed output
-directory, relocates its bounded report into the protected probe base and
-cleans up the temporary directory. Sanitation refuses a leftover directory.
-This path correction has script/fixture coverage only; a fresh-image render
-build with the corrected validation script remains a live gate.
+The factory's pinned prebuilt render-probe output-path bridge has script/fixture
+coverage only. Fresh-image render validation and sanitation remain live gates.
 
 ## Checks
 

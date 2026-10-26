@@ -3,11 +3,75 @@
 package guestagent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestTaskSchemaDefaults(t *testing.T) {
+	for name, required := range map[string]string{"AllowStartOnDemand": "true", "Enabled": "true", "RunOnlyIfIdle": "false", "RunOnlyIfNetworkAvailable": "false", "MultipleInstancesPolicy": "IgnoreNew", "Priority": "4", "ExecutionTimeLimit": "PT0S", "DisallowStartIfOnBatteries": "false", "StopIfGoingOnBatteries": "false"} {
+		t.Run(name, func(t *testing.T) {
+			explicit := "<" + name + ">" + required + "</" + name + ">"
+			defaultsCorrect := name != "Priority" && name != "ExecutionTimeLimit" && name != "DisallowStartIfOnBatteries" && name != "StopIfGoingOnBatteries"
+			for _, absent := range []bool{false, true} {
+				raw := runnerTaskXML
+				if absent {
+					raw = strings.ReplaceAll(raw, explicit, "")
+				}
+				f, err := taskFacts([]byte(raw), WindowsRunnerTaskName, "imageuser", "S-1-5-21-1-2-3-1001", func(string) string { return "" })
+				if (err == nil && f.ValidDefinition()) != (!absent || defaultsCorrect) {
+					t.Fatal("schema default decision differs", absent)
+				}
+			}
+		})
+	}
+}
+
+func TestRunnerTaskSecuritySeparateFromRuntimeDefinition(t *testing.T) {
+	good := "O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)"
+	for _, text := range []string{good, "", strings.ReplaceAll(good, "O:SY", "O:BU"), strings.ReplaceAll(good, "D:P", "D:"), good + "(A;;FRFX;;;BU)", strings.ReplaceAll(good, "FRFX", "FA"), strings.ReplaceAll(good, "FA;;;SY", "FRFX;;;SY")} {
+		if runnerTaskSecurity(text) != (text == good) {
+			t.Fatal("unexpected installation DACL decision")
+		}
+		raw := strings.ReplaceAll(runnerTaskXML, good, text)
+		f, err := taskFacts([]byte(raw), WindowsRunnerTaskName, "imageuser", "S-1-5-21-1-2-3-1001", func(string) string { return "" })
+		if err != nil || !f.ValidDefinition() || f.TaskSecurity {
+			t.Fatal("runtime definition inspected the descriptor")
+		}
+	}
+}
+
+func TestInspectReportsEachTaskOnQueryFailure(t *testing.T) {
+	good := TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+	for _, failed := range []string{WindowsTaskName, WindowsRunnerTaskName, "descriptor"} {
+		var calls []string
+		f := inspectTaskFacts(func(name string) (TaskFacts, error) {
+			calls = append(calls, name)
+			if name == failed {
+				return TaskFacts{}, errors.New("private query failure")
+			}
+			if failed == "descriptor" && name == WindowsRunnerTaskName {
+				return good, errors.New("private descriptor failure")
+			}
+			return good, nil
+		})
+		if len(calls) != 2 || f.Valid() {
+			t.Fatal("failed task query was hidden")
+		}
+		if failed == WindowsTaskName {
+			if f.TaskUser || !f.RunnerTask.Valid() {
+				t.Fatal("runner facts lost")
+			}
+		} else if !f.TaskUser || f.RunnerTask.TaskSecurity {
+			t.Fatal("agent facts lost or failed runner accepted")
+		}
+		if failed == "descriptor" && !f.RunnerTask.ValidDefinition() {
+			t.Fatal("structural facts lost after DACL failure")
+		}
+	}
+}
 
 const runnerTaskXML = `<Task><RegistrationInfo><SecurityDescriptor>O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)</SecurityDescriptor></RegistrationInfo><Triggers/><Principals><Principal><UserId>S-1-5-21-1-2-3-1001</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Settings><Priority>4</Priority><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><RunOnlyIfIdle>false</RunOnlyIfIdle><RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries></Settings><Actions><Exec><Command>C:\Program Files\Bivouac\bivouac.exe</Command><Arguments>guest windows detached</Arguments><WorkingDirectory>C:\ProgramData\Bivouac\Guest</WorkingDirectory></Exec></Actions></Task>`
 
@@ -26,12 +90,8 @@ func TestRunnerTaskDefinitionRefusals(t *testing.T) {
 		"non exec":           {"</Actions>", "<ComHandler/></Actions>"}, "second exec": {"</Actions>", "<Exec/></Actions>"},
 		"restart":           {"</Settings>", "<RestartOnFailure/></Settings>"},
 		"duplicate setting": {"</Settings>", "<Enabled>true</Enabled></Settings>"},
-		"missing setting":   {"<AllowStartOnDemand>true</AllowStartOnDemand>", ""},
+
 		"duplicate section": {"</Task>", "<Settings/></Task>"},
-		"owner":             {"O:SY", "O:BU"}, "unprotected": {"D:P", "D:"},
-		"user ace":    {"</SecurityDescriptor>", "(A;;FRFX;;;BU)</SecurityDescriptor>"},
-		"admin write": {"FRFX", "FA"}, "system reduced": {"FA;;;SY", "FRFX;;;SY"},
-		"dacl missing": {"O:SYD:P(A;;FA;;;SY)(A;;FRFX;;;BA)", ""},
 	}
 	check := func(raw string) bool {
 		f, err := taskFacts([]byte(raw), WindowsRunnerTaskName, "imageuser", "S-1-5-21-1-2-3-1001", func(name string) string {
@@ -40,7 +100,7 @@ func TestRunnerTaskDefinitionRefusals(t *testing.T) {
 			}
 			return ""
 		})
-		return err == nil && f.Valid()
+		return err == nil && f.ValidDefinition()
 	}
 	if !check(runnerTaskXML) || !check(strings.ReplaceAll(runnerTaskXML, "S-1-5-21-1-2-3-1001", "imageuser")) {
 		t.Fatal("valid runner task refused")
@@ -69,7 +129,7 @@ func TestRunnerTaskDefinitionRefusals(t *testing.T) {
 }
 
 func TestPinnedHelperRefusesMissingAndLinks(t *testing.T) {
-	for _, mode := range []string{"missing", "ordinary", "hardlink"} {
+	for _, mode := range []string{"missing", "ordinary", "hardlink", "junction"} {
 		t.Run(mode, func(t *testing.T) {
 			directory := t.TempDir()
 			if mode != "missing" {
@@ -79,6 +139,14 @@ func TestPinnedHelperRefusesMissingAndLinks(t *testing.T) {
 			}
 			if mode == "hardlink" {
 				if err := os.Link(filepath.Join(directory, "bivouac.exe"), filepath.Join(directory, "alias.exe")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "junction" {
+				if err := os.Remove(filepath.Join(directory, "bivouac.exe")); err != nil {
+					t.Fatal(err)
+				}
+				if err := createTestJunction(filepath.Join(directory, "bivouac.exe"), t.TempDir()); err != nil {
 					t.Fatal(err)
 				}
 			}

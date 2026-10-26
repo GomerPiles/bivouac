@@ -255,6 +255,10 @@ func guestFileExists(root *os.Root, name string) (bool, error) {
 // markAndLaunch is called under the receiver lock. Marker creation is durable
 // before dispatch; a failed or uncertain dispatch is deliberately never replayed.
 func markAndLaunch(root *os.Root, mode string, launch func() error) error {
+	return markAndLaunchWithMode(root, mode, func() error { return publishLaunchMode(root, mode) }, launch)
+}
+
+func markAndLaunchWithMode(root *os.Root, mode string, publishMode, launch func() error) error {
 	if mode != "listener" && mode != "lab-probe" {
 		return errors.New("invalid launch mode")
 	}
@@ -268,7 +272,7 @@ func markAndLaunch(root *os.Root, mode string, launch func() error) error {
 	if err != nil || !jit.Mode().IsRegular() || jit.Size() == 0 || jit.Size() > 128<<10 {
 		return errors.New("private bounded JIT input is missing")
 	}
-	if err := publishLaunchMode(root, mode); err != nil {
+	if err := publishMode(); err != nil {
 		return err
 	}
 	f, err := root.OpenFile("launched", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -280,6 +284,23 @@ func markAndLaunch(root *os.Root, mode string, launch func() error) error {
 		return err
 	}
 	return launch()
+}
+
+// Stop publishes cancellation before reading listener.json. The listener
+// publishes listener.json before reading cancellation, so either interleaving
+// signals the owned listener through the same identity-checked cancel path.
+func publishListenerAndCheckCancellation(root *os.Root, publish, cancel func() error) error {
+	if err := publish(); err != nil {
+		return err
+	}
+	cancelled, err := guestFileExists(root, "cancelled")
+	if err != nil {
+		return err
+	}
+	if cancelled {
+		return cancel()
+	}
+	return nil
 }
 
 func startChecked(root *os.Root, mode string, probe, launch func() error) error {

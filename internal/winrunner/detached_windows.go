@@ -70,12 +70,34 @@ func runnerDesktop() bool {
 
 func guestDetached(ctx context.Context) error {
 	self, err := os.Executable()
-	if err != nil || !strings.EqualFold(self, guestagent.WindowsPath) {
+	if err != nil {
 		return errors.New("trampoline requires the installed guest agent")
 	}
-	if err := guestagent.CheckRunnerContext(ctx); err != nil || !runnerDesktop() {
+	return detachedInContext(self, currentDetachedContext, func() error { return runDetached(ctx) })
+}
+
+type detachedContext struct {
+	Session guestagent.RunnerContext
+	Desktop bool
+}
+
+func currentDetachedContext() (detachedContext, error) {
+	session, err := guestagent.ReadRunnerContext()
+	return detachedContext{Session: session, Desktop: err == nil && runnerDesktop()}, err
+}
+
+func detachedInContext(self string, read func() (detachedContext, error), run func() error) error {
+	if !strings.EqualFold(self, guestagent.WindowsPath) {
+		return errors.New("trampoline requires the installed guest agent")
+	}
+	facts, err := read()
+	if err != nil || !facts.Session.Valid() || !facts.Desktop {
 		return errors.New("runner context refused")
 	}
+	return run()
+}
+
+func runDetached(_ context.Context) error {
 	pin, err := guestagent.PinGuestDirectory()
 	if err != nil {
 		return errors.New("runner storage unavailable")
@@ -97,9 +119,6 @@ func guestDetached(ctx context.Context) error {
 			binary, childMode = filepath.Join(guestBase, "bivouac.exe"), "listener"
 		}
 		cmd := runnerChildCommand(binary, childMode)
-		if mode == "lab-probe" {
-			cmd.Env = append(os.Environ(), "BIVOUAC_LAB_SENTINEL=runner-task")
-		}
 		return cmd.Run()
 	})
 }
