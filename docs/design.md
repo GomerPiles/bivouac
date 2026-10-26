@@ -1290,8 +1290,12 @@ ACL and deny-write handles, not hashed per job.
   protected `C:\ProgramData\Bivouac\Image`.
   The pinned prebuilt render probe still writes its report to the hard-coded
   `C:\ProgramData\BivouacHcsSpike\render.json`. Validation creates that temporary
-  directory atomically with the same protected ACL as `Image\Probe`, refusing an existing
-  directory. It moves the ordinary, link-free report (at most 4 KiB) into
+  directory with CreateDirectoryW and security attributes containing owner
+  Administrators and the same protected DACL as `Image\Probe`. The native call
+  fails if the path exists, including a creation race; it never adopts that
+  directory. Before use, validation checks the owner, exact protected DACL,
+  ordinary directory type and an empty listing; refusal remains step 32.
+  It moves the ordinary, link-free report (at most 4 KiB) into
   `Image\Probe\render.json` and removes the spike directory. Render-step cleanup
   runs on failure too; the primary failure step survives cleanup errors, and
   step 34 reports cleanup failure only after a successful body. Sanitation

@@ -80,13 +80,13 @@ func renderPathFixture(t *testing.T) string {
 	// clock; the caller and security fixture stub native observations/actions.
 	step := guestValidate[start:]
 	step = strings.ReplaceAll(step, "'"+pinnedProbeDirectory+"'", "$data.spike")
-	step = strings.Replace(step, "[IO.Directory]::CreateDirectory($spikeBase,$acl)", "(New-TestProbeDirectory $spikeBase $acl)", 1)
+	step = strings.Replace(step, "[RenderOutputDirectory]::Create($spikeBase,$security)", "(New-TestProbeDirectory $spikeBase $acl)", 1)
 	step = strings.Replace(step, "[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{Elapsed=[pscustomobject]@{TotalSeconds=$data.elapsed}}", 1)
 	return renderSecurityFixture(t) + "try{\n" + step
 }
 
 func TestPinnedRenderProbeOutputBridge(t *testing.T) {
-	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed", "cleanup failure", "task cleanup failure", "start cleanup failure"} {
+	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed", "cleanup failure", "task cleanup failure", "start cleanup failure", "creation race", "wrong owner", "wrong DACL", "unprotected DACL", "nonempty creation"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
@@ -123,7 +123,20 @@ $topology=@{topology_valid=$true;virtual_equals_primary=$true;hyperv_video_enabl
 $gpuStatus=@{valid=$true;display_count=1;virtual_count=1;problem_code=0}
 function New-TestProbeDirectory {param($LiteralPath,$AclObject)
  if($LiteralPath -ne $data.spike -or $AclObject.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'){throw 'wrong ACL'}
- if($data.mode -eq 'ACL error'){throw 'fixture ACL failure'};[IO.Directory]::CreateDirectory($LiteralPath)
+ if($AclObject.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne 'S-1-5-32-544'){throw 'wrong owner requested'}
+ if($data.mode -eq 'ACL error'){throw 'fixture ACL failure'}
+ [void][IO.Directory]::CreateDirectory($LiteralPath)
+ if($data.mode -eq 'creation race'){[IO.File]::WriteAllText((Join-Path $LiteralPath 'foreign.txt'),'preserve');return 183}
+ if($data.mode -eq 'nonempty creation'){[IO.File]::WriteAllText((Join-Path $LiteralPath 'foreign.txt'),'preserve')}
+ return 0
+}
+function Get-Acl {param($LiteralPath)
+ if($LiteralPath -ne $data.spike){throw 'foreign ACL query'}
+ $copy=[Security.AccessControl.DirectorySecurity]::new();$copy.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All))
+ if($data.mode -eq 'wrong owner'){$copy.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-18'))}
+ if($data.mode -eq 'wrong DACL'){$copy.SetSecurityDescriptorSddlForm('O:BAD:P(A;OICI;FA;;;BA)')}
+ if($data.mode -eq 'unprotected DACL'){$copy.SetAccessRuleProtection($false,$true)}
+ return $copy
 }
 function Get-ScheduledTask {param($TaskName,$ErrorAction) if($data.mode -eq 'task exists'){return $true};if($renderRegistered){[IO.File]::WriteAllText((Join-Path $data.root 'diagnostic-before-cleanup'),([int](Test-Path -LiteralPath $data.spike)).ToString());return [pscustomobject]@{State=4}}}
 function Get-ScheduledTaskInfo {param($TaskName,$ErrorAction) [pscustomobject]@{LastTaskResult=0x41301}}
@@ -176,7 +189,7 @@ function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::
 			switch mode {
 			case "success":
 				want = 0
-			case "existing", "ACL error":
+			case "existing", "ACL error", "creation race", "wrong owner", "wrong DACL", "unprotected DACL", "nonempty creation":
 				want = 32
 			case "task exists":
 				want = 15
@@ -194,7 +207,7 @@ function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::
 			if code != want {
 				t.Fatalf("render step exit %d, want %d", code, want)
 			}
-			registered := mode != "existing" && mode != "ACL error" && mode != "task exists" && mode != "register error"
+			registered := mode != "existing" && mode != "ACL error" && mode != "task exists" && mode != "register error" && mode != "creation race" && mode != "wrong owner" && mode != "wrong DACL" && mode != "unprotected DACL" && mode != "nonempty creation"
 			for _, marker := range []string{"stopped", "unregistered"} {
 				_, err := os.Stat(filepath.Join(root, marker))
 				if (err == nil) != registered {
@@ -202,12 +215,17 @@ function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::
 				}
 			}
 			_, statErr := os.Lstat(spike)
-			if mode == "existing" || mode == "cleanup failure" {
+			if mode == "existing" || mode == "cleanup failure" || mode == "creation race" || mode == "nonempty creation" {
 				if statErr != nil {
 					t.Fatal("pre-existing or unconfirmed output directory removed")
 				}
 			} else if !os.IsNotExist(statErr) {
 				t.Fatal("owned spike directory remains")
+			}
+			if mode == "creation race" || mode == "nonempty creation" {
+				if b, err := os.ReadFile(filepath.Join(spike, "foreign.txt")); err != nil || string(b) != "preserve" {
+					t.Fatal("foreign entry changed")
+				}
 			}
 			if mode == "success" {
 				b, err := os.ReadFile(filepath.Join(base, "render.json"))
@@ -245,7 +263,7 @@ func TestPinnedProbeGeneratedContractAndSanitation(t *testing.T) {
 	if strings.Count(guestValidate, pinnedProbeDirectory) != 1 {
 		t.Fatal("pinned output path must be named once")
 	}
-	for _, token := range []string{"[IO.Directory]::CreateDirectory($spikeBase,$acl)", "$result=Join-Path $spikeBase 'render.json'", "$output.LinkType", "$output.Length -gt 4096", "Move-Item -LiteralPath $result -Destination $destination", "[IO.Directory]::Delete($spikeBase,$false)", "if($spikeOwned)"} {
+	for _, token := range []string{"[RenderOutputDirectory]::Create($spikeBase,$security)", "$result=Join-Path $spikeBase 'render.json'", "$output.LinkType", "$output.Length -gt 4096", "Move-Item -LiteralPath $result -Destination $destination", "[IO.Directory]::Delete($spikeBase,$false)", "if($spikeOwned)"} {
 		if !strings.Contains(guestValidate, token) {
 			t.Fatal("generated render bridge missing", token)
 		}
@@ -267,20 +285,35 @@ func TestPinnedProbeGeneratedContractAndSanitation(t *testing.T) {
 	}
 }
 
+func renderDirectoryFixture(t *testing.T) string {
+	t.Helper()
+	start := strings.Index(guestValidate, " function Initialize-RenderDirectory")
+	end := strings.Index(guestValidate, " function Write-RenderProbeFailure")
+	if start < 0 || end <= start {
+		t.Fatal("render directory helpers missing")
+	}
+	return guestValidate[start:end]
+}
+
 func TestRenderProbeAtomicDirectoryACL(t *testing.T) {
 	input, _ := json.Marshal(map[string]string{"path": filepath.Join(t.TempDir(), "probe")})
-	// Exercise the production .NET Framework overload with a fixture DACL
-	// granting this unelevated test principal access; never use the guest path.
-	script := `$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
+	// Exercise the real native helper with this unelevated fixture principal as
+	// owner, never the fixed guest path or an administrator-only host directory.
+	script := renderDirectoryFixture(t) + `$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
+Initialize-RenderDirectory
 $acl=[Security.AccessControl.DirectorySecurity]::new()
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$acl.SetSecurityDescriptorSddlForm(('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;'+$sid+')'))
-$null=[IO.Directory]::CreateDirectory($d.path,$acl)
-$actual=Get-Acl -LiteralPath $d.path
-if(!$actual.AreAccessRulesProtected -or $actual.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)){throw 'atomic ACL differs'}
-if(@(Get-ChildItem -Force -LiteralPath $d.path).Count){throw 'created directory not empty'}
+$acl.SetSecurityDescriptorSddlForm(('O:'+$sid+'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;'+$sid+')'))
+$security=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)
+$code=[RenderOutputDirectory]::Create($d.path,$security);if($code -ne 0){throw ('create code={0}' -f $code)}
+Assert-RenderDirectory $d.path $acl
+$foreign=Join-Path $d.path 'foreign.txt';[IO.File]::WriteAllText($foreign,'preserve')
+$before=(Get-Acl -LiteralPath $d.path).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All)
+$other=[Security.AccessControl.DirectorySecurity]::new();$other.SetSecurityDescriptorSddlForm(('O:'+$sid+'D:P(A;OICI;FA;;;'+$sid+')'))
+$code=[RenderOutputDirectory]::Create($d.path,$other.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All))
+if($code -ne 183 -or (Get-Acl -LiteralPath $d.path).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All) -cne $before -or [IO.File]::ReadAllText($foreign) -cne 'preserve'){throw 'existing directory adopted or changed'}
 [Console]::Out.Write('atomic')`
 	if got := runTestPS(t, script, input); got != "atomic" {
-		t.Fatal("atomic probe-directory creation failed")
+		t.Fatal("native exclusive probe-directory creation failed")
 	}
 }
