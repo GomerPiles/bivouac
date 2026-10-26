@@ -7,19 +7,23 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"github.com/GomerPiles/bivouac/internal/cachelink"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
 // GuestProxy bridges ordinary loopback HTTP proxy clients to the authenticated
 // host TLS service. Host capabilities never appear in proxy environment values.
 type GuestProxy struct {
+	directDial      func(context.Context, string, string) (net.Conn, error)
 	bootstrap       Bootstrap
+	bypassHosts     []string
 	endpoint        *url.URL
 	tlsConfig       *tls.Config
 	proxied, direct *http.Transport
@@ -30,6 +34,13 @@ func NewGuestProxy(b Bootstrap) (*GuestProxy, error) {
 	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Path != "" || !digestString(b.Token) {
 		return nil, errors.New("invalid guest proxy configuration")
 	}
+	bypass := []string{endpoint.Hostname()}
+	if b.RevocationURL != "" {
+		if b.RevocationURL != cachelink.RevocationURL {
+			return nil, errors.New("invalid guest revocation capability")
+		}
+		bypass = append(bypass, cachelink.Address)
+	}
 	roots, err := x509.SystemCertPool()
 	if err != nil {
 		return nil, errors.New("load guest trust")
@@ -37,16 +48,24 @@ func NewGuestProxy(b Bootstrap) (*GuestProxy, error) {
 	if !roots.AppendCertsFromPEM([]byte(b.CA)) {
 		return nil, errors.New("invalid guest proxy trust")
 	}
-	config := &tls.Config{RootCAs: roots, ServerName: endpoint.Hostname(), MinVersion: tls.VersionTLS12}
+	// The private cache hop has exactly one issuer, delivered in the bootstrap.
+	// Do not invoke platform/system trust or online revocation for that hop:
+	// verification must not recursively need another occupied cache connection.
+	cacheRoots := x509.NewCertPool()
+	if !cacheRoots.AppendCertsFromPEM([]byte(b.CA)) {
+		return nil, errors.New("invalid private cache trust")
+	}
+	config := &tls.Config{RootCAs: cacheRoots, ServerName: endpoint.Hostname(), MinVersion: tls.VersionTLS12}
 	direct := http.DefaultTransport.(*http.Transport).Clone()
 	direct.Proxy = nil
 	direct.DisableCompression = true
 	proxied := direct.Clone()
 	proxied.Proxy = http.ProxyURL(endpoint)
 	proxied.TLSClientConfig = config.Clone()
+	proxied.TLSClientConfig.RootCAs = roots // Origin HTTPS can still use public roots.
 	proxied.TLSClientConfig.ServerName = "" // Destination names are checked independently.
 	proxied.ProxyConnectHeader = http.Header{"Proxy-Authorization": {"Bearer " + b.Token}}
-	return &GuestProxy{bootstrap: b, endpoint: endpoint, tlsConfig: config, proxied: proxied, direct: direct}, nil
+	return &GuestProxy{bootstrap: b, bypassHosts: bypass, endpoint: endpoint, tlsConfig: config, proxied: proxied, direct: direct, directDial: (&net.Dialer{Timeout: 15 * time.Second}).DialContext}, nil
 }
 
 func (p *GuestProxy) Close() { p.proxied.CloseIdleConnections(); p.direct.CloseIdleConnections() }
@@ -125,7 +144,7 @@ func (p *GuestProxy) connect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// A failed CONNECT has transmitted no origin request. A direct tunnel is
 		// safe for all methods and keeps upstream TLS validation in the caller.
-		buffered, err = (&net.Dialer{Timeout: 15 * time.Second}).DialContext(r.Context(), "tcp", r.Host)
+		buffered, err = p.directDial(r.Context(), "tcp", r.Host)
 	}
 	if err != nil {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -193,12 +212,13 @@ func RunGuestProxy(ctx context.Context, configPath, envPath string) error {
 		return errors.New("listen for guest proxy")
 	}
 	defer func() { _ = listener.Close() }()
-	// Only public loopback/gateway addresses go in this shell environment file.
+	// Only fixed numeric cache addresses go in this proxy-bypass environment file.
+	// Direct virtual CRL reads must never recurse through a payload proxy slot.
 	endpoint := "http://" + listener.Addr().String()
 	if net.ParseIP(proxy.endpoint.Hostname()) == nil {
 		return errors.New("invalid guest gateway")
 	}
-	environment := endpoint + "\n" + proxy.endpoint.Hostname() + "\n"
+	environment := endpoint + "\n" + strings.Join(proxy.bypassHosts, ",") + "\n"
 	if err = os.WriteFile(envPath, []byte(environment), 0o600); err != nil {
 		return errors.New("publish guest proxy endpoint")
 	}

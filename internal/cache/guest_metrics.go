@@ -31,8 +31,8 @@ func readGuestSummary(ctx context.Context, dir string) (Summary, bool, error) {
 		return Summary{}, false, errors.New("guest cache settings unavailable")
 	}
 	defer proxy.Close()
-	// Windows-hosted guests use SSH loopback; macOS guests reach the configured
-	// host address directly. Both use a literal IP, bootstrap TLS trust and the grant.
+	// Guests use their dedicated SSH/VSOCK loopback transport, bootstrap TLS
+	// trust and the calling guest grant.
 	address := net.ParseIP(proxy.endpoint.Hostname())
 	if address == nil || address.IsUnspecified() || address.IsMulticast() {
 		return Summary{}, false, errors.New("guest cache endpoint must use a literal IP")
