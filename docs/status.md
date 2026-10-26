@@ -10,9 +10,8 @@ production migration gates remain open.
 The HCS provider, image factory and vmhost lab use bivouac's guest agent over
 HvSocket. The Windows adapter has unit coverage for preflight, preparation,
 start/stop, clock setting, bounded delivery/extraction and the 64-connection
-cache relay. Contract-2 runner-detach changes are not deployed or validated live; rollback
-uses the previous manager, VM host service and image together. Console/OOBE
-readiness for the current contract requires a fresh factory build.
+cache relay. Contract-2 runner-detach changes are not deployed; rollback uses
+the previous manager, VM host service and image together.
 In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
 MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
 Recovery after an actual agent crash remains unverified.
@@ -20,7 +19,8 @@ Reference-ISO contract-1 agent images (builds 15 and 16) published in about seve
 Secure Boot enabled, TPM present/ready, fully decrypted storage, the 2023 boot
 manager, one Hyper-V display and hardware D3D11. Their lab batch passed all
 gates except probe survival; the cause led to the separate runner-task design.
-Contract 2 needs a fresh factory build and lab run; contract-1 images are refused.
+A reference-ISO contract-2 image then published in 7.3 minutes, and one lab
+batch on it passed every gate (below). Contract-1 images are refused.
 
 Windows contract 2 requires the agent logon task and separate on-demand runner
 task. Installation self-test checks both task definitions and the runner's
@@ -41,8 +41,15 @@ reading or starting the runner task (elevated start accepted), the same probe
 and grandchild surviving both restart paths, and new agent identities. Cycles
 run inside the probe with matching fresh request/completion IDs. Job
 membership is baseline-only diagnostic data; failed queries report unknown.
-These gates passed live on a contract-2 image built from install media with
-the factory changes stacked on this branch.
+On a contract-2 image built from install media, live batches passed every
+gate: installation facts for both tasks (stored runner descriptor without a
+principal entry, autologon agreement), loopback refusal, probe context and
+priority, the filtered-token reads and refusals, and the same probe and
+grandchild surviving agent task End/Run and agent kill/Run. A filtered start
+of the agent task, which keeps the default principal read entry, was
+accepted, confirming why the runner task omits it. The probe also reported
+the agent in its immediate job; why, given that survival, is not yet
+understood.
 
 Still unverified live: refusal for the real UAC-filtered token (the lab uses a
 SAFER token with no more access), premature/duplicate activation, cancellation during startup (helper console attach), console
@@ -55,7 +62,7 @@ The accepted double Ctrl+C when stop and the helper both signal still needs live
 
 The pinned render-probe output bridge and sanitation passed in published
 contract-1 images. Its atomic-ACL creation and primary-failure preservation
-changes have unit coverage; the contract-2 factory/lab validation remains open.
+changes have unit coverage; the contract-2 build ran the bridge successfully.
 
 ## Checks
 
@@ -232,9 +239,8 @@ Reference-ISO contract-1 images completed setup, render validation, sanitation
 and publication in about seven minutes. Secure Boot, TPM presence/readiness,
 fully decrypted BitLocker state, the embedded 2023/plain-GPT boot path,
 single Hyper-V display and hardware D3D11 were validated. Firmware entries
-were unchanged. The lab batch passed every gate except probe survival,
-which led to the runner-detach design. Contract 2 requires a fresh image and
-lab run for the separate task and current installation/publication checks.
+were unchanged. The contract-1 lab batch failed only probe survival, which
+led to the runner-detach design; a contract-2 image passed the full lab batch.
 The 180-second first-boot render budget and numeric failure facts have unit
 coverage. Failure cleanup skips grace on memory-reserve cancellation and
 reserves separate termination/diagnostic/detach deadlines; those changes are
@@ -440,9 +446,6 @@ Open:
   - Host interface changes while a guest runs.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
-- A fresh contract-2 factory build and lab batch, including probe survival
-  across agent task End/Run and agent kill/Run, plus current task security
-  and autologon-account agreement. Contract-1 images are not admitted.
 - Interrupted-apply cleanup, retry from another session and after host reboot,
   and split-media DISM wildcard apply. Ordinary WIM apply through the ISO
   volume-GUID path and publication are validated with the reference ISO.
