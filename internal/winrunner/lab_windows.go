@@ -281,6 +281,8 @@ func runLabProbe(ctx context.Context, mode string, out io.Writer) error {
 		}
 		_ = pauseGuest(ctx, 10*time.Minute)
 		return nil
+	case "lab-runner-run":
+		return json.NewEncoder(out).Encode(labRunnerRun(ctx))
 	case "lab-status":
 		h, r, err := labProcess("lab-probe.json", windows.SYNCHRONIZE)
 		if err != nil {

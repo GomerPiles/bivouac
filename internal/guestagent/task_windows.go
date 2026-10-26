@@ -157,11 +157,12 @@ func taskFacts(raw []byte, name, user, sid string, resolve func(string) string) 
 
 // Compare effective task-object DACL entries, not a textual SDDL spelling.
 // SYSTEM and Administrators have full control. Task Scheduler stores the DACL
-// without the protected flag and adds read-only access for the task's own
-// principal (observed on Windows 11 26300); read access cannot run the task.
-// In the root task folder it also inherits that folder's SYSTEM and
-// Administrators entries. No other principal is accepted, explicit or inherited.
-func runnerTaskSecurity(text, principal string) bool {
+// without the protected flag, so in the root task folder it also inherits that
+// folder's SYSTEM and Administrators entries (observed on Windows 11 26300).
+// Registration suppresses the principal's read entry: a task's own user may
+// run a task it can read, even unelevated. No other principal is accepted,
+// explicit or inherited.
+func runnerTaskSecurity(text string) bool {
 	sd, err := windows.SecurityDescriptorFromString(text)
 	if err != nil {
 		return false
@@ -199,13 +200,10 @@ func runnerTaskSecurity(text, principal string) bool {
 			return false
 		}
 		seen[key] = true
-		mask := uint32(0x1f01ff) // FILE_ALL_ACCESS
-		if principal != "" && key == principal {
-			mask = 0x120089 // FILE_GENERIC_READ
-		} else if !system && !admins {
+		if !system && !admins {
 			return false
 		}
-		if uint32(ace.Mask) != mask {
+		if uint32(ace.Mask) != 0x1f01ff { // FILE_ALL_ACCESS
 			return false
 		}
 	}
@@ -309,7 +307,7 @@ func readTaskFacts(ctx context.Context, name, user, sid string) (TaskFacts, erro
 			facts.SecurityShape = "query"
 			return facts, err
 		}
-		facts.TaskSecurity = runnerTaskSecurity(string(raw), sid)
+		facts.TaskSecurity = runnerTaskSecurity(string(raw))
 		if !facts.TaskSecurity {
 			facts.SecurityShape = securityShape(string(raw), sid)
 		}
