@@ -120,15 +120,15 @@ func TestJITPoolConfiguration(t *testing.T) {
 }
 
 func TestCacheConfiguration(t *testing.T) {
-	good := Example + "\n[cache]\nenabled = true\nguest_host = \"192.168.64.1\"\nmax_gb = 4\nmax_object_mb = 512\n"
+	good := Example + "\n[cache]\nenabled = true\nguest_host = \"127.0.0.1\"\nmax_gb = 4\nmax_object_mb = 512\n"
 	cfg, err := Parse([]byte(good))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Cache.Enabled || cfg.Cache.Listen != "0.0.0.0:0" {
-		t.Fatalf("cache listen default %q, want every interface", cfg.Cache.Listen)
+	if !cfg.Cache.Enabled || cfg.Cache.Listen != "127.0.0.1:0" {
+		t.Fatalf("cache listen default %q, want loopback", cfg.Cache.Listen)
 	}
-	if explicit, err := Parse([]byte(good + "listen = \"0.0.0.0:8443\"\n")); err != nil || explicit.Cache.Listen != "0.0.0.0:8443" {
+	if explicit, err := Parse([]byte(good + "listen = \"127.0.0.1:8443\"\n")); err != nil || explicit.Cache.Listen != "127.0.0.1:8443" {
 		t.Fatalf("explicit listen not kept: %v", err)
 	}
 	if cfg.Cache.StoreUploads {
@@ -182,5 +182,22 @@ func TestScaleSetLabels(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("accepted invalid scale set labels: %q", labels)
 		}
+	}
+}
+
+func TestMacOSCacheUsesOnlyLoopbackTransport(t *testing.T) {
+	base := Example + "\n[cache]\nenabled = true\n"
+	cfg, err := Parse([]byte(base))
+	if err != nil || !cfg.Cache.loopback() {
+		t.Fatal("macOS cache lacks loopback defaults")
+	}
+	for _, setting := range []string{"listen = '0.0.0.0:0'", "listen = 'localhost:0'", "guest_host = '192.168.64.1'", "guest_host = 'localhost'"} {
+		if _, err := Parse([]byte(base + setting + "\n")); err == nil {
+			t.Fatal("macOS NIC cache exception accepted")
+		}
+	}
+	cfg.Providers["macos"].VZ.BootstrapShare = "/tmp"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal("read-only bootstrap share was conflated with network isolation", err)
 	}
 }
