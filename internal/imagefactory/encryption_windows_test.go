@@ -49,26 +49,35 @@ public static class EncryptionFixture {
 }
 
 "@
-foreach($mode in 0..6){
+foreach($mode in 0..7){
  $mount=Join-Path $d.root ([string]$mode);$parent=Join-Path $mount 'Windows\System32\config';$null=New-Item -ItemType Directory -Path $parent
  $path=Join-Path $parent 'SYSTEM';[EncryptionFixture]::Seed($path,[math]::Min($mode,4))
  if($mode -ge 5){[EncryptionFixture]::Seed((Join-Path $parent 'other'),0);Remove-Item -LiteralPath $path;Move-Item -LiteralPath (Join-Path $parent 'other') -Destination $path}
  if($mode -eq 5){[IO.File]::WriteAllText(($path+'.prevent-encryption'),'preserve')}
  if($mode -eq 6){$null=New-Item -ItemType Directory -Path ($path+'.prevent-encryption')}
+ foreach($suffix in @('.LOG1','.LOG2','.LOG3','.other.LOG1')){[IO.File]::WriteAllText(($path+$suffix),'preserve')}
+ if($mode -eq 7){Remove-Item -LiteralPath ($path+'.LOG2');$null=New-Item -ItemType Directory -Path ($path+'.LOG2')}
  $before=(Get-FileHash -LiteralPath $path).Hash;$acl=Get-Acl -LiteralPath $path;$sddl=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access);$owner=$acl.GetOwner([Security.Principal.SecurityIdentifier])
  $code=Set-OfflineEncryptionPolicy $mount
- $expected=0;if($mode -in @(2,3)){$expected=3};if($mode -eq 4){$expected=2};if($mode -ge 5){$expected=9}
+ $expected=0;if($mode -in @(2,3)){$expected=3};if($mode -eq 4){$expected=2};if($mode -in @(5,6)){$expected=9};if($mode -eq 7){$expected=13}
  if($code -ne $expected){throw ('case={0} code={1}' -f $mode,$code)}
  if($mode -in @(0,1)){
   if([EncryptionFixture]::Read($path,2) -ne 1 -or [EncryptionFixture]::Read($path,1) -ne 0){throw 'wrong control set policy'}
   $a=Get-Acl -LiteralPath $path
   if($a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $sddl -or !$a.GetOwner([Security.Principal.SecurityIdentifier]).Equals($owner)){throw 'hive security changed'}
   if(Test-Path -LiteralPath ($path+'.prevent-encryption')){throw 'saved sibling remains'}
+  foreach($suffix in @('.LOG1','.LOG2')){
+   if($mode -eq 0 -and (Test-Path -LiteralPath ($path+$suffix))){throw 'replaced SYSTEM log remains'}
+   if($mode -eq 1 -and [IO.File]::ReadAllText(($path+$suffix)) -cne 'preserve'){throw 'already-one hive log removed'}
+  }
+  if($mode -eq 0){[IO.File]::WriteAllText(($path+'.LOG1'),'preserve')}
   $before=(Get-FileHash -LiteralPath $path).Hash
   if((Set-OfflineEncryptionPolicy $mount) -ne 0){throw 'already one refused'}
   if((Get-FileHash -LiteralPath $path).Hash -ne $before){throw 'already one rewrote hive'}
  }
- if(($mode -ne 0) -and (Get-FileHash -LiteralPath $path).Hash -ne $before){throw 'refusal or already-one changed source'}
+ if(($mode -notin @(0,7)) -and (Get-FileHash -LiteralPath $path).Hash -ne $before){throw 'refusal or already-one changed source'}
+ foreach($suffix in @('.LOG1','.LOG3','.other.LOG1')){if([IO.File]::ReadAllText(($path+$suffix)) -cne 'preserve'){throw 'unreplaced or foreign log changed'}}
+ if($mode -eq 7 -and [EncryptionFixture]::Read($path,2) -ne 1){throw 'log refusal lost replacement'}
 }
 [Console]::Out.Write('encryption')`
 	if got := runTestPS(t, script, input); got != "encryption" {

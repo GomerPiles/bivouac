@@ -23,17 +23,23 @@ func parseGuestSecurity(b []byte) (GuestSecurity, error) {
 		return GuestSecurity{}, errors.New("guest requires effective Secure Boot and a present TPM with readiness reported")
 	}
 	result := GuestSecurity{SecureBoot: *fields.SecureBoot, TPMPresent: *fields.TPMPresent, TPMReady: *fields.TPMReady, BitLockerConversionStatus: ^uint32(0), BitLockerProtectionStatus: ^uint32(0)}
-	// Diagnostics never decide publication, including missing/unreadable values.
-	var diagnostic struct {
-		Conversion *uint32 `json:"bitlocker_conversion_status"`
-		Protection *uint32 `json:"bitlocker_protection_status"`
+	// A reported status must prove fully decrypted/protection off. Missing or
+	// unreadable fields stay diagnostic, independently of the other field.
+	var diagnostic map[string]json.RawMessage
+	if json.Unmarshal(b, &diagnostic) != nil {
+		return GuestSecurity{}, errors.New("invalid guest security diagnostic report")
 	}
-	if json.Unmarshal(b, &diagnostic) == nil {
-		if diagnostic.Conversion != nil && *diagnostic.Conversion <= 5 {
-			result.BitLockerConversionStatus = *diagnostic.Conversion
+	for field, target := range map[string]*uint32{
+		"bitlocker_conversion_status": &result.BitLockerConversionStatus,
+		"bitlocker_protection_status": &result.BitLockerProtectionStatus,
+	} {
+		var value *uint32
+		if json.Unmarshal(diagnostic[field], &value) != nil || value == nil {
+			continue
 		}
-		if diagnostic.Protection != nil && *diagnostic.Protection <= 2 {
-			result.BitLockerProtectionStatus = *diagnostic.Protection
+		*target = *value
+		if *value != 0 && *value != ^uint32(0) {
+			return GuestSecurity{}, errors.New("guest BitLocker status requires fully decrypted storage and protection off")
 		}
 	}
 	return result, nil

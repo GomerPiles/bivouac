@@ -10,15 +10,17 @@ production migration gates remain open.
 The HCS provider, image factory and vmhost lab use bivouac's guest agent over
 HvSocket. The Windows adapter has unit coverage for preflight, preparation,
 start/stop, clock setting, bounded delivery/extraction and the 64-connection
-cache relay. These agent-runtime source changes are not deployed or validated
-live; rollback uses the previous manager, VM host service and image together.
-Console/OOBE readiness remains a live gate for the agent-served guest.
+cache relay. Contract-2 runner-detach changes are not deployed or validated live; rollback
+uses the previous manager, VM host service and image together. Console/OOBE
+readiness for the current contract requires a fresh factory build.
 In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
 MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
 Recovery after an actual agent crash remains unverified.
-ISO-based agent lab images reach completed setup and topology validation, but
-render-probe validation times out; a successful factory build and agent-image
-timing run remain open gates.
+Reference-ISO contract-1 agent images (builds 15 and 16) published in about seven minutes with
+Secure Boot enabled, TPM present/ready, fully decrypted storage, the 2023 boot
+manager, one Hyper-V display and hardware D3D11. Their lab batch passed all
+gates except probe survival; the cause led to the separate runner-task design.
+Contract 2 needs a fresh factory build and lab run; contract-1 images are refused.
 
 Windows contract 2 requires the agent logon task and separate on-demand runner
 task. Installation self-test checks both task definitions and the runner's
@@ -51,8 +53,9 @@ agent-served guests also remain live gates. Sibling-guest negative testing is
 outside this phase's loopback and host-account authorization scope.
 The accepted double Ctrl+C when stop and the helper both signal still needs live validation.
 
-The factory's pinned prebuilt render-probe output-path bridge has script/fixture
-coverage only. Fresh-image render validation and sanitation remain live gates.
+The pinned render-probe output bridge and sanitation passed in published
+contract-1 images. Its atomic-ACL creation and primary-failure preservation
+changes have unit coverage; the contract-2 factory/lab validation remains open.
 
 ## Checks
 
@@ -195,24 +198,20 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
-The guest bootstrap used to discard a pinned script's nonzero exit code, so a
-validation step failure surfaced as an empty, invalid topology report.
-PowerShell 5.1 tests reproduce that and cover the fix, which propagates script
-exit codes. Agent-backed lab validation now exposes the render wait failure
-as step 16 rather than an invalid topology report.
-
-Agent-backed no-NIC ISO lab images complete setup, reach a stable desktop and
-pass the topology probe, but the render probe produces no report within the
-previous 50-second wait (step 16). Offline evidence shows the GPU-PV and
-synthetic display devices started without a reported GPU problem; it does not
-identify where the prebuilt render probe stalls. First-boot validation now
-allows 180 seconds, emits bounded numeric failure facts and attempts bounded
-graceful shutdown before termination to preserve event logs. These changes
-have local tests only; render completion, failure observations and event-log
-flushing still need a separately authorized live build.
+Reference-ISO contract-1 images completed setup, render validation, sanitation
+and publication in about seven minutes. Secure Boot, TPM presence/readiness,
+fully decrypted BitLocker state, the embedded 2023/plain-GPT boot path,
+single Hyper-V display and hardware D3D11 were validated. Firmware entries
+were unchanged. The lab batch passed every gate except probe survival,
+which led to the runner-detach design. Contract 2 requires a fresh image and
+lab run for the separate task and current installation/publication checks.
+The 180-second first-boot render budget and numeric failure facts have unit
+coverage. Failure cleanup skips grace on memory-reserve cancellation and
+reserves separate termination/diagnostic/detach deadlines; those changes are
+unit-tested only.
 
 The runtime and factory agent switch is code-complete with fake-agent, offline-copy and relay tests;
-live validation is pending a matching image. Tests cover exact receive metadata,
+current-contract live validation is pending a matching image. Tests cover exact receive metadata,
 readiness ordering, command/output bounds, terminal protocol refusal, transient
 recovery, adoption without pins, unchanged status/diagnostics decoding, TLS cache
 requests, fallback cleanup and revocation. The historical live results below
@@ -411,24 +410,17 @@ Open:
   - Host interface changes while a guest runs.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
-- Install-media lab runs passed owned VHDX layout, DISM WIM apply through
-  the ISO volume-GUID path, image-sourced ESP files, scratch BCDEdit store,
-  child staging and unchanged host firmware entries. Build 10 reached
-  operating-system boot/ExitBootServices in 1.4 seconds, powered on GPU-PV
-  and entered specialize: the embedded 2023/plain-GPT boot path works.
-  Specialize refused the non-system BCD store before RunSynchronous.
-  System-store marking/strict verification and offline encryption prevention
-  are unit-tested; completing specialize, guest ownership/ACLs, no-NIC setup,
-  guest Secure Boot/TPM,
-  a failed build's cleanup and `image cleanup`, and the lab batch on a
-  factory-built image remain open. Admission does not compare the host GPU
-  driver with the image's.
+- A fresh contract-2 factory build and lab batch, including probe survival
+  across agent task End/Run and agent kill/Run, plus current task security
+  and autologon-account agreement. Contract-1 images are not admitted.
+- Interrupted-apply cleanup, retry from another session and after host reboot,
+  and split-media DISM wildcard apply. Ordinary WIM apply through the ISO
+  volume-GUID path and publication are validated with the reference ISO.
+- Live validation of publication's nonzero BitLocker refusal, automatic-letter
+  refusal, replacement-log cleanup, cleanup stage deadlines and probe ACL/error
+  changes. Unit tests cover these paths. Admission does not compare the host
+  GPU driver with the image's.
 - The warm spare.
-- No install-media agent image has completed setup and publication live.
-  Offline ownership/ACLs, specialize service/MSI
-  removal, logon task/session readiness, error-43 recovery, sanitation and the
-  lab's granted/ungranted agent checks remain live gates. The provider in this branch does not run images built
-  before it; rollback uses the previous manager/service/image trio.
 
 ## Windows: Crosvm (Linux GPU guests)
 

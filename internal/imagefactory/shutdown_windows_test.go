@@ -69,3 +69,62 @@ func TestFailureShutdownAgentArguments(t *testing.T) {
 		t.Fatal("shutdown argv or output handling changed")
 	}
 }
+
+func TestFailureShutdownEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		started        bool
+		failure, cause error
+		want           bool
+	}{
+		{"preparation failure", true, errors.New("failure"), nil, true},
+		{"build deadline", true, context.DeadlineExceeded, context.DeadlineExceeded, true},
+		{"no preparation", false, errors.New("failure"), nil, false},
+		{"success", true, nil, nil, false},
+		{"reserve cause", true, context.Canceled, &memoryReserveLostError{}, false},
+		{"joined reserve failure", true, errors.Join(context.Canceled, &memoryReserveLostError{}), nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if allowFailureShutdown(tc.started, tc.failure, tc.cause) != tc.want {
+				t.Fatal("failure shutdown eligibility changed")
+			}
+		})
+	}
+}
+
+func TestCleanupStageReserves(t *testing.T) {
+	cleanup, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	stop, cancelStop := cleanupStageContext(cleanup, 120*time.Millisecond)
+	defer cancelStop()
+	grace, cancelGrace := cleanupStageContext(stop, 50*time.Millisecond)
+	defer cancelGrace()
+	called := false
+	if err := terminateAfterGuestFailure(grace, failureShutdownBudget, func(context.Context) error { return nil }, func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, func() error {
+		called = true
+		if stop.Err() != nil {
+			t.Fatal("grace exhausted termination budget")
+		}
+		return nil
+	}); err != nil || !called {
+		t.Fatal("termination missing")
+	}
+	diagnostics, cancelDiagnostics := cleanupStageContext(cleanup, 60*time.Millisecond)
+	defer cancelDiagnostics()
+	<-diagnostics.Done()
+	if cleanup.Err() != nil {
+		t.Fatal("diagnostics exhausted detach budget")
+	}
+	end, _ := cleanup.Deadline()
+	diagEnd, _ := diagnostics.Deadline()
+	if end.Sub(diagEnd) != 60*time.Millisecond {
+		t.Fatal("detach time not reserved")
+	}
+	// An already-used grace allocation must not start a request at all.
+	if err := terminateAfterGuestFailure(diagnostics, failureShutdownBudget, func(context.Context) error { t.Fatal("expired grace requested shutdown"); return nil }, nil, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+}

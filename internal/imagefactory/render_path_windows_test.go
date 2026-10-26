@@ -17,7 +17,7 @@ import (
 const pinnedProbeDirectory = `C:\ProgramData\BivouacHcsSpike`
 
 // Include the real diagnostic helper but replace every native security query.
-// Nonzero diagnostic values distinguish successful CIM reads from the helper's
+// Explicit decrypted/off values distinguish successful CIM reads from the helper's
 // unavailable-value fallback; none of these fixtures reads host security state.
 func renderSecurityFixture(t *testing.T) string {
 	t.Helper()
@@ -35,8 +35,8 @@ function Get-Tpm {return [pscustomobject]@{TpmPresent=$true;TpmReady=$true}}
 function Invoke-CimMethod {param($InputObject,$MethodName,$OperationTimeoutSec)
  if($InputObject.Fixed -ne 1 -or $OperationTimeoutSec -ne 10){throw 'CIM scope'}
  switch -CaseSensitive ($MethodName){
-  'GetConversionStatus' {return [pscustomobject]@{ReturnValue=0;ConversionStatus=4}}
-  'GetProtectionStatus' {return [pscustomobject]@{ReturnValue=0;ProtectionStatus=2}}
+  'GetConversionStatus' {return [pscustomobject]@{ReturnValue=0;ConversionStatus=0}}
+  'GetProtectionStatus' {return [pscustomobject]@{ReturnValue=0;ProtectionStatus=0}}
   default {throw 'CIM method'}
  }
 }
@@ -51,7 +51,7 @@ func assertRenderSecurityReport(t *testing.T, output []byte) {
 	}
 	for field, want := range map[string]string{
 		"secure_boot": "true", "tpm_present": "true", "tpm_ready": "true",
-		"bitlocker_conversion_status": "4", "bitlocker_protection_status": "2",
+		"bitlocker_conversion_status": "0", "bitlocker_protection_status": "0",
 		"guest_ready": "true", "credential_rotated": "false",
 		"desktop_ready": "true", "hardware_d3d11": "true", "presented": "true", "pixel_readback": "true",
 		"stage": "7", "hresult": "0", "gpu_device_diagnostics_valid": "true",
@@ -64,7 +64,7 @@ func assertRenderSecurityReport(t *testing.T, output []byte) {
 		}
 	}
 	security, err := parseGuestSecurity(output)
-	if err != nil || security != (GuestSecurity{SecureBoot: true, TPMPresent: true, TPMReady: true, BitLockerConversionStatus: 4, BitLockerProtectionStatus: 2}) {
+	if err != nil || security != (GuestSecurity{SecureBoot: true, TPMPresent: true, TPMReady: true, BitLockerConversionStatus: 0, BitLockerProtectionStatus: 0}) {
 		t.Fatal("merged render security report was not preserved by the consumer")
 	}
 }
@@ -80,12 +80,13 @@ func renderPathFixture(t *testing.T) string {
 	// clock; the caller and security fixture stub native observations/actions.
 	step := guestValidate[start:]
 	step = strings.ReplaceAll(step, "'"+pinnedProbeDirectory+"'", "$data.spike")
+	step = strings.Replace(step, "[IO.Directory]::CreateDirectory($spikeBase,$acl)", "(New-TestProbeDirectory $spikeBase $acl)", 1)
 	step = strings.Replace(step, "[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{Elapsed=[pscustomobject]@{TotalSeconds=$data.elapsed}}", 1)
 	return renderSecurityFixture(t) + "try{\n" + step
 }
 
 func TestPinnedRenderProbeOutputBridge(t *testing.T) {
-	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed", "cleanup failure"} {
+	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed", "cleanup failure", "task cleanup failure", "start cleanup failure"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
@@ -120,9 +121,9 @@ $acl=[Security.AccessControl.DirectorySecurity]::new()
 $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
 $topology=@{topology_valid=$true;virtual_equals_primary=$true;hyperv_video_enabled=$true;hyperv_video_started=$true;probe_foreground=$true;probe_on_primary=$true;probe_input_received=$true;security_window_found=$false;security_on_primary=$false}
 $gpuStatus=@{valid=$true;display_count=1;virtual_count=1;problem_code=0}
-function Set-Acl {param($LiteralPath,$AclObject)
+function New-TestProbeDirectory {param($LiteralPath,$AclObject)
  if($LiteralPath -ne $data.spike -or $AclObject.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'){throw 'wrong ACL'}
- if($data.mode -eq 'ACL error'){throw 'fixture ACL failure'}
+ if($data.mode -eq 'ACL error'){throw 'fixture ACL failure'};[IO.Directory]::CreateDirectory($LiteralPath)
 }
 function Get-ScheduledTask {param($TaskName,$ErrorAction) if($data.mode -eq 'task exists'){return $true};if($renderRegistered){[IO.File]::WriteAllText((Join-Path $data.root 'diagnostic-before-cleanup'),([int](Test-Path -LiteralPath $data.spike)).ToString());return [pscustomobject]@{State=4}}}
 function Get-ScheduledTaskInfo {param($TaskName,$ErrorAction) [pscustomobject]@{LastTaskResult=0x41301}}
@@ -136,7 +137,7 @@ function New-ScheduledTaskAction {param($Execute,$WorkingDirectory)}
 function New-ScheduledTaskSettingsSet {param($ExecutionTimeLimit,[switch]$AllowStartIfOnBatteries,[switch]$DontStopIfGoingOnBatteries)}
 function Register-ScheduledTask {param($TaskName,$Principal,$Action,$Settings) if($data.mode -eq 'register error'){throw 'fixture registration failure'}}
 function Start-ScheduledTask {param($TaskName)
- if($data.mode -eq 'start error'){throw 'fixture start failure'}
+ if($data.mode -in @('start error','start cleanup failure')){throw 'fixture start failure'}
  if($data.mode -in @('timeout','cleanup failure')){return}
  $path=Join-Path $data.spike 'render.json'
  switch($data.mode){
@@ -148,7 +149,7 @@ function Start-ScheduledTask {param($TaskName)
   default {[IO.File]::WriteAllText($path,$data.report)}
  }
 }
-function Stop-ScheduledTask {param($TaskName,$ErrorAction) [IO.File]::WriteAllText((Join-Path $data.root 'stopped'),'true');if($data.mode -eq 'cleanup failure'){[IO.File]::WriteAllText((Join-Path $data.spike 'unexpected'),'preserve')}}
+function Stop-ScheduledTask {param($TaskName,$ErrorAction) [IO.File]::WriteAllText((Join-Path $data.root 'stopped'),'true');if($data.mode -eq 'cleanup failure'){[IO.File]::WriteAllText((Join-Path $data.spike 'unexpected'),'preserve')};if($data.mode -in @('task cleanup failure','start cleanup failure')){throw 'fixture cleanup failure'}}
 function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::WriteAllText((Join-Path $data.root 'unregistered'),'true')}
 ` + renderPathFixture(t)
 			system, err := windows.GetSystemDirectory()
@@ -181,13 +182,13 @@ function Unregister-ScheduledTask {param($TaskName,[switch]$Confirm) [IO.File]::
 				want = 15
 			case "register error":
 				want = 23
-			case "start error":
+			case "start error", "start cleanup failure":
 				want = 24
-			case "timeout":
+			case "timeout", "cleanup failure":
 				want = 16
 			case "malformed":
 				want = 25
-			case "cleanup failure":
+			case "task cleanup failure":
 				want = 34
 			}
 			if code != want {
@@ -244,7 +245,7 @@ func TestPinnedProbeGeneratedContractAndSanitation(t *testing.T) {
 	if strings.Count(guestValidate, pinnedProbeDirectory) != 1 {
 		t.Fatal("pinned output path must be named once")
 	}
-	for _, token := range []string{"New-Item -ItemType Directory -Path $spikeBase", "Set-Acl -LiteralPath $spikeBase -AclObject $acl", "$result=Join-Path $spikeBase 'render.json'", "$output.LinkType", "$output.Length -gt 4096", "Move-Item -LiteralPath $result -Destination $destination", "[IO.Directory]::Delete($spikeBase,$false)", "if($spikeOwned)"} {
+	for _, token := range []string{"[IO.Directory]::CreateDirectory($spikeBase,$acl)", "$result=Join-Path $spikeBase 'render.json'", "$output.LinkType", "$output.Length -gt 4096", "Move-Item -LiteralPath $result -Destination $destination", "[IO.Directory]::Delete($spikeBase,$false)", "if($spikeOwned)"} {
 		if !strings.Contains(guestValidate, token) {
 			t.Fatal("generated render bridge missing", token)
 		}
@@ -263,5 +264,23 @@ func TestPinnedProbeGeneratedContractAndSanitation(t *testing.T) {
 		if runTestPS(t, script, input) != want {
 			t.Fatal("sanitation accepted a leftover spike directory")
 		}
+	}
+}
+
+func TestRenderProbeAtomicDirectoryACL(t *testing.T) {
+	input, _ := json.Marshal(map[string]string{"path": filepath.Join(t.TempDir(), "probe")})
+	// Exercise the production .NET Framework overload with a fixture DACL
+	// granting this unelevated test principal access; never use the guest path.
+	script := `$ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
+$acl=[Security.AccessControl.DirectorySecurity]::new()
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$acl.SetSecurityDescriptorSddlForm(('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;'+$sid+')'))
+$null=[IO.Directory]::CreateDirectory($d.path,$acl)
+$actual=Get-Acl -LiteralPath $d.path
+if(!$actual.AreAccessRulesProtected -or $actual.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)){throw 'atomic ACL differs'}
+if(@(Get-ChildItem -Force -LiteralPath $d.path).Count){throw 'created directory not empty'}
+[Console]::Out.Write('atomic')`
+	if got := runTestPS(t, script, input); got != "atomic" {
+		t.Fatal("atomic probe-directory creation failed")
 	}
 }

@@ -153,7 +153,19 @@ public static class FactoryBoot {
  // hive is saved to a fresh sibling and atomically replaces the owned store.
  // Codes: 1 open, 2 occupied sibling, 3 missing parent, 4 existing element,
  // 5 create, 6 value, 7 save, 8 replace, 9 identity, 10 unexpected failure,
- // 11 Description schema, 12 System value, 13 FirmwareModified deletion.
+ // 11 Description schema, 12 System value, 13 FirmwareModified deletion,
+ // 14 transaction-log cleanup after replacement.
+ static bool RemoveTransactionLogs(string path) {
+  try {
+   var logs=new System.Collections.Generic.List<string>();
+   foreach(string log in System.IO.Directory.EnumerateFileSystemEntries(System.IO.Path.GetDirectoryName(path),System.IO.Path.GetFileName(path)+".LOG*")) {
+    if(logs.Count>=16 || (System.IO.File.GetAttributes(log)&(System.IO.FileAttributes.Directory|System.IO.FileAttributes.ReparsePoint))!=0)return false;
+    logs.Add(log);
+   }
+   foreach(string log in logs)System.IO.File.Delete(log);
+   return true;
+  }catch{return false;}
+ }
  public static uint WriteDevices(string path,string loader,string disk,string esp,string windows) {
   string next=path+".plain-gpt";IntPtr h=IntPtr.Zero;
   try{
@@ -195,6 +207,7 @@ public static class FactoryBoot {
    if(ORSaveHive(h,next,6,1)!=0)return 7;
    ORCloseHive(h);h=IntPtr.Zero;
    if(!MoveFileEx(next,path,9))return 8;
+   if(!RemoveTransactionLogs(path))return 14;
    return 0;
   }catch{return 10;}finally{if(h!=IntPtr.Zero)ORCloseHive(h);}
  }

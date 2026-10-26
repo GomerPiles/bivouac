@@ -100,7 +100,8 @@ const storageFixturePS = `
   elseif($ImagePath.EndsWith('source.vhdx')){Trace 'detach_base';$state.base_attached=$false}
   else{Trace 'detach_child';$state.child_attached=$false};Save-Fixture
  }
- function Get-Volume {
+ function Get-Volume {param($Partition)
+  if($Partition){$letter='';if(($Partition.PartitionNumber -eq 1 -and $fixture.refuse -eq 'esp_letter') -or ($Partition.PartitionNumber -eq 3 -and $fixture.refuse -eq 'windows_letter')){$letter='Q'};return [pscustomobject]@{DriveLetter=$letter}}
   $path=$fixture.volume;if($fixture.refuse -eq 'media_changed'){$path='\\?\Volume{ffffffff-ffff-ffff-ffff-ffffffffffff}\'}
   $letter=''
   [pscustomobject]@{Path=$path;DriveLetter=$letter}
@@ -274,6 +275,29 @@ func TestBaseExactPartitionTable(t *testing.T) {
 				if layoutShape(b) == nil {
 					t.Fatal("refused table has no numeric shape")
 				}
+			}
+		})
+	}
+}
+
+func TestBaseRefusesAutomaticDriveLetters(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step int
+	}{{"esp_letter", 41}, {"windows_letter", 43}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newStorageFixture(t, "layout")
+			f.options["refuse"] = tc.name
+			_, err := f.run(baseDisk, f.data("layout"))
+			requireScriptStep(t, err, tc.step)
+			if slices.Contains(f.trace(), "access_windows") || slices.Contains(f.trace(), "access_esp") {
+				t.Fatal("added access path after unexpected drive letter")
+			}
+			if _, err := f.cleanup(); err != nil {
+				t.Fatal("letter refusal prevented owned detach", err)
+			}
+			if f.readState()["base_attached"] != false || f.readState()["iso_attached"] != false {
+				t.Fatal("native attachment retained")
 			}
 		})
 	}

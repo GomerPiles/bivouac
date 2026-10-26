@@ -64,7 +64,7 @@ $acl=[Security.AccessControl.DirectorySecurity]::new()
 $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
 $topology=@{topology_valid=$true;virtual_equals_primary=$true;hyperv_video_enabled=$true;hyperv_video_started=$true;probe_foreground=$true;probe_on_primary=$true;probe_input_received=$true;security_window_found=$false;security_on_primary=$false;active_display_count=1;primary_display_count=1;primary_width=1024;primary_height=768;primary_adapter_kind=1;vdd_node_count=0}
 $gpuStatus=@{valid=$true;display_count=2;virtual_count=1;problem_code=0}
-function Set-Acl {param($LiteralPath,$AclObject) if($LiteralPath -ne $data.spike -or $AclObject.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'){throw 'wrong ACL'}}
+function New-TestProbeDirectory {param($LiteralPath,$AclObject) if($LiteralPath -ne $data.spike -or $AclObject.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne 'D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)'){throw 'wrong ACL'};[IO.Directory]::CreateDirectory($LiteralPath)}
 function Get-ScheduledTask {param($TaskName,$ErrorAction) $script:taskCalls++;if($script:taskCalls -eq 1){return};[IO.File]::WriteAllText((Join-Path $data.root 'diagnostic-before-cleanup'),([int](Test-Path -LiteralPath $data.spike)).ToString());if($data.observation_failure){throw 'fixture'};[pscustomobject]@{State=4}}
 function Get-ScheduledTaskInfo {param($TaskName,$ErrorAction) [pscustomobject]@{LastTaskResult=$data.last_result}}
 function New-ScheduledTaskPrincipal {param($UserId,$LogonType,$RunLevel) return 1}
