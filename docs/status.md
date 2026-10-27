@@ -203,11 +203,14 @@ together with its manager, VM host service and image.
 Optional `gpu_driver_cache` prepares immutable derived images from a protected
 base and the current host display packages. Native discovery, offline cold
 preparation and verified warm reuse passed on an isolated copy of a prepared
-image. Tests cover same-size driver replacements, changes during preparation,
+image. A networkless cached guest also booted from a previously validated lab
+base containing the older driver: current AMD hardware D3D11, presentation,
+pixel readback, single-display/input and agent gates passed, and native guest
+and storage cleanup were confirmed. Tests cover same-size driver replacements, changes during preparation,
 corrupt-cache refusal and retained failures. The delivered adapter's hardware
 D3D12 device probe passed on the host; the provider refuses GPU readiness before
-registration when its guest proof is missing or false. Cached-image boot/render,
-an actual host driver replacement, and the new guest probe remain live gates.
+registration when its guest proof is missing or false. A host driver replacement
+between creations in the same service and the new guest probe remain live gates.
 This cache is not deployed to production.
 
 The HCS provider, image factory and vmhost lab use bivouac's guest agent over
@@ -286,8 +289,8 @@ Its prepared image was refreshed after a host AMD driver upgrade. A fresh
 factory build copied the current package, passed hardware D3D11 presentation
 and pixel checks, and was installed with the matching guest identity while
 the service had no guests. The original manager/service binaries and runner
-labels were retained; CI resumed through the desktop launcher. A full job on
-the refreshed image has not yet been verified.
+labels were retained; CI resumed through the desktop launcher. Subsequent
+production Windows jobs succeeded on the refreshed image.
 
 Validated live on that runtime, with production CI Off:
 

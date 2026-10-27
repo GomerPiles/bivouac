@@ -615,6 +615,10 @@ ordinary unit checks simulate their command/report sequence. Recovery and timing
 on real Task Scheduler jobs remain unverified until the live run passes.
 Only the agent service is exposed. `agent_reachable` records create-to-agent
 proof alongside existing connection/desktop spans and bounded numeric step markers.
+For a separately authorized cache boot check, set
+`BIVOUAC_LAB_GPU_DRIVER_CACHE=1` only in the lab process. Its private VM host
+then derives the current host-driver parent before the selected cold boots;
+the configured lab base and all normal rendering/cleanup gates remain unchanged.
 
 Every desktop run records topology in the console user's
 interactive session and requires exactly one active primary display plus a

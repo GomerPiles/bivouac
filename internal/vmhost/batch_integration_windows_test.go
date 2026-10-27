@@ -47,6 +47,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/GomerPiles/bivouac/internal/driverimage"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/hvsock"
@@ -230,7 +231,7 @@ type render struct {
 }
 
 func (r *render) ok() bool {
-	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated && r.Topology.LabOK()
+	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated && r.LabOK()
 }
 
 type results struct {
@@ -296,6 +297,12 @@ func TestLabBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = host.Close() }()
+	if os.Getenv("BIVOUAC_LAB_GPU_DRIVER_CACHE") == "1" {
+		host.images, err = driverimage.Open(filepath.Join(*lab.root, "gpu-images"))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -706,7 +713,7 @@ func (b *validationOutput) Write(p []byte) (int, error) {
 		b.steps[strconv.Itoa(n)] = time.Since(b.begun).Milliseconds()
 		b.pending = rest
 	}
-	return len(p), nil
+	return len(p), nil //nolint:nilerr // Non-marker stdout is retained as final JSON, not treated as a numeric-marker parse failure.
 }
 
 // unelevatedDial reruns this test binary as a child of the user's unelevated
