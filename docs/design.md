@@ -807,6 +807,178 @@ limited to the documented 2,560 bytes. Oversized keys fail rather than being
 truncated, split, or written to disk. Cancellation is checked before synchronous
 native dispatch; installation must use the same user as the credential owner.
 
+### Windows Sandbox experiment
+
+`cmd/sandbox-lab` is a separate opt-in research executable, not a configured
+provider. It never reads controller configuration or credentials, registers a
+runner, changes CI mode, or calls the VM host service. Its default run requests
+one 4 GiB Sandbox with networking, vGPU and device redirection disabled. Only
+fresh private bootstrap and public-report directories are mapped. The writable
+report share is a lab exception, not an approved job-storage transport.
+
+Sandbox supplies an elevated active RDP desktop with no active console session
+on the tested host. The lab therefore uses its own explicit
+WDAGUtilityAccount/SID, elevation, active-session and WinSta0/Default checks.
+HCS agent and runner console checks are unchanged. The existing guest-agent
+framing and Windows command jobs are exercised over a private in-memory link
+inside the guest, independently of whether a host transport works. Official
+runner binaries are hash-pinned, extracted into a fresh guest directory and
+smoke-tested without registration or JIT input.
+
+The lab journals a prefixed name and caller-selected Sandbox UUID before
+launch, requires the matching CLI start receipt, then binds a guest-generated
+boot UUID using a fresh public challenge executed against that exact CLI ID.
+Stop requires the receipt, current CLI inventory and that fresh guest proof;
+absence is confirmed afterwards. An occupied slot is refused. Missing or
+contradictory proof retains state rather than guessing. State uses flushed
+atomic replacement outside the mapped directory; public challenges use closed
+files plus explicit exec because mapped-folder handles can prevent rename.
+The CLI session UUID differs from the native HCS compute/runtime UUID. The
+explicit `--native-probe` path requests one UAC approval for a read-only helper.
+It enumerates compute systems, queries only Sandbox-class candidates' identity
+and connects to the lab's parent-only HvSocket service. A candidate is accepted
+only when the framed guest identity agrees with the exact recorded CLI UUID,
+prefixed name and initial boot UUID. Native VM type/running state, expected owner
+hash and native/runtime UUIDs are required; no selection by count or timing
+authorizes a binding. Ambiguous matches refuse. The native tuple is flushed to
+the instance record before ordinary-user transport tests begin. Cleanup then
+requires both current CLI/guest proof and the pinned native channel's matching
+guest identity. There is no automatic recovery or foreign-instance sweep.
+
+The ordinary manager can dial the observed runtime UUID without elevation or
+service registration on the tested host. `--native-probe` exercises host/guest
+command, stdin, nonzero exit and cancellation, guest-loopback refusal, and
+reconnection after a guest-local agent task restart. The guest generates a
+new public startup-generation UUID to prove the restart. Discovery alone is
+elevated; only fixed public identity output enters that helper. It receives no
+GitHub data, secrets or arbitrary command requests. No VM, registry, service or
+network setting is changed by the helper. Host-account authorization of
+Sandbox's default HvSocket security
+descriptors is not yet established; this is not a secret-bearing CI path.
+
+`--secure-probe` adds per-launch mutual TLS 1.3 on that native service. Client
+and server private keys remain in their respective processes; only the client's
+public certificate and the guest's public server fingerprint cross mapped
+folders. The fingerprint is bound to the recorded guest boot and a new agent
+generation. The elevated helper returns candidate metadata only; the ordinary
+manager authenticates and corroborates the unique guest identity. Missing or
+different client certificates and plaintext requests must be rejected before
+command dispatch, with a generation-bound guest rejection counter and healthy
+authenticated requests as controls. Server pins must also match. Agent restart
+requires a fresh identity-bound server pin from the same private run directory.
+The original `--native-probe` remains a plaintext diagnostic, not a CI channel.
+
+`--discovery-probe` separately tests guest KVP, SMBIOS and HvSocket registry
+addresses through a fixed CLI command without elevation. Candidate UUIDs are
+untrusted hints until a native connection returns the exact recorded guest
+identity; they never authorize a foreign-instance sweep. Native host metadata
+and safe crash recovery remain distinct from this discovery experiment.
+Anonymous-thread diagnostics verify the effective SID and read access to the
+private record and the manager's process. On the tested host the anonymous
+thread can open the raw socket but receives a remote TLS rejection without a
+client key; private-record and process-memory access are denied. These probes
+do not establish the native socket DACL or access from a process with another
+primary user. Sandbox CLI/server management access from another host account
+also remains unverified; agent authentication alone cannot establish that
+management boundary.
+
+A session-only, metadata-only broker now demonstrates one elevation followed
+by two complete ordinary-user Sandbox launches. It uses its own fresh local pipe,
+an approved caller SID, explicit client rights excluding pipe-instance creation,
+privileged pipe-owner verification, bounded versioned frames and nonces. Caller
+impersonation ends before native discovery. No RPC accepts a caller path, guest
+command, configuration, secret or mutation target; only Sandbox candidate
+metadata leaves elevation. The ordinary manager retains TLS authentication,
+guest/boot corroboration, journalling and cleanup. The lab helper ends after two
+successful metadata queries or a five-minute deadline with bounded drain; nothing
+is installed, and broker failure never causes an implicit per-launch UAC fallback.
+
+Durable discovery reuses `bivouac-vmhost`. Its optional `sandbox_accounts` grants
+only `sandbox-candidates`; HCS `accounts` separately authorize lifecycle and
+image/limit information. Pipe admission uses the union, with Windows SID checks
+and operation-specific authorization. Discovery-only accounts receive service
+start, query-status and read-control (`0x20014`), never stop or configuration
+rights. Accounts explicitly in both capabilities retain their HCS rights.
+Sandbox-only service configuration requires a protected root and approved SIDs,
+with no HCS controller, images or limits. That mode opens no HCS host journal,
+runs no recovery/guard and destroys no guests at shutdown. Shared HCS service
+lifetime and cleanup remain unchanged; discovery never starts an idle-exit timer.
+
+The shared discovery package uses an owner-filtered HCS enumeration and returns
+only bounded running-Sandbox native/runtime UUIDs. It opens no VM handle and
+does not adopt Sandbox systems into HCS ownership. The lab uses the same query
+implementation. The owner-filtered query passed two fresh secure tool-profile
+launches through the temporary broker. Shared-service integration has fixture
+coverage only; the installed service and its configuration have not been updated. LocalSystem/reboot and
+another primary client account remain live gates. A smaller guest-callback
+registry setup remains speculative because wildcard service/system policy is
+not exposed by Sandbox's documented configuration.
+
+The read-only baseline probe binds fixed tool/service/protection facts to the
+recorded guest boot. Fresh Sandbox build 26100 reports no developer SDK/toolset
+in the probed locations, with Defender service and real-time protection off and
+Tamper Protection off. These are default-Sandbox facts, not an inventory of the
+running production image or proof that every security mechanism is inactive.
+Developer tooling now has a small shared `internal/wintools` catalog, used by
+the Sandbox lab, with source-pinned official ZIPs for PowerShell, MinGit,
+CMake and Ninja. Unknown/duplicate selections refuse. The ordinary host
+downloads at a bounded rate into a separate content-addressed cache; every
+cache hit and staged copy is rehashed. Corrupt existing entries refuse instead
+of being replaced. Partial downloads remain diagnostic artifacts, not usable
+cache entries. The cache is private to the development account, never a mapped
+writable directory. No downloaded executable runs on the host.
+
+The fresh guest rechecks each ZIP pin, validates all entry paths/types and
+case-insensitive uniqueness before extraction into an empty protected root,
+and bounds file count and expanded bytes. It verifies versions, PowerShell
+execution, Git repository creation and an actual CMake/Ninja build without a
+compiler. The CMake CLI recipe omits HTML documentation and its GUI, retaining
+modules, text help, ctest/cpack and licenses. That optimization has unit
+coverage; its timing is not yet validated live. MinGit supplies headless Git,
+not Git Bash or the full hosted-runner environment. Agent PATH is process-local;
+runner children are checked over authenticated transport before and after
+agent restart. Tool reports bind exact recipe/version/digest/variant to the
+recorded boot. The normal HCS image builder does not yet consume this catalog.
+
+Sandbox cannot bake a
+user-selected base image through its public configuration, so verified cached
+payloads and per-guest provisioning are required. Warm preparation may hide
+that cost; reuse after a job cannot preserve the fresh-guest guarantee.
+
+MSVC/Windows SDK acquisition has a separate trusted setup-only lab mode. It
+enables guest networking, accepts only the reviewed bootstrapper pin, verifies
+its timestamped Microsoft signature in the guest and runs fixed component
+selectors for x64/x86 C++ tools and SDK 26100. The bounded below-normal task
+creates an offline layout entirely in the guest; only a successful layout may
+be exported to the private public-report directory. Raw setup logs remain in
+the guest; diagnostics emit bounded error classes and method identifiers,
+never log lines or URLs. Acquisition exit zero would still not establish
+payload inventory trust, offline installation, compiler functionality or
+reboot handling. Both live attempts failed with a CLR exception, with an I/O
+exception category observed on the local-path retry. No layout or SDK profile
+was admitted. No installer ran on the host. Further live work is refused when
+the unchanged 12-GiB host reserve plus 4-GiB guest cannot fit.
+
+Explicit network probes run trusted code only. Direct and reverse TCP variants
+reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
+pins on both sides. Private keys remain in process memory; only public
+certificates/fingerprints enter bootstrap and reports. The direct variant adds
+one program/port-specific inbound rule inside the disposable guest. The reverse
+variant opens a temporary host listener, accepts only the recorded guest IP,
+and adds no host firewall rule. These are diagnostic transports, not approved
+job networking. Their authentication has loopback test coverage; live TCP
+reachability remains unresolved. HvSocket avoids this dependency completely.
+
+Native HCS ownership/runtime correlation and ordinary-user command transport
+have disposable-guest evidence. Durable broker installation, host-account
+authorization, effective resource/security settings, reboot/crash recovery,
+GUI/GPU behavior and real runner registration/completion remain gates. The CLI's
+network toggle alone cannot establish bivouac's public-only egress policy. Guest firewall
+rules cannot enforce that policy against an administrator job. A future
+provider must prove a host-enforced boundary and a private control channel
+before receiving JIT material; the lab intentionally provides neither a JIT
+input nor a manager registration path. See [sandbox.md](sandbox.md).
+
 ### Windows guests through HCS
 
 Bivouac drives the Host Compute Service (`internal/hcs`) directly.

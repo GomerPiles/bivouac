@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/GomerPiles/bivouac/internal/sandboxdiscovery"
 	"io"
 	"time"
 
@@ -121,6 +122,22 @@ func (c *Client) Destroy(ctx context.Context, name string) error {
 func (c *Client) List(ctx context.Context) ([]GuestInfo, error) {
 	resp, err := c.do(ctx, Request{Op: "list"})
 	return resp.Guests, err
+}
+
+func (c *Client) SandboxCandidates(ctx context.Context) ([]sandboxdiscovery.Candidate, error) {
+	response, err := c.do(ctx, Request{Op: "sandbox-candidates"})
+	if err != nil {
+		return nil, err
+	}
+	if len(response.SandboxCandidates) > 16 {
+		return nil, errors.New("sandbox metadata bound exceeded")
+	}
+	for _, item := range response.SandboxCandidates {
+		if !item.Valid() {
+			return nil, errors.New("sandbox metadata invalid")
+		}
+	}
+	return response.SandboxCandidates, nil
 }
 
 func (c *Client) guest(ctx context.Context, req Request) (GuestInfo, error) {

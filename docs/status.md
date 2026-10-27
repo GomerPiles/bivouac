@@ -191,6 +191,144 @@ The limited login task registered and ran on demand in live validation.
 Real-logon and reboot behavior remain unverified. Native credential-store
 round trips are opt-in and are not part of ordinary local tests.
 
+## Windows: Sandbox spike
+
+The opt-in `cmd/sandbox-lab` executable is based on the PR 29 stack and is not
+registered as a manager provider. Production configuration, VM host services,
+runner labels and the HCS worktree are unchanged by this spike. No GitHub
+credentials, runner registration or JIT configurations were used.
+
+Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
+
+- Caller-selected Sandbox IDs, desktop connection, fixed-command execution,
+  read-only bootstrap and isolated writable reports work.
+- The guest is an elevated WDAGUtilityAccount in active RDP session 1 on the
+  Default desktop; the active-console API returns no session. The stock HCS
+  agent's console refusal is expected; its checks remain unchanged.
+- The shared guest-agent framing and Windows process jobs pass command,
+  stdin and nonzero-exit probes over a private in-memory link inside Sandbox.
+- The hash-pinned official runner 2.338.2 reports its version. Its unconfigured
+  listener exits 1 as expected; bundled Node 24 and Windows PowerShell run.
+  This does not establish registration, listening for jobs or job completion.
+- Networking disabled: zero active non-loopback interfaces, no public DNS or
+  HTTPS. The final offline run reached the complete bootstrap/runner/protocol
+  proof in 18.1 s after create began; cleanup including fresh ownership proof
+  and confirmed absence took 2.5 s. These are single-run observations, not a
+  comparison with HCS or a job-ready benchmark.
+- Networking enabled: public DNS and HTTPS work. Host-to-guest TCP still timed
+  out with a guest-scoped allow rule. A reverse callback to a matching host
+  interface also timed out without host firewall changes. The cause is
+  unresolved; these failures do not establish private-network isolation.
+- The elevated read-only helper identifies a Sandbox native VM whose compute
+  and runtime UUID differs from the CLI session UUID. Its owner/type/state and
+  a guest identity response over the lab's HvSocket service corroborate the
+  exact CLI UUID, prefixed name and initial boot UUID. The tuple is journalled;
+  native discovery refuses missing or ambiguous identity matches.
+- Using that runtime UUID, the ordinary user reaches the private agent while
+  networking remains disabled. The complete `--native-probe` passed framed
+  host-to-guest stdin, runner/runtime smoke, nonzero exit propagation, cancellation
+  followed by a healthy new request, guest-loopback refusal, and reconnection
+  after task End/Run with a new agent generation. Both identity paths passed
+  again before cleanup; the CLI session was confirmed absent afterwards. A
+  separate elevated query also confirmed the recorded native ID absent.
+  No shared service, registry, firewall or VM settings were modified.
+- `--secure-probe` passed the same native command, stdin, exit, cancellation,
+  restart and cleanup checks over mutual TLS 1.3 with zero active guest NICs.
+  Missing/wrong client certificates and plaintext were rejected before protocol
+  admission, with advancing guest rejection counts and healthy authenticated
+  controls. A wrong server pin was refused. Private keys remained in process
+  memory; the elevated helper returned only public native metadata.
+- A verified anonymous thread token could open the raw native socket, but
+  received a remote TLS rejection without a client certificate. The guest's
+  rejection count corroborated that refusal. Reads of the private run record
+  and opens of the manager process with memory-read rights were denied, with
+  ordinary-user positive controls. This is impersonation evidence, not a test
+  of another process's primary user or proof of the kernel's socket DACL.
+- The separate `--discovery-probe` completed without UAC. Both guest KVP views
+  lacked `VirtualMachineId`; SMBIOS and the guest HvSocket `LocalAddress`
+  exposed UUIDs, but both routes returned Winsock 10049 and neither reached
+  the recorded guest. No candidate was treated as native ownership evidence.
+- One elevated session-only metadata broker served two fresh ordinary-user
+  `--secure-probe --broker` launches without per-run UAC. Both passed the full
+  native/TLS, stdin, exit, cancellation, restart, refusal and cleanup predicates
+  with guest networking disabled. No per-run inspection directory was created;
+  both CLI sessions were absent, and the broker endpoint closed after its second
+  successful query. No persistent service, task, registry or account change was
+  made. Broker dispatch/identity, frame bounds, replay and fake-endpoint refusal
+  have test coverage. A real, unelevated pipe fixture passed caller-SID
+  identification, anonymous denial, and ordinary queries before/after; its
+  creator additionally has server rights. The separate elevated account audit
+  was canceled at UAC. Durable installation is a documented proposal only.
+- Successful lab launches were stopped by their recorded CLI ID after a fresh
+  guest/boot challenge, and absence was confirmed. Cleanup failures retain
+  records. No unrelated guest was stopped.
+- A read-only fresh-Sandbox baseline (guest Windows build 26100) observed
+  Defender's service and real-time protection off, Tamper Protection off,
+  Search stopped, and SysMain/Windows Update running. No guest or host policy
+  was changed. MSVC, MSBuild, Windows SDK, PowerShell 7, Git, 7-Zip, CMake, Ninja,
+  Python, Node on PATH, .NET SDK and LLVM were not found by the fixed probes;
+  the separately staged runner's Node was present. This does not inventory the
+  running production image. The lab now reserves 12 GiB free physical memory
+  beyond its 4-GiB guest by default; this is a sample-based development guard,
+  not shared-provider resource accounting.
+
+The existing VM-host service now has an opt-in `sandbox_accounts` discovery
+capability and a Sandbox-only configuration with no HCS images. Fixtures cover
+cross-capability denial, unchanged HCS ownership, sanitized metadata/errors and
+service permissions excluding stop for discovery-only accounts. The protected
+installed service, production configuration and other HCS worktree are unchanged;
+shared-service deployment still requires live validation. Owner-filtered
+enumeration passed two complete secure launches through the temporary broker.
+
+The Sandbox lab now supports opt-in pinned PowerShell 7.6.9, MinGit
+2.56.0.windows.4, CMake 4.4.4 and Ninja 1.13.2 through a separate verified
+host payload cache and offline guest extraction. Live probes verified versions,
+PowerShell execution, Git repository creation and a compiler-free CMake/Ninja
+configure/build, plus agent-child PATH and executable versions before/after
+agent restart over mutual TLS. Two fresh four-tool secure launches used one
+temporary broker elevation, passed cancellation/refusal/ownership/cleanup
+checks, and reached bootstrap in 24.103 and 24.115 s. Cached host acquisition,
+rehashing and staging took 383 and 387 ms, measured separately. The full-archive
+guest tool steps took about 8.4 s. These are trusted smoke observations, not
+GitHub job readiness or compiler/SDK benchmarks. The subsequent CMake CLI
+extraction optimization omits HTML docs and the GUI; it has unit coverage but
+has not been timed live. The catalog is not wired into the HCS image builder.
+
+A setup-only MSVC/SDK layout probe verifies the pinned Microsoft bootstrapper
+signature and runs it only inside its own networked Sandbox. Two attempts
+failed with CLR exit `0xe0434352`; fixed-category diagnostics found an I/O
+exception on the local-guest-path retry. No complete layout, offline install
+or C++ compile is validated. Raw setup logs were not copied to the host; the
+new bounded method-name diagnostics are not yet validated live. Both guests
+were stopped with ownership/absence proof. The resource guard also refused an
+attempt before launch. Further live testing requires available host headroom;
+the reserve was not reduced and no host installer or policy change was made.
+
+Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
+RDP-session predicates, XML escaping/device defaults and real TLS handshakes
+with missing/wrong client certificates and a wrong server pin. The actual
+secured listener's admission gate has positive and negative stream tests;
+startup reports must match the recorded guest boot, session, generation and
+certificate pin. They do not establish a TCP channel. Native transport and corroborated ownership now have
+live evidence. Ordinary HCS discovery still requires elevation; ordinary
+HvSocket communication does not. An unregistered guest-to-host HvSocket
+callback was refused with Winsock 10061 even though the ordinary host could
+bind temporary wildcard/child listeners. No global service registration was
+attempted, and the reason for that refusal is unverified.
+The Sandbox, discovery, HCS and VM-host tests, repository-wide vet and lint
+pass. The full non-live suite has two Crosvm native-job fixture failures:
+their job names already exist, so creation refuses adoption. Those objects
+were not stopped or cleaned up; their origin is unverified. Race checking was
+unavailable with the host's cgo-disabled toolchain.
+
+Open: deployment of shared-service discovery and its LocalSystem/reboot
+lifecycle, other-primary-account access
+(including Sandbox CLI/server management), effective settings, host-enforced
+public-only egress, real disposable runner registration/completion and
+cancellation, crash/reboot recovery, resource
+budgeting and GPU/desktop workload validation. See [sandbox.md](sandbox.md) for
+the repeatable lab and its limits.
+
 ## Windows: direct HCS (Windows guests)
 
 Two runtimes exist. Production Windows CI runs the previous one (App

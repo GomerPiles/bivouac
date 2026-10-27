@@ -29,6 +29,10 @@ cutover after the relevant live validation. Remaining isolation gates still appl
 
 ## Windows development boundary
 
+The isolated Windows Sandbox spike has separate procedures in
+[`sandbox.md`](sandbox.md). It uses no controller home or GitHub credentials;
+do not switch production providers or drain production CI to run that lab.
+
 Windows providers remain experimental; do not point them at existing production
 VMs. Use a separate checkout and `BIVOUAC_HOME` for disposable validation.
 `version` and native foundation tests need no GitHub credentials or VM launch.

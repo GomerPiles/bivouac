@@ -9,8 +9,11 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/GomerPiles/bivouac/internal/sandboxdiscovery"
 )
 
 // PipeName is the VM host's only endpoint. Its DACL admits SYSTEM,
@@ -54,11 +57,12 @@ const (
 )
 
 type Response struct {
-	Code   string      `json:"code,omitempty"`
-	Error  string      `json:"error,omitempty"`
-	Guest  *GuestInfo  `json:"guest,omitempty"`
-	Guests []GuestInfo `json:"guests,omitempty"`
-	Info   *Info       `json:"info,omitempty"`
+	Code              string                       `json:"code,omitempty"`
+	Error             string                       `json:"error,omitempty"`
+	Guest             *GuestInfo                   `json:"guest,omitempty"`
+	Guests            []GuestInfo                  `json:"guests,omitempty"`
+	Info              *Info                        `json:"info,omitempty"`
+	SandboxCandidates []sandboxdiscovery.Candidate `json:"sandbox_candidates,omitempty"`
 }
 
 // GuestInfo is a guest as its owner sees it. State is running, stopped or absent.
@@ -108,28 +112,38 @@ const (
 // Config is the VM host's administrator-protected configuration. Every value
 // bounds what unprivileged callers can ask for.
 type Config struct {
-	Root         string            `json:"root"`
-	Controller   string            `json:"controller"`
-	Accounts     []string          `json:"accounts"`
-	Images       map[string]string `json:"images"`
-	MaxInstances int               `json:"max_instances"`
-	MaxCPU       uint32            `json:"max_cpu"`
-	MaxMemoryMB  uint64            `json:"max_memory_mb"`
+	Root            string            `json:"root"`
+	Controller      string            `json:"controller"`
+	Accounts        []string          `json:"accounts"`
+	SandboxAccounts []string          `json:"sandbox_accounts,omitempty"`
+	Images          map[string]string `json:"images"`
+	MaxInstances    int               `json:"max_instances"`
+	MaxCPU          uint32            `json:"max_cpu"`
+	MaxMemoryMB     uint64            `json:"max_memory_mb"`
 }
 
 var imageName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 func (c Config) Validate() error {
-	if !localAbsolute(c.Root) || !controllerPattern.MatchString(c.Controller) {
+	if !localAbsolute(c.Root) {
 		return errors.New("VM host config needs a local absolute root and a controller identity")
 	}
-	if len(c.Accounts) == 0 || len(c.Accounts) > 8 {
+	if len(c.Accounts) > 8 || len(c.SandboxAccounts) > 8 || len(c.Accounts)+len(c.SandboxAccounts) == 0 {
 		return errors.New("VM host config needs 1-8 accounts")
 	}
-	for _, sid := range c.Accounts {
+	for _, sid := range c.PipeAccounts() {
 		if !sidPattern.MatchString(sid) {
 			return errors.New("VM host accounts must be SID strings")
 		}
+	}
+	if !c.HCSEnabled() {
+		if c.Controller != "" || len(c.Images) != 0 || c.MaxInstances != 0 || c.MaxCPU != 0 || c.MaxMemoryMB != 0 {
+			return errors.New("sandbox-only host configuration cannot include HCS images or limits")
+		}
+		return nil
+	}
+	if !controllerPattern.MatchString(c.Controller) {
+		return errors.New("HCS controller identity required")
 	}
 	if len(c.Images) == 0 || len(c.Images) > 16 {
 		return errors.New("VM host config needs 1-16 images")
@@ -143,6 +157,18 @@ func (c Config) Validate() error {
 		return errors.New("VM host limits: 1-16 instances, 1-256 CPUs, 1024-1048576 MiB")
 	}
 	return nil
+}
+
+func (c Config) HCSEnabled() bool { return len(c.Accounts) > 0 }
+
+func (c Config) PipeAccounts() []string {
+	accounts := slices.Clone(c.Accounts)
+	for _, sid := range c.SandboxAccounts {
+		if !slices.Contains(accounts, sid) {
+			accounts = append(accounts, sid)
+		}
+	}
+	return accounts
 }
 
 // DecodeConfig reads one bounded JSON object with no unknown fields.

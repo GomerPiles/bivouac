@@ -210,6 +210,41 @@ func (a *API) Open(ctx context.Context, id string) (*System, error) {
 	return &System{api: a, handle: handle}, nil
 }
 
+// EnumerateOwner reads basic properties for one fixed owner. It opens no VM
+// handle and never exposes the native result/error document to diagnostics.
+func (a *API) EnumerateOwner(ctx context.Context, owner string) ([]Properties, error) {
+	if owner == "" || len(owner) > 64 {
+		return nil, errors.New("HCS enumeration owner required")
+	}
+	data, err := json.Marshal(struct {
+		Owners []string `json:"Owners"`
+	}{[]string{owner}})
+	if err != nil {
+		return nil, errors.New("HCS enumeration query unavailable")
+	}
+	query, err := windows.UTF16PtrFromString(string(data))
+	if err != nil {
+		return nil, errors.New("HCS enumeration query invalid")
+	}
+	enumerate := windows.NewLazySystemDLL("computecore.dll").NewProc("HcsEnumerateComputeSystems")
+	if enumerate.Find() != nil {
+		return nil, errors.New("HCS enumeration unavailable")
+	}
+	data, err = a.operation(ctx, "HcsEnumerateComputeSystems", func(operation uintptr) uintptr {
+		// #nosec G103 -- Fixed owner-filtered query and owned HCS operation.
+		code, _, _ := enumerate.Call(uintptr(unsafe.Pointer(query)), operation)
+		return code
+	})
+	if err != nil {
+		return nil, err
+	}
+	var properties []Properties
+	if json.Unmarshal(data, &properties) != nil || properties == nil || len(properties) > 64 {
+		return nil, errors.New("HCS enumeration result refused")
+	}
+	return properties, nil
+}
+
 // Properties uses the schema's default query, which returns identity and
 // state. "Basic" is a service property selector, not a compute-system query.
 func (s *System) Properties(ctx context.Context) (Properties, error) {
