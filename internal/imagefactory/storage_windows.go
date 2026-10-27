@@ -549,3 +549,21 @@ func waitAbsent(ctx context.Context, api *hcs.API, name string) error {
 		}
 	}
 }
+
+// Only the Windows factory encodes the driver plan and checks task facts.
+func encodeDriverPlan(drivers []Driver) ([]byte, error) {
+	type tree struct {
+		Name        string            `json:"name"`
+		Files       map[string]string `json:"files"`
+		Directories []string          `json:"directories"`
+	}
+	plan := make([]tree, 0, len(drivers))
+	for _, driver := range drivers {
+		plan = append(plan, tree{driver.Name, driver.Files, driver.Directories})
+	}
+	return json.Marshal(plan)
+}
+
+func (m Manifest) tasksValid() bool {
+	return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() && m.AutologonAccountMatches
+}
