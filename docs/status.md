@@ -149,9 +149,11 @@ public-DNS/SSH and VZ DHCP profiles. Contract tests cover profile binding,
 DNS reports, helper pins and sanitation receipts; Linux-only behavioral tests
 cover persisted boot/profile validation, native listener status/cancellation
 and SSH unit selection. Hosted Ubuntu CI runs those tests. Local macOS checks
-cannot execute Linux-only tests. Rootless Linux live validation and the Linux-on-vz
-cache adapter remain open; see [operations](operations.md) for current cache
-availability. The shared runtime has no new live guest evidence.
+cannot execute Linux-only tests. Linux-on-vz cache attachment is implemented;
+offline tests cover optional sudo, setup/cleanup refusal, endpoint authentication,
+CRL access, revocation, uncertain deletion and shared guest environment outage
+fallback. Live cache transfers and the rootless Linux gates remain open; the
+shared runtime has no new live guest evidence.
 
 ## Windows host controls
 

@@ -24,8 +24,12 @@ func Preload() []byte { return []byte(preload) }
 const guestConfigFile = "cache-config.json"
 
 // PrepareGuest is called only by a provider's fixed, identity-checked guest
-// helper. Capabilities arrive over SSH stdin, never via host staging files.
+// helper. Capabilities arrive over the owned transport's stdin, never host staging files.
 func PrepareGuest(ctx context.Context, dir string, data []byte) error {
+	return prepareGuest(ctx, dir, data, guestTrust)
+}
+
+func prepareGuest(ctx context.Context, dir string, data []byte, trust func(context.Context, string) ([]byte, error)) error {
 	var b Bootstrap
 	if len(data) > 32<<10 || json.Unmarshal(data, &b) != nil {
 		return errors.New("invalid bounded guest cache bootstrap")
@@ -50,7 +54,7 @@ func PrepareGuest(ctx context.Context, dir string, data []byte) error {
 		}
 	}
 	if b.ReleaseProxy {
-		roots, err := guestTrust(ctx, filepath.Join(dir, "cache-ca.pem"))
+		roots, err := trust(ctx, filepath.Join(dir, "cache-ca.pem"))
 		if err != nil {
 			return err
 		}
@@ -105,7 +109,13 @@ func GuestEnvironment(dir string) ([]string, func(), error) {
 	endpoint := "http://" + listener.Addr().String()
 	server := &http.Server{Handler: proxy, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 32 << 10, ErrorLog: log.New(io.Discard, "", 0)}
 	go func() { _ = server.Serve(listener) }()
-	values = append(values, "http_proxy="+endpoint, "https_proxy="+endpoint, "HTTP_PROXY="+endpoint, "HTTPS_PROXY="+endpoint, "no_proxy=127.0.0.1,localhost", "NO_PROXY=127.0.0.1,localhost",
+	bypass := "127.0.0.1,localhost"
+	for _, host := range proxy.bypassHosts {
+		if host != "127.0.0.1" && host != "localhost" {
+			bypass += "," + host
+		}
+	}
+	values = append(values, "http_proxy="+endpoint, "https_proxy="+endpoint, "HTTP_PROXY="+endpoint, "HTTPS_PROXY="+endpoint, "no_proxy="+bypass, "NO_PROXY="+bypass,
 		"SSL_CERT_FILE="+filepath.Join(dir, "cache-roots.pem"), "CURL_CA_BUNDLE="+filepath.Join(dir, "cache-roots.pem"), "GIT_SSL_CAINFO="+filepath.Join(dir, "cache-roots.pem"), "NODE_EXTRA_CA_CERTS="+filepath.Join(dir, "cache-ca.pem"))
 	return values, func() { _ = server.Close(); proxy.Close() }, nil
 }

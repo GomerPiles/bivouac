@@ -520,9 +520,10 @@ memory_gb = 4
 
 Omit macOS slot, display, bootstrap-share and companion-engine settings. Linux
 uses DHCP virtual DNS without guest rewrites; helper hash mismatches require a
-rebuilt baseline. Linux-on-vz cache attachment is disabled until its guest cache
-adapter is available; `cache.enabled` can still serve Darwin providers, while
-Linux jobs use ordinary public downloads.
+rebuilt baseline. Linux uses the same optional host cache endpoint as Darwin;
+without recorded guest sudo, archive caching remains enabled and release-proxy
+trust is omitted. Setup failure revokes the grant and requires confirmed adapter
+removal before JIT can fall back to ordinary public downloads.
 
 For explicit live validation, use an isolated `BIVOUAC_HOME`, import/copy only a
 validation baseline, reserve CPU/memory, and set `BIVOUAC_EXE`,
@@ -847,6 +848,8 @@ controller), rather than Apple's NAT. Endpoint-security and network-filter
 software must allow the required public DNS/HTTPS traffic for that process.
 Bivouac does not reconfigure those tools or create a host/LAN exception.
 
+Before deploying, drain existing vz records (markers require the exact provider field) and rebuild Crosvm prepared images (their marker now carries the execution profile).
+
 For a later owner-controlled rollout, finish old NAT/Softnet/unsandboxed-rootless
 jobs with the
 installed binary and confirm empty records/registrations first. The new
@@ -859,7 +862,7 @@ and an owner-approved migration plan are complete.
 
 ## Optional transparent caching
 
-Caching is disabled by default. Isolated macOS runners use guest-loopback HTTP
+Caching is disabled by default. Darwin and Linux runners on macOS use guest-loopback HTTP
 through a fixed cache-only virtual endpoint, with TLS and per-guest capabilities.
 VSOCK remains the port-announcement/lifetime transport; it carries no cache payloads:
 

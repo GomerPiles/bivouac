@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/linuxguest"
@@ -147,6 +149,9 @@ func TestRealLinuxGuest(t *testing.T) {
 				t.Fatal(err)
 			}
 			validateLinuxNetwork(t, ctx, p, name)
+			if os.Getenv("BIVOUAC_VZ_LINUX_CACHE") == "1" {
+				validateLinuxCache(t, ctx, p, name, layout.Cache)
+			}
 			containers, err := p.output(ctx, name, []string{"docker", "ps", "--all", "--quiet"}, nil)
 			if err != nil || len(strings.TrimSpace(string(containers))) != 0 {
 				t.Fatal("container state survived from another clone", err)
@@ -265,5 +270,70 @@ else: connection.close();raise AssertionError('IPv6 uplink reachable')
 	if conn, err := listener.Accept(); err == nil {
 		_ = conn.Close()
 		t.Fatal("guest reached a blocked host listener")
+	}
+}
+
+// This gate uses a private cache service in the already isolated home. Bootstrap
+// capabilities remain guest files/stdin; no credential is emitted by the probes.
+func validateLinuxCache(t *testing.T, ctx context.Context, p *Provider, name, directory string) {
+	t.Helper()
+	service, err := cache.Start(directory, "127.0.0.1:0", "127.0.0.1", 1<<30, 64<<20, time.Hour, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	service.EnableReleaseProxy()
+	p.SetCache(service)
+	if err := p.installCache(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	guest, err := p.guestContract(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const endpointProbe = `import json,ssl,sys,urllib.request
+from pathlib import Path
+b=json.loads(Path('/tmp/bivouac-runner/cache-config.json').read_text())
+assert b['release_proxy']==(sys.argv[1]=='true')
+assert b['revocation_url']=='http://192.0.2.1:7444/ca.crl'
+client=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=ssl.create_default_context(cadata=b['ca'])))
+request=urllib.request.Request(b['url']+'/metrics',headers={'Authorization':'Bearer '+b['token']})
+with client.open(request,timeout=3) as response: assert response.status==200
+with client.open(b['revocation_url'],timeout=3) as response: assert response.status==200 and response.read(1)
+`
+	if _, err := p.output(ctx, name, []string{"python3", "-c", endpointProbe, strconv.FormatBool(guest.Sudo)}, nil); err != nil {
+		t.Fatal("Linux guest cache endpoint/CRL gate failed", err)
+	}
+	var proxy io.Closer
+	if guest.Sudo {
+		proxy, err = p.rt.Duplex(ctx, name, []string{linuxguest.RuntimeHelper, "cache", "proxy", "/tmp/bivouac-runner/cache-config.json", "/tmp/bivouac-runner/proxy.env"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = proxy.Close() }()
+	}
+	const downloadProbe = `import ssl,time,urllib.request
+from pathlib import Path
+p=Path('/tmp/bivouac-runner/proxy.env')
+end=time.monotonic()+5
+while not p.exists() and time.monotonic()<end: time.sleep(0.05)
+proxy=p.read_text().splitlines()[0]
+client=urllib.request.build_opener(urllib.request.ProxyHandler({'https':proxy}),urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile='/tmp/bivouac-runner/cache-roots.pem')))
+with client.open('https://example.com/',timeout=20) as response: assert response.status==200 and response.read(1)
+`
+	if guest.Sudo {
+		if _, err := p.output(ctx, name, []string{"python3", "-c", downloadProbe}, nil); err != nil {
+			t.Fatal("Linux release bridge gate failed", err)
+		}
+	}
+	service.Close() // Only this fixture's service; exercise ordinary public fallback.
+	if guest.Sudo {
+		if _, err := p.output(ctx, name, []string{"python3", "-c", downloadProbe}, nil); err != nil {
+			t.Fatal("Linux cache outage fallback gate failed", err)
+		}
+		_ = proxy.Close()
+	}
+	if _, err := p.linuxCommand(ctx, name, "cache-remove", nil, statusOutputLimit); err != nil {
+		t.Fatal("Linux cache adapter cleanup unconfirmed", err)
 	}
 }

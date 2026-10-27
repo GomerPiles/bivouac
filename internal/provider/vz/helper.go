@@ -8,8 +8,8 @@ import (
 	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
-// installGuestHelper uploads one executable selected for the clone OS, shared
-// by telemetry, caching and the optional container relay. The baseline agent is left untouched.
+// installGuestHelper uploads one Darwin executable shared by telemetry, cache
+// and the optional container relay. Linux reuses its pinned prepared helper.
 func (p *Provider) installGuestHelper(ctx context.Context, name string) error {
 	p.mu.Lock()
 	ready := p.helpers[name]
@@ -65,15 +65,7 @@ func (p *Provider) guestHelperSource(name string) (source, destination string, e
 			return "", "", errors.New("locate guest helper source")
 		}
 		return exe, guestHelper, nil
-	case "linux":
-		if p.runner.OS != m.OS {
-			return "", "", errors.New("guest helper OS selection differs")
-		}
-		if err := p.runner.CheckHelper(); err != nil {
-			return "", "", err
-		}
-		// The neutral runtime requires this fixed basename before preparation.
-		return p.runner.Helper, guestPath, nil
+
 	default:
 		return "", "", errors.New("unsupported VZ guest helper OS")
 	}

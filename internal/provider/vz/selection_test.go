@@ -75,42 +75,32 @@ func TestDarwinReadinessRequiresAquaAfterBaselineLoss(t *testing.T) {
 	}
 }
 
-func TestHelperUploadSelectsCloneOS(t *testing.T) {
-	for _, guestOS := range []string{"darwin", "linux"} {
-		t.Run(guestOS, func(t *testing.T) {
-			p, r := ownedFixture(t)
-			source, destination := "", guestHelper
-			if guestOS == "linux" {
-				source = linuxHelperFixture(t)
-				p.runner = GuestRuntime{OS: guestOS, Helper: source}
-				linuxRunnerManifest(t, p.vmDir(fixtureName))
-				destination = guestPath
-			} else {
-				var err error
-				source, err = os.Executable()
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.installGuestHelper(context.Background(), fixtureName); err != nil {
-				t.Fatal(err)
-			}
-			want, err := os.ReadFile(source)
-			if err != nil {
-				t.Fatal(err)
-			}
-			key := "Exec " + fixtureName + " dd of=" + destination + " status=none"
-			if r.stdin[key] != string(want) {
-				t.Fatal("wrong guest executable uploaded")
-			}
-			before := len(r.calls)
-			if err := p.installGuestHelper(context.Background(), fixtureName); err != nil || len(r.calls) != before {
-				t.Fatal("shared helper was recopied", err)
-			}
-		})
+func TestHelperUploadUsesDarwinCloneWithoutBaseline(t *testing.T) {
+	p, r := ownedFixture(t)
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.installGuestHelper(context.Background(), fixtureName); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.stdin["Exec "+fixtureName+" dd of="+guestHelper+" status=none"] != string(want) {
+		t.Fatal("wrong Darwin helper uploaded")
+	}
+	before := len(r.calls)
+	if err := p.installGuestHelper(context.Background(), fixtureName); err != nil || len(r.calls) != before {
+		t.Fatal("shared helper recopied", err)
+	}
+	linuxRunnerManifest(t, p.vmDir(fixtureName))
+	if _, _, err := p.guestHelperSource(fixtureName); err == nil {
+		t.Fatal("Linux guest retained an upload path")
 	}
 }
 

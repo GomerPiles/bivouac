@@ -60,10 +60,6 @@ type Provider struct {
 
 // SetCache attaches an optional portable cache service before this provider runs.
 func (p *Provider) SetCache(service *cache.Service) {
-	// Linux cache attachment remains disabled until its guest adapter is wired.
-	if p.runner.OS == "linux" {
-		return
-	}
 	service.RestrictMacNetwork(p.cfg.Network.DNSServers)
 	p.cache = service
 }
@@ -526,25 +522,12 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 
 func (p *Provider) installCache(ctx context.Context, name string) error {
 	if p.runner.OS == "linux" {
-		return errors.New("linux guest cache is unavailable")
+		return p.installLinuxCache(ctx, name)
 	}
 	if _, err := p.output(ctx, name, []string{"mkdir", "-p", "-m", "0700", guestDirectory}, nil); err != nil {
 		return errors.New("prepare private guest cache directory")
 	}
-	if err := p.runnerIsolation(name); err != nil {
-		return err
-	}
-	stream, err := p.rt.Duplex(context.WithoutCancel(ctx), name, []string{guestHelper, "cache", "endpoint"})
-	if err != nil {
-		return errors.New("open guest cache control stream")
-	}
-	p.cache.Revoke(name)
-	listener, revocation, err := p.rt.CacheListeners(name)
-	if err != nil {
-		_ = stream.Close()
-		return err
-	}
-	bootstrap, err := p.cache.AttachEndpoint(ctx, name, stream, listener, revocation)
+	bootstrap, err := p.attachCacheEndpoint(ctx, name, guestHelper)
 	if err != nil {
 		return err
 	}

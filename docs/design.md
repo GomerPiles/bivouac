@@ -1217,6 +1217,18 @@ to 4096 objects, including fills.
 Interrupted or corrupt objects are discarded. Archives are never
 extracted on the host, and no host directory is shared with a guest.
 
+Darwin and Linux-on-vz share the same endpoint/listener/grant/CRL transport.
+Linux starts the endpoint with its already pinned runtime helper and sends
+bootstrap over the guest agent to `linuxguest` cache setup. The shared guest
+adapter owns preload/proxy/CA environment and listener lifetime. Without the
+manifest's sudo contract, Linux disables only release-proxy trust and retains
+archive caching. Setup failure synchronously revokes the grant, then requires
+successful fixed-helper removal before JIT fallback. Failed removal refuses
+launch. Confirmed deletion/absence revokes; uncertain deletion retains the grant.
+Service/controller loss closes transport and leaves public fallback through
+mandatory isolation. Virtual CRL traffic bypasses guest proxy payload slots.
+No second Linux helper is uploaded.
+
 On macOS the service uses literal loopback TLS identity. The provider starts a
 fixed guest helper through its owned VSOCK command channel. It opens a bounded
 guest-loopback TCP listener, publishes its decimal port, and forwards only to

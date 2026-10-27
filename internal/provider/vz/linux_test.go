@@ -444,30 +444,6 @@ func TestRetainedOSLockUsesCloneAndSkipsMissingDirectory(t *testing.T) {
 	}
 }
 
-func TestLinuxCacheRemainsUnattached(t *testing.T) {
-	p, r, spec := linuxProvider(t)
-	bootLinuxFixture(t, p, spec)
-	enableFixtureCache(t, p)
-	if p.cache != nil {
-		t.Fatal("Linux received a host cache service")
-	}
-	if err := p.WaitReady(context.Background(), spec.Name); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.StartRunner(context.Background(), spec.Name, []byte("synthetic-jit")); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.installCache(context.Background(), spec.Name); err == nil {
-		t.Fatal("Linux cache adapter did not fail closed")
-	}
-	for _, call := range r.calls {
-		text := strings.Join(call, " ")
-		if strings.Contains(text, "cache endpoint") || strings.Contains(text, "cache-setup") || strings.Contains(text, "cache-config.json") {
-			t.Fatal("Linux received cache bootstrap")
-		}
-	}
-}
-
 func TestLinuxIsolationAndRecordAdmissionBeforeMutations(t *testing.T) {
 	for _, kind := range []string{"policy", "record"} {
 		t.Run(kind, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/linuxguest"
 	"github.com/GomerPiles/bivouac/internal/provider"
@@ -134,7 +135,7 @@ func (p *Provider) prepareLinux(ctx context.Context, name string) error {
 
 func (p *Provider) linuxCommand(ctx context.Context, name, mode string, input io.Reader, limit int) ([]byte, error) {
 	switch mode {
-	case "seed-jit", "launch", "status", "cancel", "diagnostics":
+	case "seed-jit", "launch", "status", "cancel", "diagnostics", "cache-setup", "cache-remove":
 	default:
 		return nil, errors.New("invalid fixed Linux guest operation")
 	}
@@ -147,6 +148,18 @@ func (p *Provider) linuxCommand(ctx context.Context, name, mode string, input io
 func (p *Provider) startLinuxRunner(ctx context.Context, name string, jit []byte) error {
 	if len(jit) == 0 || len(jit) > 128<<10 {
 		return errors.New("invalid bounded JIT input")
+	}
+	if p.cache != nil {
+		err := p.startupStage(name, "cache_setup", func() error { return p.installLinuxCache(ctx, name) })
+		if err != nil {
+			p.cache.GuestUnavailable(name)
+			p.cache.Revoke(name)
+			// No JIT may follow uncertain adapter removal. Exit success from the
+			// fixed helper confirms removal; it never echoes private bootstrap bytes.
+			if _, err := p.linuxCommand(ctx, name, "cache-remove", nil, statusOutputLimit); err != nil {
+				return errors.New("remove incomplete Linux guest cache adapter")
+			}
+		}
 	}
 	if err := p.startupStage(name, "jit_delivery", func() error {
 		_, err := p.linuxCommand(ctx, name, "seed-jit", bytes.NewReader(jit), statusOutputLimit)
@@ -223,4 +236,36 @@ func (p *Provider) linuxDiagnostics(ctx context.Context, name, dir string) error
 		return err
 	}
 	return diag.ExtractGuestArchive(f.Name(), dir)
+}
+
+func (p *Provider) installLinuxCache(ctx context.Context, name string) error {
+	if err := p.linuxHealthy(ctx, name); err != nil {
+		return err
+	}
+	guest, err := p.guestContract(name)
+	if err != nil {
+		return err
+	}
+	// The runtime helper is the prepared helper pinned at readiness. Adoption
+	// never attaches another endpoint or needs the selected host helper file.
+	bootstrap, err := p.attachCacheEndpoint(ctx, name, linuxguest.RuntimeHelper)
+	if err != nil {
+		return err
+	}
+	defer clear(bootstrap)
+	var settings cache.Bootstrap
+	if json.Unmarshal(bootstrap, &settings) != nil {
+		return errors.New("invalid cache bootstrap")
+	}
+	if settings.ReleaseProxy && !guest.Sudo {
+		settings.ReleaseProxy = false // archive caching requires no guest privilege
+		ordinary, err := json.Marshal(settings)
+		if err != nil {
+			return errors.New("prepare archive-only cache bootstrap")
+		}
+		defer clear(ordinary)
+		bootstrap = ordinary
+	}
+	_, err = p.linuxCommand(ctx, name, "cache-setup", bytes.NewReader(bootstrap), statusOutputLimit)
+	return err
 }
