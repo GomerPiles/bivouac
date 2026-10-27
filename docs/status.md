@@ -178,6 +178,52 @@ The limited login task registered and ran on demand in live validation.
 Real-logon and reboot behavior remain unverified. Native credential-store
 round trips are opt-in and are not part of ordinary local tests.
 
+## Windows: Sandbox spike
+
+The opt-in `cmd/sandbox-lab` executable is based on the PR 29 stack and is not
+registered as a manager provider. Production configuration, VM host services,
+runner labels and the HCS worktree are unchanged by this spike. No GitHub
+credentials, runner registration or JIT configurations were used.
+
+Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
+
+- Caller-selected Sandbox IDs, desktop connection, fixed-command execution,
+  read-only bootstrap and isolated writable reports work.
+- The guest is an elevated WDAGUtilityAccount in active RDP session 1 on the
+  Default desktop; the active-console API returns no session. The stock HCS
+  agent's console refusal is expected; its checks remain unchanged.
+- The shared guest-agent framing and Windows process jobs pass command,
+  stdin and nonzero-exit probes over a private in-memory link inside Sandbox.
+- The hash-pinned official runner 2.338.2 reports its version. Its unconfigured
+  listener exits 1 as expected; bundled Node 24 and Windows PowerShell run.
+  This does not establish registration, listening for jobs or job completion.
+- Networking disabled: zero active non-loopback interfaces, no public DNS or
+  HTTPS. The final offline run reached the complete bootstrap/runner/protocol
+  proof in 18.1 s after create began; cleanup including fresh ownership proof
+  and confirmed absence took 2.5 s. These are single-run observations, not a
+  comparison with HCS or a job-ready benchmark.
+- Networking enabled: public DNS and HTTPS work. Host-to-guest TCP still timed
+  out with a guest-scoped allow rule. A reverse callback to a matching host
+  interface also timed out without host firewall changes. The cause is
+  unresolved; these failures do not establish private-network isolation.
+- Successful lab launches were stopped by their recorded CLI ID after a fresh
+  guest/boot challenge, and absence was confirmed. Cleanup failures retain
+  records. No unrelated guest was stopped.
+
+Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
+RDP-session predicates, XML escaping/device defaults and real TLS handshakes
+with missing/wrong client certificates and a wrong server pin. They do not
+establish a working host-to-Sandbox control channel. Ordinary HCS access
+returned access denied; native elevated inspection was not completed.
+The Windows host build, full non-live test suite, vet and repository-wide lint
+pass. Race checking was unavailable with the host's cgo-disabled toolchain.
+
+Open: native ownership/runtime correlation and effective settings, a private
+host/guest transport, host-enforced public-only egress, real disposable runner
+registration/completion and cancellation, crash/reboot recovery, resource
+budgeting and GPU/desktop workload validation. See [sandbox.md](sandbox.md) for
+the repeatable lab and its limits.
+
 ## Windows: direct HCS (Windows guests)
 
 Two runtimes exist. Production Windows CI runs the previous one (App

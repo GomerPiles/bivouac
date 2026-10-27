@@ -768,6 +768,55 @@ limited to the documented 2,560 bytes. Oversized keys fail rather than being
 truncated, split, or written to disk. Cancellation is checked before synchronous
 native dispatch; installation must use the same user as the credential owner.
 
+### Windows Sandbox experiment
+
+`cmd/sandbox-lab` is a separate opt-in research executable, not a configured
+provider. It never reads controller configuration or credentials, registers a
+runner, changes CI mode, or calls the VM host service. Its default run requests
+one 4 GiB Sandbox with networking, vGPU and device redirection disabled. Only
+fresh private bootstrap and public-report directories are mapped. The writable
+report share is a lab exception, not an approved job-storage transport.
+
+Sandbox supplies an elevated active RDP desktop with no active console session
+on the tested host. The lab therefore uses its own explicit
+WDAGUtilityAccount/SID, elevation, active-session and WinSta0/Default checks.
+HCS agent and runner console checks are unchanged. The existing guest-agent
+framing and Windows command jobs are exercised over a private in-memory link
+inside the guest, independently of whether a host transport works. Official
+runner binaries are hash-pinned, extracted into a fresh guest directory and
+smoke-tested without registration or JIT input.
+
+The lab journals a prefixed name and caller-selected Sandbox UUID before
+launch, requires the matching CLI start receipt, then binds a guest-generated
+boot UUID using a fresh public challenge executed against that exact CLI ID.
+Stop requires the receipt, current CLI inventory and that fresh guest proof;
+absence is confirmed afterwards. An occupied slot is refused. Missing or
+contradictory proof retains state rather than guessing. State uses flushed
+atomic replacement outside the mapped directory; public challenges use closed
+files plus explicit exec because mapped-folder handles can prevent rename.
+This is sufficient for the lab's own launch/cleanup path, not native provider
+ownership, daemon adoption or recovery after an ambiguous launch. There is no
+automatic recovery or foreign-instance sweep.
+
+Explicit network probes run trusted code only. Direct and reverse TCP variants
+reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
+pins on both sides. Private keys remain in process memory; only public
+certificates/fingerprints enter bootstrap and reports. The direct variant adds
+one program/port-specific inbound rule inside the disposable guest. The reverse
+variant opens a temporary host listener, accepts only the recorded guest IP,
+and adds no host firewall rule. These are diagnostic transports, not approved
+job networking. Their authentication has loopback test coverage; live
+host/guest reachability remains unresolved on the tested host.
+
+Native HCS ownership/runtime correlation, private-network and host denial,
+effective resource/security settings, reboot/crash recovery, GUI/GPU behavior,
+and real runner registration/completion remain gates. The CLI's network toggle
+alone cannot establish bivouac's public-only egress policy. Guest firewall
+rules cannot enforce that policy against an administrator job. A future
+provider must prove a host-enforced boundary and a private control channel
+before receiving JIT material; the lab intentionally provides neither a JIT
+input nor a manager registration path. See [sandbox.md](sandbox.md).
+
 ### Windows guests through HCS
 
 Bivouac drives the Host Compute Service (`internal/hcs`) directly.
