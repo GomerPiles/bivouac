@@ -138,6 +138,8 @@ func (a *pipeAgent) dial(ctx context.Context) (net.Conn, error) {
 				out = []byte(`{"ready":true,"session":1,"desktop":"Default"}`)
 			case "clock":
 				out = []byte(hostNow.Format(time.RFC3339Nano))
+			case "gpu":
+				out = []byte(`{"hardware_d3d12":true}`)
 			case "status":
 				out = []byte(`{"State":"listening"}`)
 			}
@@ -184,6 +186,7 @@ func TestAgentReadinessReceivesExactFilesInOrder(t *testing.T) {
 		nil, nil, nil,
 		{guestIncomingHelper, "guest", "windows", "preflight"},
 		{guestIncomingHelper, "guest", "windows", "prepare"},
+		guestCommand("gpu"),
 		guestCommand("clock"),
 	}
 	if len(a.requests) != len(want) {
@@ -206,7 +209,7 @@ func TestAgentReadinessReceivesExactFilesInOrder(t *testing.T) {
 	if string(a.inputs[2]) != "helper" || !bytes.Equal(a.inputs[3], archive) {
 		t.Fatal("file bytes differ")
 	}
-	if len(a.inputs[6]) == 0 || a.dialBound <= 0 || a.dialBound > 15*time.Second {
+	if len(a.inputs[7]) == 0 || a.dialBound <= 0 || a.dialBound > 15*time.Second {
 		t.Fatal("proof deadline or clock stdin missing")
 	}
 	for _, key := range []string{"agent_dial_ms", "agent_proof_ms", "delivery_config_ms", "delivery_helper_ms", "delivery_runner_archive_ms", "preflight_ms", "prepare_ms", "clock_sync_ms"} {

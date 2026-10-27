@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/driverimage"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/perf"
@@ -74,6 +75,15 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifes
 	}
 	if err = checkFinalInputs(c); err != nil {
 		return Manifest{}, err
+	}
+	if len(c.Drivers) == 0 {
+		c.Drivers, err = driverimage.Discover()
+		if err != nil {
+			return Manifest{}, fmt.Errorf("active GPU driver discovery failed: %w", err)
+		}
+		if err = c.Validate(); err != nil {
+			return Manifest{}, err
+		}
 	}
 	api, err := hcs.Load()
 	if err != nil {

@@ -265,7 +265,8 @@ the VM host service, its journal or CI mode.
 
 Images contain bivouac's guest agent and use HCS synthetic video with GPU-PV.
 Specialize removes legacy components and MSI server installations; FirstLogon removes the Windows OpenSSH server capability through servicing. The inbox client and ssh-agent remain intact.
-Runner ZIP, GPU driver directories and render probe remain explicit pinned inputs.
+Runner ZIP and render probe remain explicit pinned inputs. GPU driver directories
+are discovered from the installed host display drivers when `drivers` is omitted.
 Rollback uses the previous manager binary, VM host service binary and image together.
 
 Pinned input files (ISO, runner ZIP, render probe and factory executable) do
@@ -431,14 +432,16 @@ about final installed WinRE state. Effective firmware trust must be validated on
      inbox client and ssh-agent. A required reboot refuses publication for
      operator review. Verification requires no sshd service/executable, server
      state or authorization files.
-   - `drivers` names one to eight host FileRepository directories. A bounded
+   - Optional `drivers` names one to eight host FileRepository directories; omit
+     it to discover the currently installed host display packages. A bounded
      staged snapshot is installed offline under guest HostDriverStore,
      preserving nesting and empty directories. Source and destination hashes
      must match the exact inventory; a temporary sibling is renamed only when
      complete, with guest-parent ownership and inherited ACLs. Existing target
      trees refuse the build. FirstLogon restarts only `vrd.inf` devices at
      error 43. D3D11/present/readback is the gate; GL/Vulkan/NVIDIA runtime
-     provisioning and other APIs are not covered. Rebuild after host driver changes.
+     provisioning and other APIs are not covered. For automatic runtime refresh,
+     enable the derived-image cache below.
    - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
      `timeout_seconds` (default 900) bounds the guest's run, not the copy.
    - `edition_id` defaults to `Professional`; `image_index` optionally overrides
@@ -548,6 +551,37 @@ The SWM wildcard remains a live gate. An optical ISO volume has no ordinary Stor
 partition access-path interface; a folder mount would require another native
 mount API and lifetime record, so this round keeps the volume path.
 
+## Automatic Windows GPU image refresh
+
+Set `"gpu_driver_cache": true` in the administrator-protected `vmhost.json`.
+Keep `images.windows` pointed at the prepared factory base and retain its adjacent
+manifest. The base's guest identity and Windows contract remain unchanged across
+driver generations. Enable this with the empty-service cutover procedure above;
+it is not a reason to restart a service that has active guests.
+
+Before each GPU guest, the VM host discovers the installed display packages and
+selects a content-addressed derived VHDX under `<root>\gpu-images`. A miss prepares
+and verifies an offline differencing image; a hit verifies and reuses it. The
+base is hashed and pinned once per service lifetime, not once per job. Driver
+content is checked on every creation, including same-size replacements. New
+host drivers therefore regenerate only the derived image on the next creation.
+No host driver directory is shared with runner guests. A hardware D3D12 device
+probe must pass before runner registration (`gpu_proof` in readiness timings).
+This proves device creation, not rendered pixels or non-DirectX runtimes.
+
+Published generations are immutable and retained for existing guests. Failed
+workspaces remain private, with bounded numeric `failure.json` facts when the
+offline script could report them. Never recursively remove one while its disk
+could be attached. The directory ceiling refuses new entries rather than evicting
+parents; inspect ownership, native attachments and every retained guest's backing
+chain before explicit administrator cleanup. Host driver updates can still reset
+an active GPU workload or break GPU-PV; caching does not isolate running jobs
+from the host driver's lifetime.
+
+Cold preparation requires space for two copies of the bounded driver payload
+plus a 5 GiB reserve. It retains staged payloads with each generation; account
+for these when sizing the cache volume.
+
 ## Direct HCS lab batch
 
 `TestLabBatch` in `internal/vmhost` boots disposable guests from an existing
@@ -581,6 +615,10 @@ ordinary unit checks simulate their command/report sequence. Recovery and timing
 on real Task Scheduler jobs remain unverified until the live run passes.
 Only the agent service is exposed. `agent_reachable` records create-to-agent
 proof alongside existing connection/desktop spans and bounded numeric step markers.
+For a separately authorized cache boot check, set
+`BIVOUAC_LAB_GPU_DRIVER_CACHE=1` only in the lab process. Its private VM host
+then derives the current host-driver parent before the selected cold boots;
+the configured lab base and all normal rendering/cleanup gates remain unchanged.
 
 Every desktop run records topology in the console user's
 interactive session and requires exactly one active primary display plus a

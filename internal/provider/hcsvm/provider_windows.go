@@ -365,6 +365,21 @@ func (p *Provider) ready(ctx context.Context, name string, t *timing) error {
 	if json.Unmarshal(out, &desktop) != nil || !desktop.Ready || desktop.Session == 0 || desktop.Desktop != "Default" {
 		return errors.New("guest interactive desktop readiness was not proven")
 	}
+	if p.opts.GPU {
+		t.begin(stepGPUProof)
+		gpuCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		out, err = s.Run(gpuCtx, guestCommand("gpu"), nil, 4096)
+		cancel()
+		if err != nil {
+			return err
+		}
+		var proof struct {
+			HardwareD3D12 bool `json:"hardware_d3d12"`
+		}
+		if json.Unmarshal(out, &proof) != nil || !proof.HardwareD3D12 {
+			return errors.New("guest hardware D3D12 readiness was not proven")
+		}
+	}
 	t.begin(stepClockSync)
 	return p.syncClock(ctx, s)
 }

@@ -171,6 +171,13 @@ func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 		return err
 	}
 	switch mode {
+	case "gpu":
+		if err := hardwareD3D12(); err != nil {
+			return err
+		}
+		return json.NewEncoder(out).Encode(struct {
+			HardwareD3D12 bool `json:"hardware_d3d12"`
+		}{true})
 	case "start":
 		return guestStart(ctx, cfg)
 	case "stop":

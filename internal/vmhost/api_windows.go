@@ -108,13 +108,16 @@ const (
 // Config is the VM host's administrator-protected configuration. Every value
 // bounds what unprivileged callers can ask for.
 type Config struct {
-	Root         string            `json:"root"`
-	Controller   string            `json:"controller"`
-	Accounts     []string          `json:"accounts"`
-	Images       map[string]string `json:"images"`
-	MaxInstances int               `json:"max_instances"`
-	MaxCPU       uint32            `json:"max_cpu"`
-	MaxMemoryMB  uint64            `json:"max_memory_mb"`
+	// GPUDriverCache derives immutable image parents from the current host GPU
+	// packages before new GPU guests. It never changes an existing guest.
+	GPUDriverCache bool              `json:"gpu_driver_cache,omitempty"`
+	Root           string            `json:"root"`
+	Controller     string            `json:"controller"`
+	Accounts       []string          `json:"accounts"`
+	Images         map[string]string `json:"images"`
+	MaxInstances   int               `json:"max_instances"`
+	MaxCPU         uint32            `json:"max_cpu"`
+	MaxMemoryMB    uint64            `json:"max_memory_mb"`
 }
 
 var imageName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)

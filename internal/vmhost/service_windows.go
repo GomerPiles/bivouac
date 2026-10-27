@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/driverimage"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -49,6 +51,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		return err
 	}
 	defer func() { _ = host.Close() }()
+	if cfg.GPUDriverCache {
+		host.images, err = driverimage.Open(filepath.Join(cfg.Root, "gpu-images"))
+		if err != nil {
+			return err
+		}
+	}
 	// Absence polls and network deletion retry until their context ends, so a
 	// guest or network that never settles must not hold startup forever.
 	recoverCtx, cancelRecover := context.WithTimeout(ctx, 2*time.Minute)
