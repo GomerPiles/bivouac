@@ -443,26 +443,30 @@ func (m *Manager) rawCapacityWith(ctx context.Context, name string, inv *invento
 		if pcfg.VZ != nil {
 			hostLimit = pcfg.VZ.HostVMLimit
 			reserved = pcfg.VZ.ForeignSlots
-			// Apple's limit is per host, not per provider. Guest ownership is
-			// the controller ID, so every vz provider lists every guest of
-			// ours: count active records of all vz providers, plus owned
-			// running guests that have no record yet (orphans). A container
-			// listing reports another provider's guests as foreign; those
-			// are already counted here.
+			// Apple's limit is per host. Count records across vz providers,
+			// plus running orphans, exempting Linux only with clone-manifest
+			// proof. Exact provider ownership lists other providers as foreign;
+			// their recorded guests are already counted here.
 			ours = 0
+			// Only these records are already counted. A native VM with a
+			// record for a removed/unknown provider still counts via inventory.
+			tracked = make(map[string]bool)
 			for _, inst := range guests {
 				if m.o.Config.Providers[inst.Provider].VZ != nil {
-					ours++
+					tracked[inst.Name] = true
+					if !hostLimitExempt(m.o.Providers[inst.Provider], inst.Name) {
+						ours++
+					}
 				}
 			}
 			for _, o := range inv.owned {
-				if o.Running && !tracked[o.Name] {
+				if o.Running && !tracked[o.Name] && !hostLimitExempt(p, o.Name) {
 					ours++
 				}
 			}
 		}
 		for _, f := range inv.foreign {
-			if f.Running && !tracked[f.Name] {
+			if f.Running && !f.HostLimitExempt && !tracked[f.Name] {
 				foreign++
 			}
 		}
@@ -1137,6 +1141,13 @@ var ErrRefused = errors.New("configuration refused")
 func (m *Manager) Reconcile(ctx context.Context) error {
 	records := m.o.Store.List()
 	for _, inst := range records {
+		if inst.Phase != state.PhaseDeregistering {
+			if p, ok := m.o.Providers[inst.Provider].(interface{ ValidateRetained(string) error }); ok {
+				if err := p.ValidateRetained(inst.Name); err != nil {
+					return fmt.Errorf("%w: %w", ErrRefused, err)
+				}
+			}
+		}
 		pc := m.o.Config.Providers[inst.Provider]
 		if pc.VZ != nil && ((pc.VZ.Containers != nil) != (inst.EngineName != "")) {
 			return fmt.Errorf("%w: cannot change container topology with retained records; finish cleanup first", ErrRefused)
@@ -1408,4 +1419,10 @@ func (m *Manager) observeJob(inst *state.Instance, job *provider.RunnerJob) {
 	})
 	m.o.Log.Info("runner job started", "instance", inst.ID, "run_id", job.RunID, "repository", job.Repository, "job", job.Name)
 	m.notify()
+}
+
+// A configured Linux provider alone is insufficient: the clone must prove it.
+func hostLimitExempt(p provider.Provider, name string) bool {
+	proof, ok := p.(interface{ HostLimitExempt(string) bool })
+	return ok && proof.HostLimitExempt(name)
 }

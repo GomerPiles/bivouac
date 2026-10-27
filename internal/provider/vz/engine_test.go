@@ -197,7 +197,7 @@ func TestRelayProofAndTopologyDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, _ := NetworkPolicy()
-	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
+	plan := RelayPlan{Provider: p.name, StatePath: p.records.Path(), Store: string(p.store), Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
 	if err := plan.verify(); err != nil {
 		t.Fatal(err)
 	}

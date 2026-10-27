@@ -11,9 +11,8 @@ import (
 )
 
 // GuestRuntime selects the runner guest's runtime, independently of host checks.
-// Current configuration callers select Darwin. Linux configuration and runner
-// operations are added separately; specifying a helper here never opens it at
-// construction or reconciliation time.
+// Configuration selects the guest OS and helper; specifying a helper here
+// never opens it at construction or reconciliation time.
 type GuestRuntime struct {
 	OS     string
 	Helper string // host path to the matching Linux/arm64 executable
@@ -57,6 +56,9 @@ func (g GuestRuntime) CheckHelper() error {
 // directly because they need no official runner directory.
 func CheckRunnerBaseline(store, name, guestOS string) (vm.Manifest, error) {
 	m, err := CheckBaseline(store, name, guestOS)
+	if err == nil && guestOS == "linux" && m.Guest.RunnerDir != "/opt/actions-runner" {
+		return m, errors.New("linux runner baseline requires /opt/actions-runner")
+	}
 	if err == nil && m.Guest.RunnerDir == "" {
 		err = fmt.Errorf("baseline %q records no runner directory; import it with --runner-dir", name)
 	}
@@ -64,8 +66,7 @@ func CheckRunnerBaseline(store, name, guestOS string) (vm.Manifest, error) {
 }
 
 // prepareRunnerGuest uses the retained clone's contract. A Linux guest must
-// never receive the Darwin bootstrap or an Aqua session check. Its neutral
-// runtime preparation is a separate runner-adapter step in the next phase.
+// never receive the Darwin bootstrap or an Aqua session check.
 func (p *Provider) prepareRunnerGuest(ctx context.Context, name string) error {
 	m, err := vm.ReadManifest(p.vmDir(name))
 	if err != nil {
@@ -78,21 +79,8 @@ func (p *Provider) prepareRunnerGuest(ctx context.Context, name string) error {
 		}
 		return p.startupStage(name, "aqua_session_check", func() error { return p.checkSession(ctx, name) })
 	case "linux":
-		return nil
+		return p.prepareLinux(ctx, name)
 	default:
 		return errors.New("unsupported VZ runner guest OS")
 	}
-}
-
-// Until the Linux runner adapter is connected, fail closed instead of invoking
-// the macOS script on a Linux clone. VM status/stop/delete remain OS-independent.
-func (p *Provider) requireDarwinRunner(name string) error {
-	m, err := vm.ReadManifest(p.vmDir(name))
-	if err != nil {
-		return err
-	}
-	if m.OS != "darwin" {
-		return errors.New("linux VZ runner operations are not enabled")
-	}
-	return nil
 }

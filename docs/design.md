@@ -631,12 +631,18 @@ path fits `sun_path` whatever the name.
   (either runner OS), or whose agent protocol differs from this binary's.
   Linux engine images still need no runner directory. Linux runner helper
   admission validates a static ARM64 ELF executable. Provider construction
-  receives an explicit guest OS/helper selection; current configuration callers
-  select Darwin. No Linux runner TOML configuration is enabled yet.
+  receives `vz.guest_os` (`darwin` by default, or `linux`) and `vz.helper` for
+  Linux. Linux requires explicit CPU/memory and prohibits Darwin display/share/
+  slot options and companion engines; its baseline still must be supplied.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
   memory (at least the manifest's minimums), then a rename into place
-  (milliseconds). Then `bivouac.json` with controller and instance IDs.
+  (milliseconds). Then `bivouac.json` with exact provider, controller and
+  instance IDs. Ownership requires the matching provider-name prefix and marker;
+  another provider's clones remain foreign. Linux clones consume no Apple
+  macOS slot only when their validated manifests prove Linux. Unknown/corrupt
+  manifests count conservatively. Reconciliation validates retained clone OS
+  before provider operations; replacing the baseline cannot change that OS.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
   [--input] --rootless-network [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
@@ -667,10 +673,14 @@ path fits `sun_path` whatever the name.
   agent of another protocol version names its own, and readiness fails at
   once. Guest preparation selects from the clone's manifest, independently of
   the current baseline. Darwin copies its bootstrap to `/tmp/bivouac-guest` and
-  requires its `session` mode to report `Aqua`. Linux skips both operations;
-  neutral-runtime preparation and Linux runner operations remain separate work.
-  Until that adapter is connected, Linux JIT/status/cancel/diagnostics refuse
-  rather than executing the Darwin script. VM status/stop/delete are generic.
+  requires its `session` mode to report `Aqua`. Linux checks `Linux/aarch64` and
+  a non-root agent, then verifies the prepared root-owned helper's SHA-256 before
+  executing it. There is no Linux-on-vz upload fallback: a mismatch requires a
+  rebuilt baseline. Preparation uses `linuxguest.VZ`, preserving DHCP DNS.
+  JIT/status/cancel/diagnostics use the shared runtime over the guest agent, with
+  fresh durable ownership and live rootless proof before each operation.
+  Adoption uses the clone and installed runtime helper, without reopening the
+  baseline or host helper. VM status/stop/delete remain generic.
 - Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
   when the cap is exceeded. Errors never include guest output. Ordinary commands
   discard stderr; explicit lab diagnostics capture a bounded, sink-redacted
@@ -698,7 +708,7 @@ path fits `sun_path` whatever the name.
   guest flushes and suits only disposable clones), and
   `nested_virtualization`. There is no raw passthrough. Options are checked
   against the baseline's OS when a guest is created: the framework offers
-  nesting only to Linux guests (today the engine VM, giving its containers
+  nesting only to Linux guests (runners or engine VMs, giving their containers
   `/dev/kvm` inside the VM boundary), never to macOS guests. The daemon and
   `doctor` refuse nesting on a host without it (it needs an M3 or newer chip
   and macOS 15).
@@ -1185,8 +1195,11 @@ no SSH units or SSH host-key sanitation. Its `dns_dhcp` observation records
 that delegation, not proof of public-DNS reuse or live virtual DNS reachability;
 `dns_reused` and `dns_prepared` remain false. Machine identity and random seed
 sanitation are shared. Runtime and prepared helper paths stay unchanged.
-The VZ profile is runtime groundwork; Linux runner admission and transport on
-vz remain separate work.
+The vz Linux adapter uses this profile over the guest agent. JIT is bounded to
+128 KiB, status to 4 KiB, and diagnostic ZIP streams to 32 MiB compressed;
+extraction uses the shared path-checked, redacting sink. Linux runners are
+headless, advertise no GPU/desktop, and require `/opt/actions-runner`. Crosvm's
+SSH runtime, profile and fallback remain unchanged.
 
 ## Optional download caching
 

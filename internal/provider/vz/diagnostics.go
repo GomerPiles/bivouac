@@ -51,8 +51,8 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	if err := p.requireDarwinRunner(name); err != nil {
-		return err
+	if p.runner.OS == "linux" {
+		return p.linuxDiagnostics(ctx, name, dir)
 	}
 	budget := newDiagBudget()
 	var errs []error

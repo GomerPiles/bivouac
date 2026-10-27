@@ -504,6 +504,34 @@ launchd's default low-priority I/O throttling. Install the updated plist during
 offline image preparation and shut down cleanly before importing the image;
 rebuilding the host binary does not update existing baseline LaunchAgents.
 
+**Linux ARM64 runners on vz.** Import a stopped, prepared Tart-format Linux
+baseline with `--runner-dir /opt/actions-runner`. It must contain the matching
+non-root guest agent and a root-owned prepared helper built with the `vz-dhcp`
+profile; baseline preparation tooling follows separately. Configure the provider's
+vz section with:
+
+```toml
+guest_os = "linux"
+helper = "/opt/bivouac/linux-arm64"
+baseline = "ci-linux-arm64"
+cpu = 4
+memory_gb = 4
+```
+
+Omit macOS slot, display, bootstrap-share and companion-engine settings. Linux
+uses DHCP virtual DNS without guest rewrites; helper hash mismatches require a
+rebuilt baseline. Linux-on-vz cache attachment is disabled until its guest cache
+adapter is available; `cache.enabled` can still serve Darwin providers, while
+Linux jobs use ordinary public downloads.
+
+For explicit live validation, use an isolated `BIVOUAC_HOME`, import/copy only a
+validation baseline, reserve CPU/memory, and set `BIVOUAC_EXE`,
+`BIVOUAC_LINUX_HELPER`, `BIVOUAC_VZ_LINUX_BASELINE` and
+`BIVOUAC_VZ_CAPACITY_CONFIRMED=1`. The gated `TestRealLinuxGuest` integration test
+uses two recorded disposable clones and checks virtual DNS, public access, owned
+host-listener denial and privileged-container isolation. It never registers a
+GitHub runner. Tests and cross-builds do not establish these live gates.
+
 **Startup timing.** The daemon writes `startup stage`
 records to its normal redacted log, with provider, guest name, `stage`,
 `duration_ms` and `success`. The stages are:

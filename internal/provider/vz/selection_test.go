@@ -51,47 +51,27 @@ func linuxRunnerManifest(t *testing.T, dir string) {
 	}
 }
 
-func TestGuestSelectionPreservesDarwinAndAdmitsLinuxWithoutInput(t *testing.T) {
-	for _, guestOS := range []string{"darwin", "linux"} {
-		t.Run(guestOS, func(t *testing.T) {
-			r := newRecorder()
-			p := newProvider(t, r)
-			if guestOS == "linux" {
-				p.runner = GuestRuntime{OS: guestOS, Helper: linuxHelperFixture(t)}
-				linuxRunnerManifest(t, p.vmDir("base"))
-			}
-			spec := provider.Spec{Name: "bivouac-fixture-new", Baseline: "base", CPU: 2, MemoryMB: 4096, Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
-			ctx := context.Background()
-			if err := p.Create(ctx, spec); err != nil {
-				t.Fatal(err)
-			}
-			// Neither launch nor readiness consults a disappeared baseline.
-			if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
-				t.Fatal(err)
-			}
-			if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
-				t.Fatal(err)
-			}
-			launch := strings.Join(r.calls[len(r.calls)-1], " ")
-			if !strings.Contains(launch, "rootless-network") || strings.Contains(launch, " input ") != (guestOS == "darwin") {
-				t.Fatal("guest-specific launch changed", launch)
-			}
-			r.session = "Background"
-			err := p.WaitReady(ctx, spec.Name)
-			if (err != nil) != (guestOS == "darwin") {
-				t.Fatal("Aqua requirement not guest-specific", err)
-			}
-			if guestOS == "linux" {
-				if err := p.StartRunner(ctx, spec.Name, []byte("synthetic-private-jit")); err == nil {
-					t.Fatal("unfinished Linux runner adapter accepted JIT")
-				}
-				for key, value := range r.stdin {
-					if strings.Contains(key, "tee "+guestPath) || strings.Contains(value, "synthetic-private-jit") {
-						t.Fatal("Darwin bootstrap or JIT reached Linux guest")
-					}
-				}
-			}
-		})
+func TestDarwinReadinessRequiresAquaAfterBaselineLoss(t *testing.T) {
+	r := newRecorder()
+	p := newProvider(t, r)
+	spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+	ctx := context.Background()
+	if err := p.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	launch := strings.Join(r.calls[len(r.calls)-1], " ")
+	if !strings.Contains(launch, "rootless-network") || !strings.Contains(launch, " input ") {
+		t.Fatal("Darwin launch changed", launch)
+	}
+	r.session = "Background"
+	if err := p.WaitReady(ctx, spec.Name); err == nil {
+		t.Fatal("Darwin readiness skipped Aqua")
 	}
 }
 
@@ -165,7 +145,11 @@ func TestLinuxAdmissionRequiresRunnerContractAndMatchingHelper(t *testing.T) {
 			case "OS-mismatch":
 				writeTestManifest(t, p.vmDir("base"), "darwin")
 			}
-			spec := provider.Spec{Name: "bivouac-fixture-new", Baseline: "base"}
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+			p.records, _ = state.Open(t.TempDir(), func() string { return p.controllerID })
+			if err := p.records.Put(&state.Instance{ID: "new", Name: spec.Name, Provider: p.name, Phase: state.PhaseCreating}); err != nil {
+				t.Fatal(err)
+			}
 			if err := p.Create(context.Background(), spec); err == nil {
 				t.Fatal("invalid baseline/helper admitted")
 			}
@@ -212,12 +196,12 @@ func TestStartupAndRetainedAdoptionIgnoreUnavailableBaseline(t *testing.T) {
 			if err != nil || len(owned) != 1 {
 				t.Fatal("retained clone inventory lost", err)
 			}
-			assertReconcilesRetainedRunner(t, p)
+			assertReconcilesRetainedRunner(t, p, fixtureName)
 			status, err := p.RunnerStatus(context.Background(), fixtureName)
 			if err != nil || status.State != provider.RunnerListening {
 				t.Fatal("retained runner cannot be adopted", err)
 			}
-			spec := provider.Spec{Name: "bivouac-fixture-new", Baseline: "base"}
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base"}
 			if err := p.Create(context.Background(), spec); err == nil {
 				t.Fatal("unavailable baseline admitted a new clone")
 			}
@@ -260,7 +244,7 @@ func TestStartupDoesNotValidateLinuxHelper(t *testing.T) {
 			if err != nil || !status.Exists || !status.Running || !status.Owned {
 				t.Fatal("VM status opened Linux helper", err)
 			}
-			if err := p.Create(ctx, provider.Spec{Name: "bivouac-fixture-new", Baseline: "base"}); err == nil {
+			if err := p.Create(ctx, provider.Spec{Name: "bivouac-macos-new", Baseline: "base"}); err == nil {
 				t.Fatal("new admission ignored helper failure")
 			}
 			if err := p.Stop(ctx, fixtureName, time.Second); err != nil {
@@ -295,7 +279,7 @@ func TestNewDoesNotOpenLinuxAdmissionInputs(t *testing.T) {
 	}
 }
 
-func assertReconcilesRetainedRunner(t *testing.T, p *Provider) {
+func assertReconcilesRetainedRunner(t *testing.T, p *Provider, name string) {
 	t.Helper()
 	cfg, err := config.Parse([]byte(config.Example))
 	if err != nil {
@@ -306,7 +290,7 @@ func assertReconcilesRetainedRunner(t *testing.T, p *Provider) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &state.Instance{ID: "fixture", Provider: p.name, Name: fixtureName, Phase: state.PhaseListening, ScaleSetID: 100, CreatedAt: time.Now()}
+	record := &state.Instance{ID: "fixture", Provider: p.name, Name: name, Phase: state.PhaseListening, ScaleSetID: 100, CreatedAt: time.Now()}
 	if err := store.Put(record); err != nil {
 		t.Fatal(err)
 	}

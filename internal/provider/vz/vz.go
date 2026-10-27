@@ -60,6 +60,10 @@ type Provider struct {
 
 // SetCache attaches an optional portable cache service before this provider runs.
 func (p *Provider) SetCache(service *cache.Service) {
+	// Linux cache attachment remains disabled until its guest adapter is wired.
+	if p.runner.OS == "linux" {
+		return
+	}
 	service.RestrictMacNetwork(p.cfg.Network.DNSServers)
 	p.cache = service
 }
@@ -137,19 +141,22 @@ func (p *Provider) engineMachine() vm.MachineOptions {
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return p.name }
 
-// Capabilities implements provider.Provider. The graphics device is always
-// attached, so the headless guest keeps a display and Metal.
+// Capabilities keeps Darwin display/Metal and Apple slot accounting; Linux
+// runners are headless with no advertised GPU or desktop session.
 func (p *Provider) Capabilities() provider.Capabilities {
+	if p.runner.OS == "linux" {
+		return provider.Capabilities{GPU: provider.GPUNone, DisplayTransport: "none"}
+	}
 	return provider.Capabilities{GPU: provider.GPUParavirtualized, DesktopSession: true, DisplayTransport: "none", HostLimit: p.cfg.HostVMLimit}
 }
 
 func (p *Provider) vmDir(name string) string { return p.store.Dir(name) }
 
 func (p *Provider) checkName(name string) error {
-	if !strings.HasPrefix(name, config.NamePrefix) {
-		return fmt.Errorf("%w: %q lacks the %q prefix", provider.ErrNotOwned, name, config.NamePrefix)
+	if !strings.HasPrefix(name, config.NamePrefix+p.name+"-") {
+		return fmt.Errorf("%w: %q lacks the %q prefix", provider.ErrNotOwned, name, config.NamePrefix+p.name+"-")
 	}
-	if strings.ContainsAny(name, "/\\ \t\n") || name == p.cfg.Baseline {
+	if strings.ContainsAny(name, "/\\ \t\r\n\x00") || name == p.cfg.Baseline {
 		return fmt.Errorf("%w: invalid name %q", provider.ErrNotOwned, name)
 	}
 	return nil
@@ -168,8 +175,11 @@ func (p *Provider) readMeta(name string) (provider.Metadata, bool) {
 }
 
 func (p *Provider) owns(name string) (provider.Metadata, bool) {
+	if err := p.checkName(name); err != nil {
+		return provider.Metadata{}, false
+	}
 	meta, ok := p.readMeta(name)
-	return meta, ok && meta.ControllerID == p.controllerID && strings.HasPrefix(name, config.NamePrefix)
+	return meta, ok && meta.ControllerID == p.controllerID && meta.Provider == p.name && meta.InstanceID != ""
 }
 
 // ownsGuest proves, before every guest operation, that name is a runner VM
@@ -226,6 +236,7 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS stri
 	}); err != nil {
 		return err
 	}
+	spec.Meta.Provider = p.name
 	meta, err := json.Marshal(spec.Meta)
 	if err != nil {
 		return err
@@ -443,7 +454,7 @@ func (p *Provider) checkSession(ctx context.Context, name string) error {
 }
 
 // StartRunner implements provider.Provider. The JIT config travels on the
-// guest agent's stdin channel; the agent runs inside the Aqua session.
+// guest agent's stdin channel; Darwin uses Aqua and Linux a non-root service.
 func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) error {
 	// The bootstrap returns as soon as the runner is backgrounded; a session
 	// that lingers means the guest kept the agent's pipes open.
@@ -461,8 +472,8 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	if err := p.requireDarwinRunner(name); err != nil {
-		return err
+	if p.runner.OS == "linux" {
+		return p.startLinuxRunner(ctx, name, jit)
 	}
 	helperReady := true
 	// Container readiness already installed the shared macOS helper. Replacing
@@ -514,6 +525,9 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 }
 
 func (p *Provider) installCache(ctx context.Context, name string) error {
+	if p.runner.OS == "linux" {
+		return errors.New("linux guest cache is unavailable")
+	}
 	if _, err := p.output(ctx, name, []string{"mkdir", "-p", "-m", "0700", guestDirectory}, nil); err != nil {
 		return errors.New("prepare private guest cache directory")
 	}
@@ -588,7 +602,8 @@ func (p *Provider) StopRunner(ctx context.Context, name string) error {
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
-	if err := p.requireDarwinRunner(name); err != nil {
+	if p.runner.OS == "linux" {
+		_, err := p.linuxCommand(ctx, name, "cancel", nil, statusOutputLimit)
 		return err
 	}
 	dir, err := p.runnerDir(name)
@@ -619,8 +634,8 @@ func (p *Provider) RunnerStatus(ctx context.Context, name string) (provider.Runn
 		default:
 		}
 	}
-	if err := p.requireDarwinRunner(name); err != nil {
-		return provider.RunnerStatus{}, err
+	if p.runner.OS == "linux" {
+		return p.linuxRunnerStatus(ctx, name)
 	}
 	out, err := p.guest(ctx, name, []string{guestPath, "status"}, nil, statusOutputLimit)
 	switch {
@@ -803,7 +818,7 @@ func (p *Provider) listVMs(ctx context.Context) ([]provider.Owned, []provider.Fo
 		}
 		prefixed := strings.HasPrefix(e.Name, config.NamePrefix)
 		if e.Running || prefixed {
-			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed})
+			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed, HostLimitExempt: p.HostLimitExempt(e.Name)})
 		}
 	}
 	return owned, foreign, nil

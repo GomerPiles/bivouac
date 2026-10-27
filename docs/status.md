@@ -131,13 +131,16 @@ Open:
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 
-The vz paths select launch devices, helper source and readiness preparation by
-guest OS. Current configuration callers still select Darwin; Linux runner
-configuration and operations are not enabled. Unit regressions cover Darwin
-runner/container-pair behavior, Linux device/bootstrap selection, and startup,
-manager adoption and cleanup after baseline loss or change. Separate regressions
-cover missing/invalid Linux helpers and OS-independent host cache capability
-paths. These are offline checks, with no new live provider evidence.
+Linux ARM64 runner guests on vz are implemented with rootless networking,
+non-root agent identity checks, pinned prepared helpers and the VZ DHCP runtime
+profile. Offline regressions cover the lifecycle, refusal paths, exact provider
+ownership, manifest-proven slot exemption, retained-OS lock and recovery without
+baseline/helper inputs. Darwin runner/engine behavior has regression coverage.
+The opt-in Linux integration fixture checks two fresh clones, virtual DHCP DNS,
+public access, host-listener denial and privileged-container isolation; it has
+not run on this implementation. Live runner jobs, rootless Linux DNS/MTU/Docker,
+crash/adoption and cold-clone sanitation remain open. Prior NAT/Softnet results
+do not validate these paths.
 
 ## Shared Linux runtime
 
@@ -146,9 +149,9 @@ public-DNS/SSH and VZ DHCP profiles. Contract tests cover profile binding,
 DNS reports, helper pins and sanitation receipts; Linux-only behavioral tests
 cover persisted boot/profile validation, native listener status/cancellation
 and SSH unit selection. Hosted Ubuntu CI runs those tests. Local macOS checks
-cannot execute Linux-only tests. Linux-on-vz runner transport, rootless DNS,
-cache parity and cold-clone sanitation remain open; earlier NAT/Softnet results
-do not validate them. The runtime extraction has no new live guest evidence.
+cannot execute Linux-only tests. Rootless Linux live validation and the Linux-on-vz
+cache adapter remain open; see [operations](operations.md) for current cache
+availability. The shared runtime has no new live guest evidence.
 
 ## Windows host controls
 

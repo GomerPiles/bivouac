@@ -71,13 +71,13 @@ func (p *Provider) runnerIsolation(name string) error {
 		return err
 	}
 	m, _ := p.readMeta(name)
-	if _, local := p.rt.(*local); local {
+	if _, local := p.rt.(*local); local || p.runner.OS == "linux" {
 		if p.records == nil {
 			return provider.ErrNotOwned
 		}
 		found := false
 		for _, i := range p.records.List() {
-			if i.Name == name && i.ID == m.InstanceID && i.Provider == p.name && i.Phase != state.PhaseDeregistering && p.records.ControllerID() == m.ControllerID {
+			if i.Name == name && i.ID == m.InstanceID && i.Provider == p.name && (p.runner.OS != "linux" || i.EngineName == "") && i.Phase != state.PhaseDeregistering && p.records.ControllerID() == m.ControllerID {
 				found = true
 				break
 			}
