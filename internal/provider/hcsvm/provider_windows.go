@@ -79,8 +79,6 @@ type Options struct {
 	RunnerSHA256  string
 	// Helper is this executable, copied into each guest as its adapter.
 	Helper string
-	// StateDir is the former per-provider pin directory, used only for cleanup.
-	StateDir string
 }
 
 const (
@@ -124,55 +122,10 @@ func New(opts Options, host Host, transport Transport) (*Provider, error) {
 		return nil, errors.New("runner archive requires its SHA-256")
 	}
 	logger := opts.Logger
-	if err := removeStaleHostKeys(opts.StateDir); err != nil {
-		return nil, err
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Provider{opts: opts, host: host, transport: transport, now: time.Now, logger: logger, sessions: map[string]Session{}, timings: map[string]instanceTiming{}, cacheGuests: map[string]struct{}{}}, nil
-}
-
-func removeStaleHostKeys(dir string) error {
-	if dir == "" {
-		return nil
-	}
-	if !filepath.IsAbs(dir) {
-		return errors.New("legacy HCS state directory must be absolute")
-	}
-	info, err := os.Lstat(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("legacy HCS state directory unavailable")
-	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return errors.New("legacy HCS state directory unavailable")
-	}
-	defer func() { _ = root.Close() }()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return errors.New("legacy HCS state directory unavailable")
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		id, ok := strings.CutSuffix(name, ".hostkey")
-		if !ok || len(id) != 8 || strings.ToLower(id) != id {
-			continue
-		}
-		if _, err := hex.DecodeString(id); err != nil {
-			continue
-		}
-		if !entry.Type().IsRegular() {
-			continue
-		}
-		if err := root.Remove(name); err != nil {
-			return errors.New("legacy HCS host key cleanup failed")
-		}
-	}
-	return nil
 }
 
 func (p *Provider) Name() string { return p.opts.Name }

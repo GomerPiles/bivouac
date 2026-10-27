@@ -230,7 +230,9 @@ the separately authorized lab procedure below.
 
 Adoption checks current VM host ownership and running state, then reconnects to
 the guest's runtime ID over HvSocket. It requires no host-key file or per-guest
-secret. Status uses one agent command per existing poll; JIT and start are never
+secret. It never reads or removes the previous provider's host-key files under
+the state directory's `hcs\<provider>` folder, which a rollback still uses;
+delete them by hand once rollback to that provider is no longer needed. Status uses one agent command per existing poll; JIT and start are never
 replayed after an uncertain outcome. A protocol-version refusal is terminal.
 This provider requires a matching bivouac-agent image; old images are unsupported.
 Rollback is the previous manager binary, VM host service binary and image. The factory and vmhost lab batch below
