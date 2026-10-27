@@ -40,5 +40,5 @@ func unattended(name, user, password string) string {
 }
 
 func mediaScripts() map[string]string {
-	return map[string]string{"SETUP.PS1": guestSetup, "HCSRUNNER.PS1": runnerExtract, "HCSVALIDATE.PS1": guestValidate, "HCSSANITIZE.PS1": imageSanitize, "HCSLOGON.PS1": autologonSecret, "HCSCHECK.PS1": runnerCheck}
+	return map[string]string{"SETUP.PS1": videoFacts + guestVideo + guestSetup, "HCSRUNNER.PS1": runnerExtract, "HCSVALIDATE.PS1": guestValidate, "HCSSANITIZE.PS1": imageSanitize, "HCSLOGON.PS1": autologonSecret, "HCSCHECK.PS1": runnerCheck}
 }

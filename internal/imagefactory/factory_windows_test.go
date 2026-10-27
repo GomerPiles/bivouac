@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"golang.org/x/sys/windows"
@@ -42,7 +43,7 @@ func TestGrantsNeverTargetInput(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatal("input reached native grant seam")
 	}
-	for _, source := range []string{testConfig().Source, filepath.Dir(testConfig().Source)} {
+	for _, source := range []string{testConfig().ISO, filepath.Dir(testConfig().ISO)} {
 		if mutateOwnedPath(workspace, source, func(string) error { t.Fatal("source reached ACL seam"); return nil }) == nil {
 			t.Fatal("source ACL change accepted")
 		}
@@ -66,6 +67,9 @@ func TestSetupMediaGeneration(t *testing.T) {
 			t.Fatal("private output enabled")
 		}
 		data := input.(map[string]string)
+		if data["agent"] != filepath.Join(r.Workspace, "agent.exe") || !pin(data["agent_sha256"]) || data["driver_plan"] != "[]" {
+			t.Fatal("agent staging plan missing")
+		}
 		if data["disk"] != r.disk() || data["instance_id"] != r.BuildID || data["destination"] != filepath.Join(r.Workspace, "setup-private", "setup.iso") {
 			t.Fatal("wrong owned setup paths")
 		}
@@ -73,7 +77,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 		case makeISO:
 			phases = append(phases, "iso")
 			answer = data["unattend"]
-		case stageSetup:
+		case offlineEncryption + offlinePayload + stageSetup:
 			phases = append(phases, "answer")
 			if answer != data["unattend"] {
 				t.Fatal("answer file differs from ISO")
@@ -89,8 +93,11 @@ func TestSetupMediaGeneration(t *testing.T) {
 	if err := prepareMediaWith(context.Background(), c, r, func(p string) error { return os.Mkdir(p, 0700) }, copyFile, run); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(phases, []string{"iso", "answer"}) || len(copied) != len(c.SetupAssets)+1 {
+	if !reflect.DeepEqual(phases, []string{"iso", "answer"}) || len(copied) != len(c.SetupAssets)+2 {
 		t.Fatal("media preparation order")
+	}
+	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract || !r.Manifest.PreventDeviceEncryption {
+		t.Fatal("agent manifest pin missing")
 	}
 	for name, script := range mediaScripts() {
 		b, err := os.ReadFile(filepath.Join(r.Workspace, "setup-assets", name))
@@ -104,14 +111,28 @@ func TestSetupMediaGeneration(t *testing.T) {
 	}
 }
 
-// Parse all scripts, including the generated startup body, without executing any
+// Parse all scripts, including offline staging helpers, without executing any
 // of their mount, service, guest or HCS operations.
 func TestPowerShellSyntax(t *testing.T) {
-	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($text in $data){$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){exit 1};$strings=$ast.FindAll({param($node)$node -is [Management.Automation.Language.StringConstantExpressionAst]},$true);foreach($s in $strings){if($s.Value.Contains('Set-Service sshd')){$nestedTokens=$null;$nestedErrors=$null;[void][Management.Automation.Language.Parser]::ParseInput($s.Value,[ref]$nestedTokens,[ref]$nestedErrors);if($nestedErrors.Count){exit 2}}}};[Console]::Out.Write('parsed')`
-	texts := []string{makeISO, runnerExtract, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, guestBootstrap}
+	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($text in $data){$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){exit 1}};[Console]::Out.Write('parsed')`
+	texts := []string{embeddedSignatures, offlineEncryption, embeddedSignatures + bootHelpers + baseDisk, offlineEncryption + offlinePayload + stageSetup, bootHelpers, baseDisk, bootHelpers + baseDisk, makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, offlinePayload, guestBootstrap}
+	texts = append(texts, guestVideo+guestSpecialize+disableFirstLogonAnimation)
 	b, _ := json.Marshal(texts)
 	if got := runTestPS(t, script, b); got != "parsed" {
 		t.Fatal("scripts did not parse")
+	}
+	pwsh, err := exec.LookPath("pwsh.exe")
+	if err != nil {
+		t.Fatal("PowerShell 7 parser unavailable")
+	}
+	path := filepath.Join(t.TempDir(), "parse.ps1")
+	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-File", path)
+	cmd.Stdin = strings.NewReader(string(b))
+	if output, err := cmd.Output(); err != nil || string(output) != "parsed" {
+		t.Fatal("PowerShell 7 parsing failed")
 	}
 }
 func runTestPS(t *testing.T, script string, stdin []byte) string {
@@ -125,10 +146,18 @@ func runTestPS(t *testing.T, script string, stdin []byte) string {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+	cmd.Env = hostPowerShellEnvironment(system)
 	cmd.Stdin = strings.NewReader(string(stdin))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	b, err := cmd.Output()
 	if err != nil {
-		t.Fatal("isolated PowerShell check failed")
+		// Fixture scripts handle only test data; their error text says which check failed.
+		detail := stderr.String()
+		if len(detail) > 2000 {
+			detail = detail[:2000]
+		}
+		t.Fatalf("isolated PowerShell check failed: %v\n%s", err, detail)
 	}
 	return string(b)
 }
@@ -197,10 +226,10 @@ func TestNativeDocumentAndOwnership(t *testing.T) {
 	if len(doc.VirtualMachine.Devices.NetworkAdapters) != 0 || !doc.TerminateOnLastHandleClosed {
 		t.Fatal("unsafe native plan")
 	}
-	if len(doc.VirtualMachine.Devices.Plan9.Shares) != 1 || doc.VirtualMachine.Devices.Plan9.Shares[0].Flags != hcs.Plan9ShareReadOnly {
-		t.Fatal("driver share is writable")
+	if doc.VirtualMachine.Devices.Plan9 != nil || len(doc.VirtualMachine.Devices.HvSocket.HvSocketConfig.ServiceTable) != 1 {
+		t.Fatal("unexpected guest service or share")
 	}
-	if doc.VirtualMachine.Devices.Scsi["Primary"].Attachments["0"].Path == c.Source {
+	if doc.VirtualMachine.Devices.Scsi["Primary"].Attachments["0"].Path == c.ISO {
 		t.Fatal("source attached directly")
 	}
 	p := hcs.Properties{ID: r.Name, Owner: r.Owner, SystemType: hcs.SystemTypeVM, RuntimeID: "example", State: hcs.StateRunning}

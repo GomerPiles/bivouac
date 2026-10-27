@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/perf"
 	"github.com/GomerPiles/bivouac/internal/vmhost"
@@ -55,20 +56,10 @@ func loadConfig(path string, check func(string) error) (Config, error) {
 // Build is deliberately synchronous. Its creating handle remains owned until
 // shutdown or failure cleanup has settled; no service or journal is contacted.
 func Build(ctx context.Context, c Config, log *slog.Logger) (_ Manifest, err error) {
-	return runFactory(ctx, c, log, nil)
+	return runFactory(ctx, c, log)
 }
 
-// Inspect shares the exact copy/child/inspection path with Build, prints the
-// recorded facts before deferred cleanup, and never enters preparation or boot.
-func Inspect(ctx context.Context, c Config, log *slog.Logger, out io.Writer) error {
-	if out == nil {
-		return errors.New("image inspect requires an output writer")
-	}
-	_, err := runFactory(ctx, c, log, out)
-	return err
-}
-
-func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.Writer) (result Manifest, err error) {
+func runFactory(ctx context.Context, c Config, log *slog.Logger) (result Manifest, err error) {
 	if err = RequireElevated(); err != nil {
 		return Manifest{}, err
 	}
@@ -80,9 +71,6 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 	}
 	if err = winhost.CheckProtected(c.ImageRoot); err != nil {
 		return Manifest{}, errors.New("image root must already be administrator-protected")
-	}
-	if err = winhost.CheckProtected(c.Source); err != nil {
-		return Manifest{}, errors.New("source must be administrator-protected")
 	}
 	if err = checkFinalInputs(c); err != nil {
 		return Manifest{}, err
@@ -115,7 +103,7 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{BuildID: id, GuestName: name, GuestUser: c.GuestUser, Source: c.Source, SourceSHA256: strings.ToLower(c.SourceSHA256), Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
+	r := &record{BuildID: id, Workspace: workspace, Name: name, Owner: ownerID(c.ImageRoot, id), Phase: "created", Manifest: Manifest{BuildID: id, GuestName: name, GuestUser: c.GuestUser, Media: MediaRecord{ISOSHA256: strings.ToLower(c.ISOSHA256)}, Output: filepath.Join(c.ImageRoot, id, "disk.vhdx"), ProbeSHA256: strings.ToLower(c.RenderProbe.SHA256), ValidationSHA256: hashBytes([]byte(guestValidate)), AutologonSHA256: hashBytes([]byte(autologonSecret)), Assets: map[string]string{}, Revision: revision(), Started: time.Now().UTC(), PhaseMS: map[string]int64{}}}
 	if err = writeJSON(filepath.Join(workspace, "owner.json"), r); err != nil {
 		// No native or disk operation has occurred, and this invocation created
 		// both entries. Remove only these entries, without recursive traversal.
@@ -126,30 +114,54 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		return Manifest{}, errors.Join(errors.New("workspace ownership recording failed"), err, removeMarker, os.Remove(filepath.Join(workspace, "build.lock")), os.Remove(workspace))
 	}
 	var system *hcs.System
+	preparationStarted := false
+	guardCtx := ctx
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		// Leave a minute after native absence, including at least 30 seconds
+		// after optional offline diagnostics for detach and host-worker joins.
+		stopCtx, cancelStop := cleanupStageContext(cleanupCtx, time.Minute)
+		defer cancelStop()
 		var terminate func() error
 		if system != nil {
-			terminate = func() error { defer system.Close(); return system.Terminate(cleanupCtx) }
+			terminate = func() error {
+				defer system.Close()
+				stop := func() error { return system.Terminate(stopCtx) }
+				if allowFailureShutdown(preparationStarted, err, context.Cause(guardCtx)) {
+					graceCtx, cancelGrace := cleanupStageContext(stopCtx, 30*time.Second)
+					defer cancelGrace()
+					return terminateAfterGuestFailure(graceCtx, failureShutdownBudget,
+						func(ctx context.Context) error {
+							return requestFailureShutdown(ctx, guestagent.DialHvsock(r.RuntimeID))
+						},
+						func(ctx context.Context) error { _, e := system.WaitExit(ctx); return e }, stop)
+				}
+				return stop()
+			}
 		}
-		cleanupErr := cleanupOwned(terminate, func() error { return waitAbsent(cleanupCtx, api, r.Name) }, func() error {
+		cleanupErr := cleanupOwned(terminate, func() error { return waitAbsent(stopCtx, api, r.Name) }, func() error {
 			if r.NativeAttempted && !r.GuestCompleted && err != nil {
-				facts, diagnosticErr := inspectOwned(cleanupCtx, c, r, true, runHost)
+				diagnosticCtx, cancelDiagnostic := cleanupStageContext(cleanupCtx, 30*time.Second)
+				facts, diagnosticErr := inspectOwned(diagnosticCtx, c, r, true, runHost)
+				cancelDiagnostic()
 				r.hostError("setup_diagnostics", diagnosticErr)
 				if facts != nil {
-					r.GuestSetupStep = facts.GuestSetupStep
-					r.GuestSetupFailed = facts.GuestSetupFailed
-					if r.GuestSetupFailed {
-						err = errors.Join(err, fmt.Errorf("guest setup failed at step %d", r.GuestSetupStep))
-					}
+					err = errors.Join(err, r.setupFailure(facts))
 				}
 				if diagnosticErr != nil {
 					err = errors.Join(err, fmt.Errorf("offline setup diagnostics unavailable: %w", diagnosticErr))
 				}
 			}
 			return detachOwned(cleanupCtx, r)
-		}, func() error { return removeOwned(r) })
+		}, func() error {
+			// A lab build may keep a failed workspace (detached, guest absent)
+			// for offline diagnosis; `image cleanup --build` removes it later.
+			if c.RetainFailed && err != nil {
+				return errors.New("failed build workspace retained on request")
+			}
+			return removeOwned(r)
+		})
 		r.Retained = cleanupErr != nil
 		if err != nil {
 			r.Phase = "failed"
@@ -182,31 +194,45 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		r.Manifest.PhaseMS[label] = time.Since(begun).Milliseconds()
 		return errors.Join(e, r.save())
 	}
-	if err = phase("source_copy", func() error {
-		var e error
-		r.Manifest.Template, e = ownerTemplate(c)
+	if err = phase("media_copy", func() error {
+		size, e := diskSize(c.ISO)
 		if e != nil {
 			return e
 		}
-		size, e := diskSize(c.Source)
-		if e != nil {
-			return e
-		}
-		space, e := admitSpace(c.ImageRoot, "source_copy", size, 0, false)
+		space, e := admitMediaCopySpace(c.ImageRoot, size)
 		r.SpaceChecks = append(r.SpaceChecks, space)
 		if e != nil {
 			return e
 		}
-		_, _, e = copyPinned(buildCtx, c.Source, filepath.Join(workspace, "source.vhdx"), c.SourceSHA256, 256<<30)
+		if _, _, e = copyPinned(buildCtx, c.ISO, filepath.Join(workspace, "install.iso"), c.ISOSHA256, 32<<30); e != nil {
+			return e
+		}
+		inventory, e := inventoryISOFile(filepath.Join(workspace, "install.iso"), c.EditionID, c.ImageIndex)
 		if e != nil {
 			return e
 		}
-		return verifyStandalone(filepath.Join(workspace, "source.vhdx"))
+		r.Manifest.Media.Kind = inventory.Kind
+		r.Manifest.Media.Image = inventory.Selected
+		if inventory.Selected.TotalBytes+(4<<30) > uint64(c.DiskGB)<<30 {
+			return errors.New("selected install image does not fit configured disk")
+		}
+		space, e = admitSpace(c.ImageRoot, "base_disk", size, inventory.Selected.TotalBytes, false)
+		r.SpaceChecks = append(r.SpaceChecks, space)
+		return e
 	}); err != nil {
+		return Manifest{}, err
+	}
+	if err = phase("base_disk", func() error { return prepareBase(buildCtx, c, r) }); err != nil {
+		return Manifest{}, err
+	}
+	if err = r.intent("child_attach", r.save); err != nil {
 		return Manifest{}, err
 	}
 	if err = vhd.CreateDiffVhd(r.disk(), filepath.Join(workspace, "source.vhdx"), 0); err != nil {
 		return Manifest{}, errors.New("cannot create owned differencing disk")
+	}
+	if err = r.intent("inspection_access", r.save); err != nil {
+		return Manifest{}, err
 	}
 	err = phase("inspection", func() error {
 		facts, e := inspectOwned(buildCtx, c, r, false, runHost)
@@ -219,23 +245,16 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		}
 		return nil
 	})
-	if inspectOut != nil {
-		printErr := json.NewEncoder(inspectOut).Encode(InspectionReport{BuildID: id, Facts: r.Inspection})
-		return r.Manifest, errors.Join(err, printErr)
-	}
 	if err != nil {
 		return Manifest{}, err
 	}
 	if err = phase("preparation", func() error {
-		if e := r.Inspection.RunnerInput(c); e != nil {
-			return e
-		}
-		if e := prepareMedia(buildCtx, c, r); e != nil {
-			return e
-		}
 		var e error
 		r.Manifest.Drivers, e = copyDrivers(buildCtx, c, r)
 		if e != nil {
+			return e
+		}
+		if e := prepareMedia(buildCtx, c, r); e != nil {
 			return e
 		}
 		if e = api.CreateGuestStateFiles(filepath.Join(workspace, "vm.vmgs"), filepath.Join(workspace, "vm.vmrs")); e != nil {
@@ -244,21 +263,6 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		// Keep ownership records and the workspace directory private. Only the
 		// VM's payloads need grants; all are checked before any ACL changes.
 		paths := []string{r.disk(), filepath.Join(workspace, "source.vhdx"), filepath.Join(workspace, "vm.vmgs"), filepath.Join(workspace, "vm.vmrs"), filepath.Join(workspace, "setup-private"), filepath.Join(workspace, "setup-private", "setup.iso")}
-		if e = filepath.WalkDir(filepath.Join(workspace, "drivers"), func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.Type()&os.ModeSymlink != 0 {
-				return errors.New("owned payload became a link")
-			}
-			if e := buildCtx.Err(); e != nil {
-				return e
-			}
-			paths = append(paths, path)
-			return nil
-		}); e != nil {
-			return e
-		}
 		for _, path := range paths {
 			if e = winhost.CheckProtected(path); e != nil {
 				return e
@@ -320,7 +324,19 @@ func runFactory(ctx context.Context, c Config, log *slog.Logger, inspectOut io.W
 		if e = r.save(); e != nil {
 			return e
 		}
-		return prepareGuest(guardCtx, api, c, r)
+		preparationStarted = true
+		// prepareUntilExit joins the watcher before returning, so exit is
+		// safe to read afterwards.
+		var exit hcs.ExitStatus
+		e = prepareUntilExit(guardCtx, func(ctx context.Context) error {
+			var err error
+			exit, err = system.WaitExit(ctx)
+			return err
+		}, func(ctx context.Context) error { return prepareGuest(ctx, c, r) })
+		if e != nil && exit.ExitType != "" {
+			e = errors.Join(e, fmt.Errorf("guest exit: type=%s status=0x%08x", exitTypeName(exit.ExitType), uint32(exit.Status))) // #nosec G115 -- HRESULT bit pattern.
+		}
+		return e
 	}); err != nil {
 		return Manifest{}, errors.Join(err, context.Cause(guardCtx))
 	}
@@ -416,10 +432,13 @@ func prove(r *record, p hcs.Properties, running bool) error {
 }
 
 func detachOwned(ctx context.Context, r *record) error {
-	if _, err := os.Lstat(r.disk()); errors.Is(err, os.ErrNotExist) {
+	return detachOwnedWith(ctx, r, runHost)
+}
+func detachOwnedWith(ctx context.Context, r *record, run func(context.Context, string, any, bool) ([]byte, error)) error {
+	if len(r.StorageIntents) == 0 {
 		return nil
 	}
-	_, err := runHost(ctx, detachDisk, r.scriptData(), false)
+	_, err := run(ctx, detachDisk, r.scriptData(), false)
 	r.hostError("detach", err)
 	return err
 }
@@ -581,7 +600,7 @@ func watchResources(ctx context.Context, c Config, cancel context.CancelCauseFun
 		case <-ticker.C:
 			s, err := perf.NewSampler(c.ImageRoot).Sample()
 			if err != nil || reserveLost(s) {
-				cancel(errors.New("host memory reserve lost; canceling image build"))
+				cancel(&memoryReserveLostError{})
 				return
 			}
 		}
@@ -589,19 +608,17 @@ func watchResources(ctx context.Context, c Config, cancel context.CancelCauseFun
 }
 
 func document(c Config, r *record) hcs.ComputeSystem {
-	services := map[string]hcs.HvSocketService{}
-	for _, service := range []string{"a5b0cafe-0001-4000-8000-000000000001", "a5b0cafe-0007-4000-8000-000000000001"} {
-		services[service] = hcs.HvSocketService{BindSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)", ConnectSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}
-	}
-	shares := []hcs.Plan9Share{}
-	for i := range c.Drivers {
-		n := fmt.Sprintf("AppSandbox.Drv.%d", i)
-		shares = append(shares, hcs.Plan9Share{Name: n, AccessName: n, Path: filepath.Join(r.Workspace, "drivers", fmt.Sprint(i)), Port: 50001, Flags: hcs.Plan9ShareReadOnly})
-	}
+	services := map[string]hcs.HvSocketService{guestagent.ServiceID: {BindSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)", ConnectSecurityDescriptor: "D:P(A;;FA;;;SY)(A;;FA;;;BA)"}}
 	return hcs.ComputeSystem{Owner: r.Owner, SchemaVersion: hcs.Schema21(), TerminateOnLastHandleClosed: true, VirtualMachine: &hcs.VirtualMachine{
 		Chipset:          hcs.Chipset{Uefi: &hcs.Uefi{Console: "Default", ApplySecureBootTemplate: "Apply", SecureBootTemplateID: hcs.SecureBootMicrosoftWindows}},
 		ComputeTopology:  hcs.Topology{Memory: hcs.Memory{SizeInMB: c.MemoryMB}, Processor: hcs.Processor{Count: c.CPU}},
-		Devices:          hcs.Devices{Scsi: map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: r.disk()}, "1": {Type: hcs.AttachmentISO, Path: filepath.Join(r.Workspace, "setup-private", "setup.iso"), ReadOnly: true}}}}, VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768}, Keyboard: &hcs.Keyboard{}, Mouse: &hcs.Mouse{}, HvSocket: &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}, Plan9: &hcs.Plan9{Shares: shares}},
+		Devices:          hcs.Devices{Scsi: map[string]hcs.Scsi{"Primary": {Attachments: map[string]hcs.Attachment{"0": {Type: hcs.AttachmentVirtualDisk, Path: r.disk()}, "1": {Type: hcs.AttachmentISO, Path: filepath.Join(r.Workspace, "setup-private", "setup.iso"), ReadOnly: true}}}}, VideoMonitor: &hcs.VideoMonitor{HorizontalResolution: 1024, VerticalResolution: 768}, Keyboard: &hcs.Keyboard{}, Mouse: &hcs.Mouse{}, HvSocket: &hcs.HvSocket{HvSocketConfig: hcs.HvSocketConfig{ServiceTable: services}}},
 		SecuritySettings: &hcs.SecuritySettings{EnableTpm: true, Isolation: &hcs.Isolation{IsolationType: hcs.IsolationGuestStateOnly}}, GuestState: &hcs.GuestState{GuestStateFilePath: filepath.Join(r.Workspace, "vm.vmgs"), RuntimeStateFilePath: filepath.Join(r.Workspace, "vm.vmrs")},
 	}}
+}
+
+func hashReader(ctx context.Context, r io.Reader, limit int64) (string, error) {
+	h := sha256.New()
+	_, e := copyContext(ctx, h, r, limit)
+	return hex.EncodeToString(h.Sum(nil)), e
 }

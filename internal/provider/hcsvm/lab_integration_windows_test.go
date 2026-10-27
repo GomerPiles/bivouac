@@ -141,6 +141,7 @@ type networkRun struct {
 	Passed               bool                      `json:"passed"`
 	Failure              string                    `json:"failure,omitempty"`
 	Timings              map[string]int64          `json:"timings_ms"`
+	Readiness            timingReport              `json:"readiness"`
 	ProtectedBeforeStart bool                      `json:"protected_before_start"`
 	Probes               map[string]string         `json:"probes,omitempty"`
 	Listeners            map[string]listenerResult `json:"listeners,omitempty"`
@@ -277,7 +278,7 @@ func TestLabNetworkBatch(t *testing.T) {
 	}
 	p, err := New(Options{Name: "lab", ControllerID: labController, Image: labImage, GuestName: *lab.guestName, GuestUser: *lab.guestUser,
 		CPU: labCPU, MemoryMB: labMemoryMB, GPU: true, RunnerDir: *lab.runnerDir, RunnerArchive: *lab.runnerArchive, RunnerSHA256: *lab.runnerSHA256,
-		Helper: *lab.helper, StateDir: t.TempDir()}, host, NewTransport(*lab.guestUser))
+		Helper: *lab.helper}, host, NewTransport())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +383,8 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 		return fail("lease", err)
 	}
 	readyStarted := time.Now()
-	if err = p.WaitReady(ctx, spec.Name); err != nil {
+	r.Readiness, err = p.waitReady(ctx, spec.Name)
+	if err != nil {
 		return fail("wait ready", err)
 	}
 	r.Timings["wait_ready"] = ms(time.Since(readyStarted))
@@ -401,7 +403,7 @@ func runNetworked(p *Provider, host *recordingHost, label string, peer netip.Add
 		return fail("probes", err)
 	}
 	probeStarted := time.Now()
-	output, err := p.run(ctx, spec.Name, "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encodedPowerShell(probeScript), stdin, 8192)
+	output, err := p.run(ctx, spec.Name, []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(probeScript)}, stdin, 8192)
 	r.Timings["probes"] = ms(time.Since(probeStarted))
 	if err != nil {
 		return fail("probes", err)

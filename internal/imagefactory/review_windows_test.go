@@ -3,17 +3,13 @@
 package imagefactory
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -75,7 +71,7 @@ function Add-Type {param($TypeDefinition) [pscustomobject]@{noise='type'}}
 function Get-DiskImage {param($ImagePath) [pscustomobject]@{Attached=$false}}
 function Mount-DiskImage {param($ImagePath,$Access,[switch]$NoDriveLetter,[switch]$PassThru) if($Access -ne 'ReadWrite'){throw 'access'};[pscustomobject]@{Fake=$true}}
 function Get-Disk {[pscustomobject]@{Number=123}}
-function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100}}
+function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100;Guid='{11111111-1111-1111-1111-111111111111}'}}
 function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
  $null=New-Item -ItemType Directory -Path (Join-Path $AccessPath 'Windows\Panther\Unattend') -Force
  [IO.File]::WriteAllText((Join-Path $AccessPath 'Windows\Panther\Unattend\setup-step.json'),'{"step":70,"failed":true}')
@@ -89,10 +85,10 @@ function Remove-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessP
 function Dismount-DiskImage {param($ImagePath) [pscustomobject]@{noise='dismount'}}
 `
 	path := filepath.Join(workspace, "fake-host.ps1")
-	if err := os.WriteFile(path, []byte(mocks+runnerCheck+offlineFiles+inspectDisk), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(mocks+runnerCheck+(videoFacts+offlineFiles)+inspectDisk), 0600); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "mode": "setup"})
+	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "mode": "setup", "windows_guid": "{11111111-1111-1111-1111-111111111111}"})
 	b, err := executeHost(context.Background(), path, data, true)
 	if err != nil {
 		t.Fatal(err)
@@ -125,10 +121,10 @@ func TestInspectionPreservesPartialFailure(t *testing.T) {
 		if !output || !strings.Contains(script, "Read-FactoryFiles") || data.(map[string]string)["guest_user"] != "imageuser" {
 			t.Fatal("wrong inspection path")
 		}
-		return []byte(`{"failure_step":70,"image_state_kind":"generalized_to_oobe","executables":{"agent.exe":"public-hash"}}`), &HostScriptError{Step: 70}
+		return []byte(`{"failure_step":70,"image_state_kind":"generalized_to_oobe","agent_present":true,"agent_sha256":"public-hash"}`), &HostScriptError{Step: 70}
 	}
 	facts, err := inspectOwned(context.Background(), testConfig(), r, false, run)
-	if facts == nil || facts.FailureStep != 70 || facts.Executables["agent.exe"] != "public-hash" || err == nil {
+	if facts == nil || facts.FailureStep != 70 || facts.AgentSHA256 != "public-hash" || err == nil {
 		t.Fatal("partial inspection facts discarded")
 	}
 }
@@ -139,11 +135,12 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	if start < 0 || end <= start {
 		t.Fatal("setup status writer missing")
 	}
-	// Replace the fixed-path writer and fail at the first service query, before
+	// Replace the fixed-path writer and fail at the first specialize-status read, before
 	// any guest service/install command can execute. No host guest paths are used.
 	safeWriter := `function Write-SetupStep([int]$Code,[bool]$Failed){if($Failed){[Console]::Out.WriteLine('BIVOUAC_IMAGE_RESULT');[Console]::Out.WriteLine((@{guest_setup_step=$Code;guest_setup_failed=$Failed}|ConvertTo-Json -Compress))}}
 `
-	script := "function Get-Service {throw 'fixture failure'}\n" + guestSetup[:start] + safeWriter + guestSetup[end:]
+	safeSetup := strings.ReplaceAll(guestSetup, "& (Join-Path $env:SystemRoot 'System32\\shutdown.exe')", "Invoke-FixtureShutdown")
+	script := "function Invoke-FixtureShutdown {param($Arguments)}\nfunction Get-Item {throw 'fixture failure'}\n" + safeSetup[:start] + safeWriter + safeSetup[end:]
 	path := filepath.Join(t.TempDir(), "fake-setup.ps1")
 	if err := os.WriteFile(path, []byte(script), 0600); err != nil {
 		t.Fatal(err)
@@ -151,7 +148,7 @@ func TestGuestSetupFailureStep(t *testing.T) {
 	b, err := executeHost(context.Background(), path, nil, true)
 	var scriptErr *HostScriptError
 	var facts Inspection
-	if !errors.As(err, &scriptErr) || scriptErr.Step != 10 || json.Unmarshal(b, &facts) != nil || facts.GuestSetupStep != 10 || !facts.GuestSetupFailed {
+	if !errors.As(err, &scriptErr) || scriptErr.Step != 89 || json.Unmarshal(b, &facts) != nil || facts.GuestSetupStep != 89 || !facts.GuestSetupFailed {
 		t.Fatal("setup failure lost numeric step")
 	}
 }
@@ -160,12 +157,12 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 	for _, state := range []string{"absent", "unconfigured", "configured", "residue", "incomplete", "invalid", "guest state"} {
 		t.Run(state, func(t *testing.T) {
 			root := t.TempDir()
-			for _, dir := range []string{"Windows/AppSandbox", "ProgramData/Bivouac/ImagePolicy"} {
+			for _, dir := range []string{"Program Files/Bivouac", "ProgramData/Bivouac/ImagePolicy"} {
 				if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := os.WriteFile(filepath.Join(root, "Windows/AppSandbox/agent.exe"), []byte("public-component"), 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "Program Files/Bivouac/bivouac.exe"), []byte("public-component"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			if state != "absent" {
@@ -206,7 +203,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			script := runnerCheck + "\n" + offlineFiles + `;try{$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-FactoryFiles $d.root $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))}catch{[Console]::Out.Write(('{"test_failure_line":'+$_.InvocationInfo.ScriptLineNumber+'}'))}`
+			script := runnerCheck + "\n" + (videoFacts + offlineFiles) + `;try{$d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{};Read-FactoryFiles $d.root $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress -Depth 5))}catch{[Console]::Out.Write(('{"test_failure_line":'+$_.InvocationInfo.ScriptLineNumber+'}'))}`
 			data, _ := json.Marshal(map[string]string{"root": root})
 			b := runTestPS(t, script, data)
 			var facts Inspection
@@ -224,7 +221,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 			if state == "guest state" {
 				want = "unconfigured"
 			}
-			if facts.RunnerState != want || facts.GuestStatePresent != (state == "guest state") || !facts.BivouacPresent || facts.Executables["agent.exe"] != hashBytes([]byte("public-component")) {
+			if facts.RunnerState != want || facts.GuestStatePresent != (state == "guest state") || !facts.BivouacPresent || facts.AgentSHA256 != hashBytes([]byte("public-component")) {
 				t.Fatal("incorrect offline facts")
 			}
 			if state == "residue" {
@@ -238,17 +235,12 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 	if !strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac\Guest'`) || strings.Contains(imageSanitize, `'C:\ProgramData\Bivouac',`) {
 		t.Fatal("sanitation rejects image policy state")
 	}
-	data := []byte(`{"value":"C:\\Program Files\\OpenSSH\\sshd.exe --opaque public-argument.exe"}`)
-	result := runTestPS(t, offlineFiles+`; $d=[Console]::In.ReadToEnd()|ConvertFrom-Json;$f=@{image_path='';image_path_redacted=$false};Set-PublicImagePath $d.value $f;[Console]::Out.Write(($f|ConvertTo-Json -Compress))`, data)
-	var service ServiceFact
-	if json.Unmarshal([]byte(result), &service) != nil || service.ImagePath != `C:\Program Files\OpenSSH\sshd.exe` || !service.ImagePathRedacted {
-		t.Fatal("unrecognized service arguments escaped public-path filter")
-	}
+
 }
 
 func TestOfflineEligibility(t *testing.T) {
 	userExists := false
-	good := Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &userExists, RunnerState: "unconfigured"}
+	good := Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &userExists, RunnerState: "absent"}
 	if !good.Eligible() {
 		t.Fatal("clean generalized image rejected")
 	}
@@ -261,8 +253,11 @@ func TestOfflineEligibility(t *testing.T) {
 	}
 	good.SAMHiveError = 5
 	good.GuestUserExists = nil
+	present := true
+	good.VDDPresent = &present
+
 	if !good.Eligible() {
-		t.Fatal("informational SAM failure blocked eligibility")
+		t.Fatal("informational SAM/VDD facts blocked template eligibility")
 	}
 }
 
@@ -294,8 +289,8 @@ func TestWorkspaceLock(t *testing.T) {
 }
 
 func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
-	required, err := requiredSpace(100, 0, false)
-	if err != nil || required != (10<<30)+220 {
+	required, err := requiredSpace(100, 200, false)
+	if err != nil || required != (10<<30)+850 {
 		t.Fatal("copy space formula")
 	}
 	required, err = requiredSpace(100, 200, true)
@@ -336,52 +331,5 @@ func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
 	if err != nil || !strings.EqualFold(actual, windows.UTF16ToString(long[:n])) {
 		t.Fatal("final handle path mismatch")
 	}
-	if _, err = missingOwner("expected-template"); err == nil {
-		t.Fatal("missing expected template accepted")
-	}
-	if _, err = missingOwner(""); err != nil {
-		t.Fatal("optional owner record required")
-	}
-}
 
-func TestAgentZeroCopies(t *testing.T) {
-	host, guest := net.Pipe()
-	defer func() { _ = host.Close(); _ = guest.Close() }()
-	done := make(chan error, 1)
-	go func() {
-		if _, err := io.WriteString(guest, "hello\n"); err != nil {
-			done <- err
-			return
-		}
-		r := bufio.NewReader(guest)
-		for range 3 {
-			if _, err := r.ReadString('\n'); err != nil {
-				done <- err
-				return
-			}
-		}
-		if _, err := io.WriteString(guest, "gpu_copy_done:0\nidd_status:ok\nssh_ready\n"); err != nil {
-			done <- err
-			return
-		}
-		key, err := r.ReadString('\n')
-		if err != nil {
-			done <- err
-			return
-		}
-		if key != "ssh_deploy_key public-key\n" {
-			done <- errors.New("unexpected public-key frame")
-			return
-		}
-		_, err = io.WriteString(guest, "ssh_key_deployed\n")
-		done <- err
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key")); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
 }

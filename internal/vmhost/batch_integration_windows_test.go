@@ -9,9 +9,9 @@ package vmhost
 // compute system or any production state.
 //
 // Runs, each a fresh cold boot from a new differencing disk:
-//   1. Baseline (2 CPU, 4 GiB): agent, SSH, desktop rendering; plus an
-//      unelevated child that must reach the SSH service its account was granted
-//      and be refused by the agent service it was not.
+//   1. Baseline (2 CPU, 4 GiB): agent and desktop rendering; plus an
+//      unelevated child refused the ungranted agent service; lazy-memory grants it
+//      and verifies that the same manager account connects.
 //   2. Lazily committed (virtual-address-backed) memory with GPU-PV.
 //   3. A guest whose parent is a flattened single-file copy of the image.
 //   4-5. Production sizing (4 CPU, 8 GiB), twice.
@@ -19,7 +19,7 @@ package vmhost
 //      second disk).
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -47,11 +47,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/hvsock"
 	"github.com/GomerPiles/bivouac/internal/perf"
-	"github.com/GomerPiles/bivouac/internal/winguest"
-	"golang.org/x/crypto/ssh"
+	"github.com/GomerPiles/bivouac/internal/windesktop"
 	"golang.org/x/sys/windows"
 )
 
@@ -77,8 +77,8 @@ var lab = struct {
 // These fixed entries reach it exactly as the image's builder did: a small
 // framed stdin request whose entry checks the script hash before running it.
 const (
-	validateBootstrap = `$ErrorActionPreference='Stop';function Write-SpikeStep([int]$s){[Console]::Error.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(($env:SystemRoot+'\AppSandbox\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};function Read-SpikeBytes([int]$n){$b=New-Object byte[] $n;$o=0;while($o -lt $n){$r=$i.Read($b,$o,[Math]::Min(4096,$n-$o));if($r -le 0){throw 'frame'};$o+=$r};return ,$b};try{Write-SpikeStep 1;$i=[Console]::OpenStandardInput();$n=[BitConverter]::ToUInt32((Read-SpikeBytes 4),0);if(!$n -or $n -gt 100000000){exit 18};Write-SpikeStep 4;$b=Read-SpikeBytes $n;Write-SpikeStep 2;$p=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;Write-SpikeStep 3;& ([ScriptBlock]::Create($p.script)) $p.data}catch{exit 18}`
-	validateEntry     = `param($data);$f=Join-Path $env:SystemRoot 'AppSandbox\hcs-spike-validate.ps1';if((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ine $data.script_sha256){exit 14};& $f $data`
+	validateBootstrap = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);function Write-SpikeStep([int]$s){[Console]::Out.WriteLine('BIVOUAC_HCS_STEP:'+$s);if($p.data.require_setup -eq $true){try{[IO.File]::WriteAllText(('C:\ProgramData\Bivouac\Image\hcs-spike-validation-step.json'),('{"step":'+$s+'}'))}catch{}}};function Read-SpikeBytes([int]$n){$b=New-Object byte[] $n;$o=0;while($o -lt $n){$r=$i.Read($b,$o,[Math]::Min(4096,$n-$o));if($r -le 0){throw 'frame'};$o+=$r};return ,$b};try{Write-SpikeStep 1;$i=[Console]::OpenStandardInput();$n=[BitConverter]::ToUInt32((Read-SpikeBytes 4),0);if(!$n -or $n -gt 65536){exit 18};Write-SpikeStep 4;$b=Read-SpikeBytes $n;Write-SpikeStep 2;$p=[Text.Encoding]::UTF8.GetString($b)|ConvertFrom-Json;Write-SpikeStep 3;$global:LASTEXITCODE=0;$null = & ([ScriptBlock]::Create($p.script)) $p.data 1>$null 3>$null 4>$null 5>$null 6>$null;exit [int]$global:LASTEXITCODE}catch{exit 18}`
+	validateEntry     = `param($data);$f=Join-Path 'C:\ProgramData\Bivouac\Image' 'hcs-spike-validate.ps1';if((Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash -ine $data.script_sha256){exit 14};& $f $data`
 )
 
 func encodedPowerShell(s string) string {
@@ -91,24 +91,25 @@ func encodedPowerShell(s string) string {
 }
 
 type labRun struct {
-	Run           string            `json:"run"`
-	Name          string            `json:"name"`
-	CPU           uint32            `json:"cpu"`
-	MemoryMB      uint64            `json:"memory_mb"`
-	LazyMemory    bool              `json:"lazy_memory"`
-	Flattened     bool              `json:"flattened"`
-	Passed        bool              `json:"passed"`
-	Failure       string            `json:"failure,omitempty"`
-	Timings       map[string]int64  `json:"timings_ms"`
-	DialAttempts  int               `json:"agent_dial_attempts"`
-	DialLongestMS int64             `json:"agent_dial_longest_ms"`
-	HostKeySHA256 string            `json:"ssh_host_key_sha256,omitempty"`
-	Render        *render           `json:"render,omitempty"`
-	Steps         map[string]int64  `json:"validation_steps_ms,omitempty"`
-	Memory        map[string]uint64 `json:"host_memory_mb,omitempty"`
-	Unelevated    map[string]string `json:"unelevated,omitempty"`
-	Cleaned       bool              `json:"cleaned"`
-	FailedStart   *failedStart      `json:"failed_start,omitempty"`
+	AgentLive     *agentLiveFacts  `json:"agent_live,omitempty"`
+	Run           string           `json:"run"`
+	Name          string           `json:"name"`
+	CPU           uint32           `json:"cpu"`
+	MemoryMB      uint64           `json:"memory_mb"`
+	LazyMemory    bool             `json:"lazy_memory"`
+	Flattened     bool             `json:"flattened"`
+	Passed        bool             `json:"passed"`
+	Failure       string           `json:"failure,omitempty"`
+	Timings       map[string]int64 `json:"timings_ms"`
+	DialAttempts  int              `json:"agent_dial_attempts"`
+	DialLongestMS int64            `json:"agent_dial_longest_ms"`
+
+	Render      *render           `json:"render,omitempty"`
+	Steps       map[string]int64  `json:"validation_steps_ms,omitempty"`
+	Memory      map[string]uint64 `json:"host_memory_mb,omitempty"`
+	Unelevated  map[string]string `json:"unelevated,omitempty"`
+	Cleaned     bool              `json:"cleaned"`
+	FailedStart *failedStart      `json:"failed_start,omitempty"`
 }
 
 type failedStart struct {
@@ -212,6 +213,7 @@ func labError(err error) string {
 }
 
 type render struct {
+	windesktop.Topology
 	Boot              map[string]uint64 `json:"boot"`
 	CredentialRotated bool              `json:"credential_rotated"`
 	GuestReady        bool              `json:"guest_ready"`
@@ -228,7 +230,7 @@ type render struct {
 }
 
 func (r *render) ok() bool {
-	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated
+	return r.GuestReady && r.DesktopReady && r.HardwareD3D11 && r.Presented && r.PixelReadback && r.Stage == 7 && r.HRESULT == 0 && r.HardwareAdapters > 0 && r.CredentialRotated && r.Topology.LabOK()
 }
 
 type results struct {
@@ -310,7 +312,7 @@ func TestLabBatch(t *testing.T) {
 		unelevated bool
 	}{
 		{"baseline", 2, 4096, false, false, true},
-		{"lazy-memory", 2, 4096, true, false, false},
+		{"lazy-memory", 2, 4096, true, false, true},
 		{"flattened", 2, 4096, false, true, false},
 		{"production-size-1", 4, 8192, false, false, false},
 		{"production-size-2", 4, 8192, false, false, false},
@@ -386,7 +388,7 @@ func failStartAndValidate(t *testing.T, host *Host, image string) (r labRun) {
 	started := time.Now()
 	g, err := host.Create(ctx, Spec{
 		Name: r.Name, Image: image, CPU: r.CPU, MemoryMB: r.MemoryMB, LazyMemory: true, GPU: false,
-		Services: []Service{{ID: winguest.AgentService}, {ID: winguest.SSHService}},
+		Services: []Service{{ID: guestagent.ServiceID}},
 	})
 	r.Timings["create_total"] = time.Since(started).Milliseconds()
 	host.native = original
@@ -512,7 +514,7 @@ func TestLabFailedStartRecordsOpenedHandle(t *testing.T) {
 	}
 }
 
-// bootAndValidate creates one guest and proves agent, SSH and rendering.
+// bootAndValidate creates one guest and proves agent and rendering.
 // Cleanup runs regardless of failure and must confirm native absence.
 func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uint32, memoryMB uint64, lazy, unelevated bool) (r labRun) {
 	r = labRun{Run: label, CPU: cpu, MemoryMB: memoryMB, LazyMemory: lazy, Timings: map[string]int64{}, Memory: map[string]uint64{}}
@@ -522,9 +524,11 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 	}
 	r.Name = "bivouac-lab-" + hex.EncodeToString(id[:])
 	sampleMemory(r.Memory, "before")
-	services := []Service{{ID: winguest.AgentService}, {ID: winguest.SSHService}}
+	services := []Service{{ID: guestagent.ServiceID}}
 	if unelevated {
-		services[1].Connect = []string{sid}
+		if label != "baseline" {
+			services[0].Connect = []string{sid}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -557,73 +561,37 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 		r.Failure = stage + ": " + err.Error()
 		return r
 	}
-	vmID, err := hvsock.ParseGUID(g.RuntimeID)
-	if err != nil {
-		return fail("runtime id", err)
-	}
-	serviceID := func(s string) windows.GUID { id, _ := hvsock.ParseGUID(s); return id }
-	verify := func() error { return host.Running(ctx, g) }
-
-	identity, err := winguest.NewIdentity()
-	if err != nil {
-		return fail("identity", err)
-	}
-	defer identity.Clear()
 	dialStarted := time.Now()
-	var agent net.Conn
-	for agent == nil {
-		if err = verify(); err != nil {
-			return fail("agent wait", err)
-		}
+	var connectedAt time.Time
+	dial := guestagent.DialHvsockMeasured(g.RuntimeID, func(elapsed time.Duration, _ bool) {
 		r.DialAttempts++
-		attempt := time.Now()
-		dialCtx, done := context.WithTimeout(ctx, 3*time.Second)
-		agent, err = hvsock.Dial(dialCtx, hvsock.Addr{VMID: vmID, ServiceID: serviceID(winguest.AgentService)})
-		done()
-		r.DialLongestMS = max(r.DialLongestMS, ms(time.Since(attempt)))
-		if agent == nil {
-			select {
-			case <-ctx.Done():
-				return fail("agent wait", errors.Join(ctx.Err(), err))
-			case <-time.After(500 * time.Millisecond):
-			}
+		r.DialLongestMS = max(r.DialLongestMS, ms(elapsed))
+	})
+	observed := func(ctx context.Context) (net.Conn, error) {
+		if err := host.Running(ctx, g); err != nil {
+			return nil, errors.New("guest running proof failed")
 		}
+		conn, err := dial(ctx)
+		if err == nil && conn != nil && connectedAt.IsZero() {
+			connectedAt = time.Now()
+			r.Timings["agent_connect"] = ms(connectedAt.Sub(dialStarted))
+		}
+		return conn, err
 	}
-	r.Timings["agent_connect"] = ms(time.Since(dialStarted))
-	initStarted := time.Now()
-	initCtx, done := context.WithTimeout(ctx, 2*time.Minute)
-	a, err := winguest.Initialize(initCtx, agent, identity.PublicKey)
-	done()
-	// Keep the agent session for the guest's life, as the image's builder did.
-	defer func() { _ = agent.Close() }()
-	r.Timings["agent_init"] = ms(time.Since(initStarted))
-	if err != nil || !a.DisplayReady || !a.KeyDeployed {
-		return fail("agent init", errors.Join(err, errors.New("display or key not confirmed")))
+	if err := proveLabAgent(ctx, observed); err != nil {
+		return fail("agent proof", err)
 	}
+	r.Timings["agent_init"] = ms(time.Since(connectedAt))
+	r.Timings["agent_reachable"] = ms(time.Since(started))
 	if unelevated {
-		r.Unelevated = map[string]string{
-			"granted_ssh":     unelevatedDial(t, g.RuntimeID, winguest.SSHService),
-			"ungranted_agent": unelevatedDial(t, g.RuntimeID, winguest.AgentService),
+		key := "ungranted_agent"
+		if label != "baseline" {
+			key = "granted_agent"
 		}
+		r.Unelevated = map[string]string{key: unelevatedDial(t, g.RuntimeID, guestagent.ServiceID)}
 	}
-	sshStarted := time.Now()
-	sshCtx, done := context.WithTimeout(ctx, time.Minute)
-	transport, err := hvsock.Dial(sshCtx, hvsock.Addr{VMID: vmID, ServiceID: serviceID(winguest.SSHService)})
-	if err != nil {
-		done()
-		return fail("ssh dial", err)
-	}
-	client, fingerprint, err := winguest.Connect(sshCtx, transport, *lab.guestUser, identity, func(string) error { return verify() })
-	done()
-	if err != nil {
-		_ = transport.Close()
-		return fail("ssh", err)
-	}
-	defer func() { _ = client.Close() }()
-	r.HostKeySHA256 = fingerprint
-	r.Timings["ssh_auth"] = ms(time.Since(sshStarted))
 	validationStarted := time.Now()
-	report, steps, err := validateDesktop(ctx, client)
+	report, steps, err := validateDesktop(ctx, observed)
 	r.Timings["desktop_validation"] = ms(time.Since(validationStarted))
 	r.Steps = steps
 	r.Render = report
@@ -631,20 +599,58 @@ func bootAndValidate(t *testing.T, host *Host, image, sid, label string, cpu uin
 		return fail("desktop validation", err)
 	}
 	if !report.ok() {
-		return fail("desktop validation", errors.New("rendering checks did not all pass"))
+		return fail("desktop validation", errors.New("rendering or single-display input checks did not all pass"))
 	}
 	r.Timings["to_validated_desktop"] = ms(time.Since(started))
+	liveStarted := time.Now()
+	facts, err := agentLiveChecks(ctx, observed)
+	r.AgentLive = &facts
+	r.Timings["agent_live_gates"] = ms(time.Since(liveStarted))
+	if err != nil {
+		return fail("agent live gates", err)
+	}
 	sampleMemory(r.Memory, "after_validation")
-	r.Passed = r.Unelevated == nil || (r.Unelevated["granted_ssh"] == "connected" && r.Unelevated["ungranted_agent"] == "access-denied")
+	r.Passed = authorizationOK(r.Unelevated)
 	if !r.Passed {
 		r.Failure = "unelevated HvSocket access did not follow the service table"
 	}
 	return r
 }
 
-// validateDesktop runs the image's pinned validation script. Only fixed numeric
-// step markers are read from stderr, and only the bounded JSON report from stdout.
-func validateDesktop(ctx context.Context, client *ssh.Client) (*render, map[string]int64, error) {
+// Prove protocol compatibility before validation, retrying only harmless proof.
+func proveLabAgent(ctx context.Context, dial guestagent.Dialer) error {
+	for {
+		attempt, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := guestagent.Run(attempt, dial, []string{guestagent.WindowsPath, "version"}, nil, io.Discard)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		var version *guestagent.VersionError
+		if errors.As(err, &version) {
+			return errors.New("agent protocol mismatch")
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("agent proof unavailable")
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func authorizationOK(results map[string]string) bool {
+	if results == nil {
+		return true
+	}
+	if len(results) != 1 {
+		return false
+	}
+	return results["granted_agent"] == "connected" || results["ungranted_agent"] == "access-denied"
+}
+
+// validateDesktop runs the image's pinned script. Fixed numeric markers and the
+// JSON report share bounded stdout; the client discards guest stderr.
+func validateDesktop(ctx context.Context, dial guestagent.Dialer) (*render, map[string]int64, error) {
 	payload, err := json.Marshal(map[string]any{"script": validateEntry, "data": map[string]any{
 		"name": *lab.guestName, "user": *lab.guestUser, "sha256": *lab.probeSHA256, "script_sha256": *lab.validationSHA256,
 		"require_setup": false, "prepared": true, "autologon_sha256": *lab.autologonSHA256,
@@ -652,68 +658,55 @@ func validateDesktop(ctx context.Context, client *ssh.Client) (*render, map[stri
 	if err != nil {
 		return nil, nil, err
 	}
-	framed := binary.LittleEndian.AppendUint32(nil, uint32(len(payload))) // #nosec G115 -- a small fixed request.
+	framed := binary.LittleEndian.AppendUint32(nil, uint32(len(payload))) // #nosec G115 -- fixed bounded request.
 	framed = append(framed, payload...)
 	vctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	stop := context.AfterFunc(vctx, func() { _ = client.Close() })
-	defer stop()
-	session, err := client.NewSession()
+	output := &validationOutput{steps: map[string]int64{}, begun: time.Now()}
+	err = guestagent.Run(vctx, dial, []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(validateBootstrap)}, bytes.NewReader(framed), output)
 	if err != nil {
-		return nil, nil, err
-	}
-	defer func() { _ = session.Close() }()
-	var stdout strings.Builder
-	session.Stdin = strings.NewReader(string(framed))
-	session.Stdout = &boundedWriter{w: &stdout, limit: 8192}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		return nil, nil, err
-	}
-	steps := map[string]int64{}
-	begun := time.Now()
-	var reading sync.WaitGroup
-	reading.Add(1)
-	go func() {
-		defer reading.Done()
-		scanner := bufio.NewScanner(io.LimitReader(stderr, 1<<20))
-		for scanner.Scan() {
-			if step, ok := strings.CutPrefix(scanner.Text(), "BIVOUAC_HCS_STEP:"); ok {
-				if n, err := strconv.Atoi(step); err == nil && n > 0 && n < 100 {
-					steps[strconv.Itoa(n)] = time.Since(begun).Milliseconds()
-				}
-			}
+		var exit *guestagent.ExitError
+		if errors.As(err, &exit) && exit.Code > 0 && exit.Code <= 255 {
+			return nil, output.steps, fmt.Errorf("validation exited with step %d", exit.Code)
 		}
-		_, _ = io.Copy(io.Discard, stderr)
-	}()
-	err = session.Run("powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedPowerShell(validateBootstrap))
-	reading.Wait()
-	if err != nil {
-		var exit *ssh.ExitError
-		if errors.As(err, &exit) {
-			return nil, steps, fmt.Errorf("validation exited with step %d", exit.ExitStatus())
-		}
-		return nil, steps, errors.New("validation transport failed")
+		return nil, output.steps, errors.New("validation transport failed")
 	}
 	var report render
-	if err = json.Unmarshal([]byte(stdout.String()), &report); err != nil {
-		return nil, steps, errors.New("invalid bounded validation report")
+	if json.Unmarshal(output.pending, &report) != nil {
+		return nil, output.steps, errors.New("invalid bounded validation report")
 	}
-	return &report, steps, nil
+	return &report, output.steps, nil
 }
 
-type boundedWriter struct {
-	w     io.Writer
-	n     int
-	limit int
+// Fixed numeric markers share bounded stdout with the final JSON. Guest stderr
+// is discarded by the agent client, so it can never enter lab reports.
+type validationOutput struct {
+	pending []byte
+	total   int
+	steps   map[string]int64
+	begun   time.Time
 }
 
-func (b *boundedWriter) Write(p []byte) (int, error) {
-	if b.n+len(p) > b.limit {
+func (b *validationOutput) Write(p []byte) (int, error) {
+	b.total += len(p)
+	if b.total > 8192 {
 		return 0, errors.New("validation output exceeds bound")
 	}
-	b.n += len(p)
-	return b.w.Write(p)
+	b.pending = append(b.pending, p...)
+	for {
+		line, rest, found := bytes.Cut(b.pending, []byte{'\n'})
+		if !found {
+			break
+		}
+		step, ok := strings.CutPrefix(strings.TrimSuffix(string(line), "\r"), "BIVOUAC_HCS_STEP:")
+		n, err := strconv.Atoi(step)
+		if !ok || err != nil || n < 1 || n >= 100 {
+			break
+		}
+		b.steps[strconv.Itoa(n)] = time.Since(b.begun).Milliseconds()
+		b.pending = rest
+	}
+	return len(p), nil
 }
 
 // unelevatedDial reruns this test binary as a child of the user's unelevated
