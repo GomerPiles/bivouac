@@ -843,6 +843,28 @@ primary user. Sandbox CLI/server management access from another host account
 also remains unverified; agent authentication alone cannot establish that
 management boundary.
 
+A session-only, metadata-only broker now demonstrates one elevation followed
+by two complete ordinary-user Sandbox launches. It uses its own fresh local pipe,
+an approved caller SID, explicit client rights excluding pipe-instance creation,
+privileged pipe-owner verification, bounded versioned frames and nonces. Caller
+impersonation ends before native discovery. No RPC accepts a caller path, guest
+command, configuration, secret or mutation target; only Sandbox candidate
+metadata leaves elevation. The ordinary manager retains TLS authentication,
+guest/boot corroboration, journalling and cleanup. The lab helper ends after two
+successful metadata queries or a five-minute deadline with bounded drain; nothing
+is installed, and broker failure never causes an implicit per-launch UAC fallback.
+
+The proposed smallest durable deployment is one administrator-protected helper
+and a separate demand-start `bivouac-sandbox-discovery` service, with its approved
+account protected in the service configuration. Delegate only service start,
+query-status and read-control, plus the local metadata pipe; use no broad Hyper-V
+membership or changes to the HCS VM host. The service must not execute mutable
+worktree code or parse caller-provided service-start arguments. This installer,
+LocalSystem execution, idle/reboot behavior and another primary user remain
+unvalidated. A smaller guest-callback registry setup remains speculative: HCS
+exposes per-service/system `AllowWildcardBinds` policy, and registration alone
+has not been shown sufficient for Sandbox.
+
 Explicit network probes run trusted code only. Direct and reverse TCP variants
 reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
 pins on both sides. Private keys remain in process memory; only public
@@ -854,7 +876,7 @@ job networking. Their authentication has loopback test coverage; live TCP
 reachability remains unresolved. HvSocket avoids this dependency completely.
 
 Native HCS ownership/runtime correlation and ordinary-user command transport
-have disposable-guest evidence. Elevation-free runtime discovery, host-account
+have disposable-guest evidence. Durable broker installation, host-account
 authorization, effective resource/security settings, reboot/crash recovery,
 GUI/GPU behavior and real runner registration/completion remain gates. The CLI's
 network toggle alone cannot establish bivouac's public-only egress policy. Guest firewall

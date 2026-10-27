@@ -235,6 +235,17 @@ Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
   lacked `VirtualMachineId`; SMBIOS and the guest HvSocket `LocalAddress`
   exposed UUIDs, but both routes returned Winsock 10049 and neither reached
   the recorded guest. No candidate was treated as native ownership evidence.
+- One elevated session-only metadata broker served two fresh ordinary-user
+  `--secure-probe --broker` launches without per-run UAC. Both passed the full
+  native/TLS, stdin, exit, cancellation, restart, refusal and cleanup predicates
+  with guest networking disabled. No per-run inspection directory was created;
+  both CLI sessions were absent, and the broker endpoint closed after its second
+  successful query. No persistent service, task, registry or account change was
+  made. Broker dispatch/identity, frame bounds, replay and fake-endpoint refusal
+  have test coverage. A real, unelevated pipe fixture passed caller-SID
+  identification, anonymous denial, and ordinary queries before/after; its
+  creator additionally has server rights. The separate elevated account audit
+  was canceled at UAC. Durable installation is a documented proposal only.
 - Successful lab launches were stopped by their recorded CLI ID after a fresh
   guest/boot challenge, and absence was confirmed. Cleanup failures retain
   records. No unrelated guest was stopped.
@@ -253,7 +264,8 @@ attempted, and the reason for that refusal is unverified.
 The Windows host build, full non-live test suite, vet and repository-wide lint
 pass. Race checking was unavailable with the host's cgo-disabled toolchain.
 
-Open: runtime discovery without per-run UAC, other-primary-account access
+Open: durable one-time broker installation and its LocalSystem/idle/reboot
+lifecycle, other-primary-account access
 (including Sandbox CLI/server management), effective settings, host-enforced
 public-only egress, real disposable runner registration/completion and
 cancellation, crash/reboot recovery, resource

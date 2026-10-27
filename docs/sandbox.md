@@ -5,7 +5,7 @@ Windows Sandbox installation and CLI already on the host. It never reads a
 normal bivouac home, changes CI mode, contacts the bivouac VM host service,
 installs a host service/task/driver, edits host firewall rules or registers runners. The
 explicit `--native-probe` and `--secure-probe` options request UAC for read-only
-discovery only;
+discovery only unless an existing metadata broker is selected;
 its manager and guest-command transport remain unelevated.
 Keep any concurrent HCS development in its own worktree.
 
@@ -184,6 +184,108 @@ denied. Ordinary-user controls succeeded. No claim is made about Sandbox CLI or
 server management access from another primary host account; that could bypass
 an agent-only policy and must be validated separately before CI use.
 
+## One elevation for multiple launches
+
+The session-only metadata broker demonstrates the part needed for a one-time
+installation. Sandbox start, desktop connection, bootstrap, authenticated agent
+traffic and stop already work in the ordinary manager. Only HCS native discovery
+needs the elevated component. Two fresh `--secure-probe --broker <session-id>`
+runs passed after one broker UAC approval, with zero guest NICs, mutual-TLS
+refusals, command/stdin, cancellation, agent restart and cleanup. Neither run
+created a per-run elevated inspection directory. Both CLI sessions were absent
+afterwards, and the broker endpoint closed automatically after its second query.
+
+The broker offers exactly one operation: return bounded public native metadata
+for running Sandbox-class systems. It accepts no guest ID to mutate, file path,
+command, configuration, client key, credential or JIT data. The ordinary manager
+still authenticates each candidate and matches the exact recorded guest boot
+before accepting a binding. The broker holds no guest lifetime or stop handle.
+
+Its local named pipe admits SYSTEM, Administrators and the approved account.
+Client rights exclude creation of another pipe instance. Each framed request is
+bounded, identifies its protocol and has a fresh nonce; the server checks the
+Windows caller SID after reading and reverts before querying HCS. The client
+checks that the pipe owner is Administrators or SYSTEM, so an unelevated process
+that creates the name first is refused. Remote pipe clients are rejected by the
+pipe implementation. Tests cover foreign/anonymous identities, unsupported
+operations, oversized/unknown input, replay and a real user-owned fake endpoint.
+An unelevated real-pipe fixture also passed Windows caller-SID identification,
+anonymous access-denied, and ordinary queries before/after that denial. The
+fixture grants its creator server rights that the elevated broker gets through
+Administrators; it does not establish a different primary user's access. A
+separate elevated-broker account audit was not completed because its UAC request
+was canceled. `broker-account-check <session-id>` can repeat that audit using the
+session's two-query budget without launching a VM.
+
+For a temporary repeat using the executable and `$labArgs` built above:
+
+```powershell
+$broker = (& ./bin/sandbox-lab.exe broker-session (Resolve-Path bin).Path) |
+    ConvertFrom-Json
+# Approve this single UAC request. Both calls below remain unelevated.
+& ./bin/sandbox-lab.exe @labArgs --secure-probe --broker $broker.session
+& ./bin/sandbox-lab.exe @labArgs --secure-probe --broker $broker.session
+```
+
+The helper accepts two successful metadata queries and has a five-minute
+deadline plus bounded request drain. `--broker` never falls back to `runas` when
+the broker is missing or refuses a request. No service, scheduled task, registry
+entry, account/group membership or host policy is installed by this experiment.
+The lab broker requires the same account to approve elevation; a true standard
+account with a different administrator supplying credentials is unverified.
+
+### Smallest durable setup to implement
+
+The demonstrated approach needs a protected discovery helper and one trusted
+launch registration. I recommend a demand-start service for the durable form:
+
+| Item | Exact scope |
+| --- | --- |
+| Executable | One purpose-built helper under `%ProgramFiles%\Bivouac\SandboxDiscovery`; administrator/SYSTEM writes, user read/execute. No worktree or user-writable configuration is an elevation target. |
+| Service | One separate demand-start service, `bivouac-sandbox-discovery`, with fixed executable/arguments and the approved SID in administrator-protected service configuration. LocalSystem is the proposed identity; the current prototype uses the approving elevated user. |
+| Delegation | That SID gets `SERVICE_START`, `SERVICE_QUERY_STATUS` and `READ_CONTROL` on this service only (mask `0x20014`), plus the pipe client rights. No change-config, stop, delete, write-DACL or write-owner delegation. |
+
+The manager could start that service through SCM without elevation, query the
+same metadata-only pipe and perform the complete Sandbox lifecycle itself.
+The service should exit after an idle interval and ignore caller-supplied start
+arguments. A protected copy plus service configuration/ACLs would be the entire
+new footprint: no new user, broad Hyper-V group grant, firewall exception,
+HvSocket registration, VM image or change to the HCS VM host service. Binary
+updates and uninstall would require elevation. This installation, LocalSystem
+identity, demand-start/reboot behavior and a different primary client account
+are design work, not validated by the session prototype; no installer exists yet.
+
+The approved SID can be granted the proposed service rights with an ACE shaped
+`(A;;0x20014;;;<approved-user-SID>)`, alongside SYSTEM/Administrators full access.
+Its named-pipe ACE uses mask `0x120083`, excluding `FILE_CREATE_PIPE_INSTANCE`.
+These are proposed service-specific grants; no host-wide SCM DACL is changed.
+See Microsoft's [service access rights](https://learn.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights).
+
+For an administrator's interactive desktop, a highest-privilege scheduled task
+could host the same helper instead of a service. It still needs the protected
+binary, fixed action and caller checks, and an interactive-token task depends on
+that administrator being logged on. This is an untested alternative; the service
+proposal avoids that dependency and can authorize a standard user's SID. See
+[Task Scheduler security contexts](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks).
+
+Two mechanically smaller alternatives do not yet replace this design:
+
+- Hyper-V Administrators membership is a broad grant over Hyper-V features,
+  rather than metadata-only discovery. It is not the least-privilege setup.
+  See Microsoft's [group rights](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/security-best-practices/appendix-b--privileged-accounts-and-groups-in-active-directory#hyper-v-administrators).
+- A dedicated guest-callback service registration might need only its own
+  `GuestCommunicationServices\<GUID>` key and a service-specific wildcard bind
+  descriptor. However, [HCS also gates wildcard binds per service/system with
+  `AllowWildcardBinds`](https://learn.microsoft.com/en-us/virtualization/api/hcs/schemareference#hvsocketserviceconfig).
+  Sandbox exposes no such setting through its documented CLI/WSB configuration.
+  Registration alone has not been tested and must not be presented as sufficient.
+  No global registry or VM policy was changed to investigate it on this host.
+
+The HCS open API documents its requested-access argument as `GENERIC_ALL`, so
+there is no documented query-only handle flag to grant directly to the manager.
+The broker enforces its smaller capability in protected code. See
+[HcsOpenComputeSystem](https://learn.microsoft.com/en-us/virtualization/api/hcs/reference/hcsopencomputesystem).
+
 ## Ownership and cleanup
 
 The durable prefixed-name/UUID intent precedes launch. A matching CLI receipt
@@ -216,8 +318,9 @@ invoked explicitly; it does not mutate any compute system.
 
 ## Gates before a provider
 
-1. Resolve runtime discovery without per-run UAC and host-account authorization.
-   Native correlation works, but effective settings and safe recovery for
+1. Implement and validate the proposed one-time broker installation and primary
+   host-account authorization. A session broker removes per-launch UAC, but
+   effective settings and safe recovery for
    ambiguous starts, launcher loss and reboot remain open.
 2. Extend the working private transport to manager adoption and real runner
    lifetimes; agent restart and command cancellation alone are insufficient.

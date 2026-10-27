@@ -371,7 +371,7 @@ func run(parent context.Context) error {
 	defer cancel()
 	args := os.Args[1:]
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "help") {
-		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--discovery-probe | --secure-probe | --native-probe | --network-probe | --reverse-probe] [--hold <duration>]\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
+		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--discovery-probe | --secure-probe | --native-probe | --network-probe | --reverse-probe] [--broker <session-id>] [--hold <duration>]\nsandbox-lab broker-session <lab-root> | broker-account-check <session-id>\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
 		return err
 	}
 	if len(args) == 1 {
@@ -452,6 +452,15 @@ func run(parent context.Context) error {
 	}
 	if len(args) > 0 && args[0] == "run" {
 		return runLab(ctx, args[1:], os.Stdout)
+	}
+	if len(args) == 2 && args[0] == "broker-session" {
+		return startBrokerSession(ctx, args[1], os.Stdout)
+	}
+	if len(args) == 2 && args[0] == "broker-account-check" {
+		return brokerAccountCheck(ctx, args[1], os.Stdout)
+	}
+	if len(args) == 3 && args[0] == "broker" {
+		return serveBroker(parent, args[1], args[2])
 	}
 	if len(args) == 2 && args[0] == "inspect" {
 		return inspect(ctx, args[1], os.Stdout)

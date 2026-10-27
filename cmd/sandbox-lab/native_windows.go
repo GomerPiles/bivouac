@@ -110,6 +110,13 @@ func (h *labHost) proveNative(ctx context.Context) error {
 // Only discovery runs elevated. The helper can query systems and execute fixed
 // public identity probes; it cannot receive commands, JIT input or secrets.
 func (h *labHost) discoverNative(ctx context.Context, self string) (nativeIdentity, error) {
+	if h.broker != "" {
+		candidates, err := brokerCandidates(ctx, h.broker)
+		if err != nil {
+			return nativeIdentity{}, err
+		}
+		return h.authenticateCandidates(ctx, candidates)
+	}
 	root := filepath.Dir(h.input)
 	dir := filepath.Join(root, "inspection")
 	if os.Mkdir(dir, 0o700) != nil {
@@ -173,6 +180,7 @@ func (h *labHost) nativeProbe(ctx context.Context, self string, result *labResul
 		return err
 	}
 	result.Native = true
+	result.BrokerDiscovery = h.broker != ""
 	data, err := h.nativeRun(ctx, "smoke", strings.NewReader("bivouac-sandbox-stdin-probe"))
 	if err != nil {
 		return errors.New("native framed smoke failed")

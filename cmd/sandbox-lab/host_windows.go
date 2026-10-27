@@ -125,6 +125,7 @@ type labHost struct {
 	record                labRecord
 	client                tls.Certificate
 	secure                bool
+	broker                string
 }
 
 func (h *labHost) call(ctx context.Context, args ...string) ([]byte, error) {
@@ -273,6 +274,7 @@ type labResult struct {
 	NativeCancellation     bool               `json:"native_cancellation"`
 	NativeRestart          bool               `json:"native_restart"`
 	Secure                 bool               `json:"secure"`
+	BrokerDiscovery        bool               `json:"broker_discovery"`
 	MissingClientRefused   bool               `json:"missing_client_refused"`
 	WrongClientRefused     bool               `json:"wrong_client_refused"`
 	WrongServerRefused     bool               `json:"wrong_server_refused"`
@@ -296,6 +298,7 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	native := flags.Bool("native-probe", false, "request one read-only UAC discovery and test the ordinary-user HvSocket channel with networking disabled")
 	secure := flags.Bool("secure-probe", false, "use per-launch mutual TLS for the native probe; requests read-only UAC discovery")
 	discovery := flags.Bool("discovery-probe", false, "try guest-local runtime UUID sources with no UAC or native enumeration")
+	broker := flags.String("broker", "", "use an already elevated lab metadata broker session; requires secure-probe and never requests UAC")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *base == "" || *bivouac == "" || *runner == "" {
 		return errors.New("run requires --root, --bivouac, --runner and --runner-sha256")
 	}
@@ -304,6 +307,9 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	}
 	if *secure {
 		*native = true
+	}
+	if *broker != "" && (!*secure || !validGUID(*broker)) {
+		return errors.New("broker requires secure-probe and a valid session UUID")
 	}
 	if *hold < 0 || *hold > 3*time.Minute {
 		return errors.New("inspection hold must be between zero and three minutes")
@@ -360,6 +366,7 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		return err
 	}
 	h := labHost{binary: binary, input: filepath.Join(root, "input"), output: filepath.Join(root, "output"), record: labRecord{Name: "bivouac-sandbox-" + id, ID: id, Phase: "planned"}, secure: *secure}
+	h.broker = *broker
 	for _, dir := range []string{h.input, h.output} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return errors.New("create lab staging")
