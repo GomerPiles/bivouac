@@ -1,7 +1,6 @@
-// Package vz is the macOS provider: disposable guests cloned from a local
-// Tart-format baseline, run headless by bivouac's own Virtualization.framework
-// helper, and driven through bivouac's guest agent so the runner lives in the
-// guest's Aqua session. Tart may build baselines; bivouac runs them.
+// Package vz runs disposable guests on macOS using Virtualization.framework
+// and bivouac's guest agent. Guest manifests select OS-specific preparation;
+// Darwin runners use the agent's Aqua session.
 package vz
 
 import (
@@ -44,6 +43,7 @@ const markerFile = "bivouac.json"
 type Provider struct {
 	name           string
 	cfg            config.VZ
+	runner         GuestRuntime
 	controllerID   string
 	store          vm.Store // baselines and clones
 	rt             Runtime
@@ -67,7 +67,10 @@ func (p *Provider) SetCache(service *cache.Service) {
 // New returns the provider for VMs in store (paths.Layout.VMs). rt may be
 // nil for the real VM runtime. log is the caller's redacted sink; nil disables
 // startup timing records.
-func New(name string, cfg config.VZ, controllerID string, store string, rt Runtime, log *slog.Logger) (*Provider, error) {
+func New(name string, cfg config.VZ, guest GuestRuntime, controllerID string, store string, rt Runtime, log *slog.Logger) (*Provider, error) {
+	if err := guest.validate(); err != nil {
+		return nil, err
+	}
 	if !filepath.IsAbs(store) {
 		return nil, fmt.Errorf("VM store %q is not absolute", store)
 	}
@@ -78,22 +81,21 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, helpers: map[string]bool{}, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, runner: guest, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, helpers: map[string]bool{}, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the VM store path is
 // too long for guest agent sockets, or the executable that launches VM
 // helpers lacks the virtualization entitlement. The daemon calls it at
-// startup, so such a host never accepts a job.
+// startup before reconciliation. Baselines and guest helper files belong to
+// new-instance admission, never this host-runtime check.
 func (p *Provider) CheckRuntime(ctx context.Context) error {
-	l, ok := p.rt.(*local)
-	if !ok {
-		return nil
+	if checker, ok := p.rt.(interface{ CheckRuntime(context.Context) error }); ok {
+		if err := checker.CheckRuntime(ctx); err != nil {
+			return err
+		}
 	}
-	if err := l.check(ctx); err != nil {
-		return err
-	}
-	if err := p.preflightRunner(ctx); err != nil {
+	if err := p.isolation(ctx); err != nil {
 		return err
 	}
 	return CheckNested(p.cfg)
@@ -135,19 +137,22 @@ func (p *Provider) engineMachine() vm.MachineOptions {
 // Name implements provider.Provider.
 func (p *Provider) Name() string { return p.name }
 
-// Capabilities implements provider.Provider. The graphics device is always
-// attached, so the headless guest keeps a display and Metal.
+// Capabilities keeps Darwin display/Metal and Apple slot accounting; Linux
+// runners are headless with no advertised GPU or desktop session.
 func (p *Provider) Capabilities() provider.Capabilities {
+	if p.runner.OS == "linux" {
+		return provider.Capabilities{GPU: provider.GPUNone, DisplayTransport: "none"}
+	}
 	return provider.Capabilities{GPU: provider.GPUParavirtualized, DesktopSession: true, DisplayTransport: "none", HostLimit: p.cfg.HostVMLimit}
 }
 
 func (p *Provider) vmDir(name string) string { return p.store.Dir(name) }
 
 func (p *Provider) checkName(name string) error {
-	if !strings.HasPrefix(name, config.NamePrefix) {
-		return fmt.Errorf("%w: %q lacks the %q prefix", provider.ErrNotOwned, name, config.NamePrefix)
+	if !strings.HasPrefix(name, config.NamePrefix+p.name+"-") {
+		return fmt.Errorf("%w: %q lacks the %q prefix", provider.ErrNotOwned, name, config.NamePrefix+p.name+"-")
 	}
-	if strings.ContainsAny(name, "/\\ \t\n") || name == p.cfg.Baseline {
+	if strings.ContainsAny(name, "/\\ \t\r\n\x00") || name == p.cfg.Baseline {
 		return fmt.Errorf("%w: invalid name %q", provider.ErrNotOwned, name)
 	}
 	return nil
@@ -166,8 +171,11 @@ func (p *Provider) readMeta(name string) (provider.Metadata, bool) {
 }
 
 func (p *Provider) owns(name string) (provider.Metadata, bool) {
+	if err := p.checkName(name); err != nil {
+		return provider.Metadata{}, false
+	}
 	meta, ok := p.readMeta(name)
-	return meta, ok && meta.ControllerID == p.controllerID && strings.HasPrefix(name, config.NamePrefix)
+	return meta, ok && meta.ControllerID == p.controllerID && meta.Provider == p.name && meta.InstanceID != ""
 }
 
 // ownsGuest proves, before every guest operation, that name is a runner VM
@@ -224,6 +232,7 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS stri
 	}); err != nil {
 		return err
 	}
+	spec.Meta.Provider = p.name
 	meta, err := json.Marshal(spec.Meta)
 	if err != nil {
 		return err
@@ -235,9 +244,9 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS stri
 }
 
 // CheckBaseline refuses a baseline in store that bivouac cannot drive: one
-// without a manifest, of another OS (darwin for runners, linux for container
-// engines), without a runner directory, or with a guest agent of another
-// protocol version.
+// without a manifest, of another OS, or with a guest agent of another
+// protocol version. Darwin images require a runner directory; Linux engine
+// images may omit it. CheckRunnerBaseline requires one for either runner OS.
 func CheckBaseline(store, name, wantOS string) (vm.Manifest, error) {
 	m, err := vm.ReadManifest(vm.Store(store).Dir(name))
 	switch {
@@ -265,20 +274,6 @@ func (p *Provider) guestContract(name string) (vm.Guest, error) {
 	return m.Guest, nil
 }
 
-// checkReleaseProxy refuses the release proxy for a guest whose image does
-// not record passwordless sudo, which installing its trust needs; the
-// caller then runs the job without the cache.
-func (p *Provider) checkReleaseProxy(name string) error {
-	guest, err := p.guestContract(name)
-	if err != nil {
-		return err
-	}
-	if !guest.Sudo {
-		return errors.New("the release proxy needs passwordless sudo, which the baseline does not record")
-	}
-	return nil
-}
-
 // runnerDir is the runner directory name's image records.
 func (p *Provider) runnerDir(name string) (string, error) {
 	g, err := p.guestContract(name)
@@ -288,10 +283,14 @@ func (p *Provider) runnerDir(name string) (string, error) {
 	return g.RunnerDir, err
 }
 
-// runnerLaunch attaches input devices and
-// the configured machine options; the guest console is never attached.
-func (p *Provider) runnerLaunch() Launch {
-	return Launch{Share: p.cfg.BootstrapShare, Input: true, RootlessNetwork: true, Network: p.cfg.Network, Machine: MachineOptions(p.cfg.Machine)}
+// runnerLaunch selects devices from the retained clone's manifest, never the
+// current baseline. Linux guests have no input devices.
+func (p *Provider) runnerLaunch(name string) (Launch, error) {
+	m, err := vm.ReadManifest(p.vmDir(name))
+	if err != nil {
+		return Launch{}, err
+	}
+	return Launch{Share: p.cfg.BootstrapShare, Input: m.OS == "darwin", RootlessNetwork: true, Network: p.cfg.Network, Machine: MachineOptions(p.cfg.Machine)}, nil
 }
 
 // LaunchArgs is the exact argument array the VM helper receives for a
@@ -301,7 +300,10 @@ func (p *Provider) LaunchArgs(name string) ([]string, error) {
 	if !ok {
 		return nil, nil
 	}
-	launch := p.runnerLaunch()
+	launch, err := p.runnerLaunch(name)
+	if err != nil {
+		return nil, err
+	}
 	if p.cfg.Containers != nil {
 		launch = Launch{RootlessNetwork: true, Network: p.cfg.Network, Machine: MachineOptions(p.cfg.Machine)}
 	}
@@ -434,7 +436,7 @@ func (p *Provider) checkSession(ctx context.Context, name string) error {
 }
 
 // StartRunner implements provider.Provider. The JIT config travels on the
-// guest agent's stdin channel; the agent runs inside the Aqua session.
+// guest agent's stdin channel; Darwin uses Aqua and Linux a non-root service.
 func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) error {
 	// The bootstrap returns as soon as the runner is backgrounded; a session
 	// that lingers means the guest kept the agent's pipes open.
@@ -451,6 +453,9 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	// Never send the JIT config to a VM this controller cannot prove it owns.
 	if err := p.ownsGuest(name); err != nil {
 		return err
+	}
+	if p.runner.OS == "linux" {
+		return p.startLinuxRunner(ctx, name, jit)
 	}
 	helperReady := true
 	// Container readiness already installed the shared macOS helper. Replacing
@@ -502,23 +507,13 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 }
 
 func (p *Provider) installCache(ctx context.Context, name string) error {
+	if p.runner.OS == "linux" {
+		return p.installLinuxCache(ctx, name)
+	}
 	if _, err := p.output(ctx, name, []string{"mkdir", "-p", "-m", "0700", guestDirectory}, nil); err != nil {
 		return errors.New("prepare private guest cache directory")
 	}
-	if err := p.runnerIsolation(name); err != nil {
-		return err
-	}
-	stream, err := p.rt.Duplex(context.WithoutCancel(ctx), name, []string{guestHelper, "cache", "endpoint"})
-	if err != nil {
-		return errors.New("open guest cache control stream")
-	}
-	p.cache.Revoke(name)
-	listener, revocation, err := p.rt.CacheListeners(name)
-	if err != nil {
-		_ = stream.Close()
-		return err
-	}
-	bootstrap, err := p.cache.AttachEndpoint(ctx, name, stream, listener, revocation)
+	bootstrap, err := p.attachCacheEndpoint(ctx, name, guestHelper)
 	if err != nil {
 		return err
 	}
@@ -527,9 +522,11 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 	if err = json.Unmarshal(bootstrap, &settings); err != nil {
 		return errors.New("invalid cache bootstrap")
 	}
-	if settings.ReleaseProxy {
-		if err := p.checkReleaseProxy(name); err != nil {
-			return err
+	if !settings.ReleaseProxy {
+		// guest.sh selects proxy/trust environment by this file's presence.
+		// A stale release adapter must not turn archive-only setup into a proxy.
+		if _, err := p.output(ctx, name, []string{"rm", "-f", "/tmp/bivouac-cache-env", "/tmp/bivouac-cache-roots.pem", "/tmp/bivouac-cache-ca.pem"}, nil); err != nil {
+			return errors.New("remove inactive guest release proxy adapter")
 		}
 	}
 	// dd writes the private bootstrap without echoing it back to the host.
@@ -576,6 +573,10 @@ func (p *Provider) StopRunner(ctx context.Context, name string) error {
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
+	if p.runner.OS == "linux" {
+		_, err := p.linuxCommand(ctx, name, "cancel", nil, statusOutputLimit)
+		return err
+	}
 	dir, err := p.runnerDir(name)
 	if err != nil {
 		return err
@@ -603,6 +604,9 @@ func (p *Provider) RunnerStatus(ctx context.Context, name string) (provider.Runn
 			return provider.RunnerStatus{State: provider.RunnerAbsent}, nil
 		default:
 		}
+	}
+	if p.runner.OS == "linux" {
+		return p.linuxRunnerStatus(ctx, name)
 	}
 	out, err := p.guest(ctx, name, []string{guestPath, "status"}, nil, statusOutputLimit)
 	switch {
@@ -785,7 +789,7 @@ func (p *Provider) listVMs(ctx context.Context) ([]provider.Owned, []provider.Fo
 		}
 		prefixed := strings.HasPrefix(e.Name, config.NamePrefix)
 		if e.Running || prefixed {
-			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed})
+			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed, HostLimitExempt: p.HostLimitExempt(e.Name)})
 		}
 	}
 	return owned, foreign, nil

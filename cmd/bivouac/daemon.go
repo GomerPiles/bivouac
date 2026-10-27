@@ -190,7 +190,7 @@ func buildProviders(ctx context.Context, cfg *config.Config, store *state.Store,
 				closeProviders(out)
 				return nil, err
 			}
-			tp, err := vz.New(name, *p.VZ, store.ControllerID(), vms, nil, log)
+			tp, err := vz.New(name, *p.VZ, vz.GuestRuntime{OS: p.VZ.RunnerOS(), Helper: p.VZ.Helper}, store.ControllerID(), vms, nil, log)
 			if err != nil {
 				closeProviders(out)
 				return nil, err

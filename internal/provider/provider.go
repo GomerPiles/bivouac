@@ -40,6 +40,7 @@ type Capabilities struct {
 // Metadata is written into the engine's own records for an instance, so a
 // later process can prove ownership before deleting anything.
 type Metadata struct {
+	Provider      string `json:"provider,omitempty"`
 	ParentName    string `json:"parent_name,omitempty"`
 	EngineName    string `json:"engine_name,omitempty"`
 	NetworkPolicy string `json:"network_policy,omitempty"`
@@ -88,6 +89,9 @@ type Foreign struct {
 	Name     string
 	Running  bool
 	Prefixed bool // carries the bivouac prefix without our metadata
+	// HostLimitExempt is proven by the provider from the guest manifest.
+	// Unknown guests are never exempt from a host guest-OS limit.
+	HostLimitExempt bool
 }
 
 // RunnerState is what the guest reports about the runner process.

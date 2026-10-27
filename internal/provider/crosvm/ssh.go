@@ -2,14 +2,10 @@ package crosvm
 
 import (
 	"context"
-	"crypto/sha256"
 	"debug/elf"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -20,6 +16,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/command"
 	"github.com/GomerPiles/bivouac/internal/diag"
+	"github.com/GomerPiles/bivouac/internal/linuxguest"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"net"
@@ -85,17 +82,11 @@ func NewSSHGuest(opts SSHOptions) (*SSHGuest, error) {
 	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(opts.Helper)
+	fingerprint, err := linuxguest.HelperSHA256(opts.Helper)
 	if err != nil {
-		return nil, errors.New("cannot fingerprint Linux helper")
+		return nil, err
 	}
-	h := sha256.New()
-	n, readErr := io.Copy(h, io.LimitReader(f, 128<<20+1))
-	closeErr := f.Close()
-	if readErr != nil || closeErr != nil || n > 128<<20 {
-		return nil, errors.New("linux helper fingerprint exceeds bound or is unreadable")
-	}
-	return &SSHGuest{opts: opts, ssh: ssh, scp: scp, commands: command.Native{}, helperSHA256: hex.EncodeToString(h.Sum(nil))}, nil
+	return &SSHGuest{opts: opts, ssh: ssh, scp: scp, commands: command.Native{}, helperSHA256: fingerprint}, nil
 }
 
 // Forget removes the instance's pinned host key once its VM is deleted.
@@ -146,7 +137,7 @@ func (g *SSHGuest) command(ctx context.Context, r Record, mode string, input []b
 	if err != nil {
 		return nil, err
 	}
-	args = append(args, g.opts.User+"@127.0.0.1", runtimeHelper, "guest", "linux", mode)
+	args = append(args, g.opts.User+"@127.0.0.1", linuxguest.RuntimeHelper, "guest", "linux", mode)
 	if input != nil {
 		return g.commands.Input(ctx, g.ssh, args, input)
 	}
@@ -157,34 +148,6 @@ func (g *SSHGuest) command(ctx context.Context, r Record, mode string, input []b
 	return g.commands.OutputLimit(ctx, g.ssh, args, limit)
 }
 
-// Probe fixed root-owned paths without executing an unverified image helper.
-// No data is interpolated into shell source; this fixed script travels on stdin.
-const preparedHelperProbe = `set -eu
-for p in / /usr /usr/local /usr/local/libexec /usr/local/libexec/bivouac-guest; do
- if [ ! -e "$p" ]; then printf 'absent\n';exit 0;fi
- if [ -L "$p" ]; then printf 'untrusted\n';exit 0;fi
- owner=$(/usr/bin/stat -c %u -- "$p")
- mode=$(/usr/bin/stat -c %a -- "$p")
- if [ "$owner" != 0 ] || [ "$((0$mode & 0022))" != 0 ]; then printf 'untrusted\n';exit 0;fi
-done
-if [ ! -f /usr/local/libexec/bivouac-guest ] || [ ! -x /usr/local/libexec/bivouac-guest ]; then printf 'untrusted\n';exit 0;fi
-exec /usr/bin/sha256sum -- /usr/local/libexec/bivouac-guest
-`
-
-func helperMatches(b []byte, want string) bool {
-	return digest(want) && preparedHelperFingerprint(b) == want
-}
-
-func preparedHelperFingerprint(b []byte) string {
-	if len(b) > 256 {
-		return ""
-	}
-	hash, path, ok := strings.Cut(strings.TrimSpace(string(b)), "  ")
-	if !ok || !digest(hash) || path != preparedHelper {
-		return ""
-	}
-	return hash
-}
 func (g *SSHGuest) Ready(ctx context.Context, r Record) error {
 	return g.ready(ctx, r, g.opts.RequirePrepared)
 }
@@ -198,20 +161,20 @@ func (g *SSHGuest) ready(ctx context.Context, r Record, preparedOnly bool) (resu
 	}
 	probeStart := time.Now()
 	args = append(args, g.opts.User+"@127.0.0.1", "/bin/sh", "-s")
-	probe, err := g.commands.Input(ctx, g.ssh, args, []byte(preparedHelperProbe))
+	probe, err := g.commands.Input(ctx, g.ssh, args, []byte(linuxguest.PreparedHelperProbe))
 	logStartup(r.Name, "helper_check", probeStart, err)
 	if err != nil {
 		return err
 	}
 	helperPath := "./bivouac-guest"
-	if helperMatches(probe, g.helperSHA256) {
-		helperPath = preparedHelper
+	if linuxguest.HelperMatches(probe, g.helperSHA256) {
+		helperPath = linuxguest.PreparedHelper
 		reused = true
 	} else {
 		if preparedOnly {
 			return errors.New("prepared image helper reuse was not proven")
 		}
-		if preparedHelperFingerprint(probe) != "" {
+		if linuxguest.PreparedHelperFingerprint(probe) != "" {
 			slog.Warn("prepared Linux helper differs; uploading selected helper", "instance", r.Name)
 		}
 		stageStart := time.Now()
@@ -234,7 +197,7 @@ func (g *SSHGuest) ready(ctx context.Context, r Record, preparedOnly bool) (resu
 			return err
 		}
 	}
-	cfg := GuestConfig{Name: r.Name, ControllerID: r.Meta.ControllerID, RunnerDir: "/opt/actions-runner", GPU: r.GPU}
+	cfg := linuxguest.GuestConfig{Profile: linuxguest.Crosvm, Name: r.Name, ControllerID: r.Meta.ControllerID, RunnerDir: "/opt/actions-runner", GPU: r.GPU}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
@@ -250,7 +213,7 @@ func (g *SSHGuest) ready(ctx context.Context, r Record, preparedOnly bool) (resu
 		logStartup(r.Name, "guest_prepare", stageStart, err)
 		return err
 	}
-	prepared, err := decodeGuestPreparation(data, cfg, preparedOnly)
+	prepared, err := linuxguest.DecodeGuestPreparation(data, cfg, preparedOnly)
 	logStartup(r.Name, "guest_prepare", stageStart, err)
 	if err != nil {
 		return err
@@ -332,11 +295,11 @@ func (g *SSHGuest) prepareImage(ctx context.Context, r Record) error {
 	if err != nil {
 		return err
 	}
-	var cfg GuestConfig
-	if len(b) > 4096 || json.Unmarshal(b, &cfg) != nil || cfg.Name != r.Name || cfg.ControllerID != r.Meta.ControllerID || len(cfg.BootID) != 36 {
+	var cfg linuxguest.GuestConfig
+	if len(b) > 4096 || json.Unmarshal(b, &cfg) != nil || cfg.Profile != linuxguest.Crosvm || cfg.Name != r.Name || cfg.ControllerID != r.Meta.ControllerID || len(cfg.BootID) != 36 {
 		return errors.New("image trial identity differs")
 	}
-	request := ImagePreparationRequest{Name: cfg.Name, ControllerID: cfg.ControllerID, BootID: cfg.BootID, HelperSHA256: g.helperSHA256}
+	request := linuxguest.ImagePreparationRequest{Profile: linuxguest.Crosvm, Name: cfg.Name, ControllerID: cfg.ControllerID, BootID: cfg.BootID, HelperSHA256: g.helperSHA256}
 	input, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -345,17 +308,14 @@ func (g *SSHGuest) prepareImage(ctx context.Context, r Record) error {
 	if err != nil {
 		return err
 	}
-	args = append(args, g.opts.User+"@127.0.0.1", "/usr/bin/sudo", "-n", runtimeHelper, "guest", "linux", "prepare-image")
+	args = append(args, g.opts.User+"@127.0.0.1", "/usr/bin/sudo", "-n", linuxguest.RuntimeHelper, "guest", "linux", "prepare-image")
 	b, err = g.commands.Input(ctx, g.ssh, args, input)
 	if err != nil {
 		return err
 	}
-	var report PreparedLinuxImage
-	if len(b) <= 4096 && json.Unmarshal(b, &report) == nil && report.FailedStage > 0 && report.FailedStage <= 17 {
-		return fmt.Errorf("image preparation refused at stage %d", report.FailedStage)
-	}
-	if len(b) > 4096 || json.Unmarshal(b, &report) != nil || report.HelperSHA256 != g.helperSHA256 || !report.RunnerUnconfigured || !report.DNSPrepared || !report.MachineIDCleared || !report.SSHHostKeysRemoved {
-		return errors.New("image trial sanitation was not proven")
+	_, err = linuxguest.DecodePreparedImage(b, linuxguest.Crosvm, g.helperSHA256)
+	if err != nil {
+		return err
 	}
 	return nil
 }

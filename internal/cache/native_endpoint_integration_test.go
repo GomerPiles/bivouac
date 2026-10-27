@@ -514,7 +514,7 @@ func TestNativeCacheLocalTransport(t *testing.T) {
 		t.Fatal("native revocation listener failed")
 	}
 
-	bootstrap, err := service.AttachEndpoint(ctx, name, control, listener, revocation)
+	bootstrap, err := service.AttachEndpoint(ctx, name, control, listener, revocation, GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		nativeLabFailure(t, "attachment", err, controlStderr)
 		t.Fatal("native cache attachment failed")

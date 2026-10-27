@@ -1,4 +1,4 @@
-package crosvm
+package linuxguest
 
 import (
 	"context"
@@ -7,6 +7,12 @@ import (
 	"net/netip"
 	"strings"
 )
+
+type guestCommands interface {
+	Output(context.Context, string, []string) ([]byte, error)
+	OutputLimit(context.Context, string, []string, int) ([]byte, error)
+	Input(context.Context, string, []string, []byte) ([]byte, error)
+}
 
 // The fixed kernel launch disables predictable naming: the isolated virtio
 // uplink is eth0. Do not configure Docker bridges or loopback profiles.
@@ -40,7 +46,7 @@ func uplinkProfile(data []byte) (string, error) {
 
 const publicResolverFile = "nameserver 1.1.1.1\nnameserver 8.8.8.8\n"
 
-type dnsPreparation struct{ Reused, ProfileChanged, ResolverChanged bool }
+type dnsPreparation struct{ Reused, ProfileChanged, ResolverChanged, DHCP bool }
 
 func publicResolverSet(values []string) bool {
 	if len(values) != 2 {

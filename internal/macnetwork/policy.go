@@ -1,4 +1,4 @@
-// Package macnetwork defines the effective host-network denial for macOS guests.
+// Package macnetwork defines the effective network denial for guests on macOS hosts.
 package macnetwork
 
 import (

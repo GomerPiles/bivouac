@@ -55,10 +55,16 @@ func (p *Provider) pairStatus(ctx context.Context, name string) (provider.Status
 // recorded both names. Any failure retains the record for ownership-checked retry.
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if p.cfg.Containers == nil {
+		if p.runner.OS == "linux" {
+			i, err := p.standaloneRecord(spec.Name)
+			if err != nil || i.ID != spec.Meta.InstanceID || spec.Meta.ControllerID != p.controllerID {
+				return provider.ErrNotOwned
+			}
+		}
 		if err := p.preflightRunner(ctx); err != nil {
 			return err
 		}
-		return p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine))
+		return p.createVM(ctx, spec, p.runner.OS, MachineOptions(p.cfg.Machine))
 	}
 	i, err := p.pairRecord(spec.Name)
 	if err != nil {
@@ -80,7 +86,7 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		}
 	}
 	spec.Meta.EngineName = i.EngineName
-	if err = p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine)); err != nil {
+	if err = p.createVM(ctx, spec, p.runner.OS, MachineOptions(p.cfg.Machine)); err != nil {
 		return err
 	}
 	meta := spec.Meta
@@ -95,7 +101,21 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 		if err := p.ownsGuest(name); err != nil {
 			return err
 		}
+		if p.runner.OS == "linux" {
+			if err := p.ValidateRetained(name); err != nil {
+				return err
+			}
+			i, err := p.standaloneRecord(name)
+			m, _ := p.readMeta(name)
+			if err != nil || i.ID != m.InstanceID {
+				return provider.ErrNotOwned
+			}
+		}
 		err := p.isolation(ctx)
+		if err != nil {
+			return err
+		}
+		launch, err := p.runnerLaunch(name)
 		if err != nil {
 			return err
 		}
@@ -108,7 +128,6 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 		if err := state.WriteAtomic(filepath.Join(p.vmDir(name), markerFile), data, 0o600); err != nil {
 			return err
 		}
-		launch := p.runnerLaunch()
 		return p.startVM(ctx, name, launch, log)
 	}
 	a, b, err := p.pairStatus(ctx, name)
@@ -162,10 +181,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err := p.runnerIsolation(name); err != nil {
 		return err
 	}
-	if err := p.startupStage(name, "script_install", func() error { return p.installGuestScript(ctx, name) }); err != nil {
-		return err
-	}
-	if err := p.startupStage(name, "aqua_session_check", func() error { return p.checkSession(ctx, name) }); err != nil {
+	if err := p.prepareRunnerGuest(ctx, name); err != nil {
 		return err
 	}
 	if p.cfg.Containers == nil {
@@ -209,7 +225,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
+	plan := RelayPlan{Provider: p.name, StatePath: p.records.Path(), Store: string(p.store), Name: name, InstanceID: i.ID, ControllerID: p.controllerID, Engine: p.cfg.Containers.Engine, Policy: a.Meta.NetworkPolicy}
 	start := p.startRelay
 	if start == nil {
 		start = startDetachedRelay
@@ -371,7 +387,7 @@ func (p *Provider) List(ctx context.Context) ([]provider.Owned, []provider.Forei
 		var safe []provider.Owned
 		for _, o := range owned {
 			if o.Meta.ParentName != "" || o.Meta.EngineName != "" {
-				foreign = append(foreign, provider.Foreign{Name: o.Name, Running: o.Running, Prefixed: true})
+				foreign = append(foreign, provider.Foreign{Name: o.Name, Running: o.Running, Prefixed: true, HostLimitExempt: p.HostLimitExempt(o.Name)})
 			} else {
 				safe = append(safe, o)
 			}
@@ -408,7 +424,7 @@ func (p *Provider) List(ctx context.Context) ([]provider.Owned, []provider.Forei
 		}
 		prefixed := strings.HasPrefix(e.Name, "bivouac-")
 		if e.Running || prefixed {
-			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed})
+			foreign = append(foreign, provider.Foreign{Name: e.Name, Running: e.Running, Prefixed: prefixed, HostLimitExempt: p.HostLimitExempt(e.Name)})
 		}
 	}
 	return owned, foreign, nil
@@ -426,4 +442,16 @@ func startDetachedRelay(ctx context.Context, plan RelayPlan) (Process, error) {
 		return nil, err
 	}
 	return (CLI{Binary: exe}).startInput(ctx, []string{"engine", "relay"}, bytes.NewReader(data), io.Discard)
+}
+
+func (p *Provider) standaloneRecord(name string) (*state.Instance, error) {
+	if p.records == nil || p.records.ControllerID() != p.controllerID {
+		return nil, provider.ErrNotOwned
+	}
+	for _, i := range p.records.List() {
+		if i.Name == name && i.Provider == p.name && i.ID != "" && i.EngineName == "" && i.Phase != state.PhaseDeregistering {
+			return i, nil
+		}
+	}
+	return nil, provider.ErrNotOwned
 }

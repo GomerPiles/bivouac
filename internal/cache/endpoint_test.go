@@ -41,7 +41,7 @@ func endpointFixture(t testing.TB, s *Service) (Bootstrap, *http.Client, <-chan 
 			return (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp4", l.Addr().String())
 		})
 	}()
-	data, err := s.AttachEndpoint(context.Background(), "endpoint-guest", host, l, revocation)
+	data, err := s.AttachEndpoint(context.Background(), "endpoint-guest", host, l, revocation, GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func endpointFixture(t testing.TB, s *Service) (Bootstrap, *http.Client, <-chan 
 func TestEndpointAuthenticationOwnershipAndRevocation(t *testing.T) {
 	s, _, _, _, upstream := uploadFixture(t)
 	settings, client, done := endpointFixture(t, s)
-	otherData, err := s.Issue("other-guest")
+	otherData, err := s.Issue("other-guest", GrantCapabilities{ReleaseProxy: true})
 	var other Bootstrap
 	if err != nil || json.Unmarshal(otherData, &other) != nil {
 		t.Fatal("other bootstrap failed")

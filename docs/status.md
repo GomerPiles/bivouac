@@ -131,6 +131,36 @@ Open:
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 
+Linux ARM64 runner guests on vz use rootless networking, non-root agent checks,
+pinned prepared helpers, the VZ DHCP runtime profile and the host cache.
+Validated live on Apple Silicon:
+
+- The Go recipe provisioned an official Ubuntu 24.04 ARM64 cloud image (NoCloud
+  seed); the image imported and passed `doctor`.
+- The opt-in fixture passed on two cold clones: distinct machine IDs, prepared
+  provenance, rootless proof, DHCP virtual DNS, public HTTPS, host-listener
+  denial with positive controls, Docker pulls, cache endpoint/CRL, outage
+  fallback and cleanup.
+- A downstream project's arm64 suite passed under the scale set. A following
+  job saw no guest or container state from the previous one. `actions/cache`
+  restores went through the host cache: cold miss, then a warm hit.
+- After SIGKILL of the controller mid-job, the restart adopted the running guest;
+  the job and the next one completed.
+
+Those runs predate per-grant release authority and the cloud-init preflight,
+which have offline coverage only. Release-proxy trust with guest sudo, Linux
+and Darwin providers under one controller, network changes during a job, and
+private-peer probes remain open. The Linux-only provisioning and runtime tests
+run in hosted Ubuntu CI, not in local macOS checks. The default-baseline
+builder and deny-list consolidation are follow-ups.
+
+## Shared Linux runtime
+
+The transport-neutral `internal/linuxguest` runtime supplies explicit Crosvm
+public-DNS/SSH and VZ DHCP profiles. Contract tests cover profile binding, DNS
+reports, helper pins and sanitation receipts. Crosvm has no new live evidence
+after the extraction.
+
 ## Windows host controls
 
 Native process tests reproduce a hidden portable-launch child being killed

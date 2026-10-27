@@ -12,6 +12,7 @@ cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
 internal/provider    provider contract; vz/ (macOS), crosvm/ and hcsvm/ (Windows hosts), fake/
 internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
+internal/linuxguest  transport-neutral Linux runner runtime, execution profiles and image sanitation
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
 internal/github      scale set client wrapper (actions/scaleset) and test fake
@@ -393,9 +394,10 @@ On every start the daemon reconciles before polling:
 
 - A record whose guest runs with a live runner is adopted and watched.
 - Any other record is torn down (stop, delete, deregister, remove).
-- A record whose status cannot be proven (not owned, corrupt, or no answer
-  within the provider deadline) keeps its record, reservation, and guest,
-  gets a recorded error, and waits for a later start. The rest continue.
+- A record whose retained clone contract or status cannot be proven (unreadable
+  manifest, changed guest OS, not owned, corrupt, or no answer within the deadline)
+  keeps its record, reservation, and guest, gets a recorded error, and waits for
+  a later start. The rest continue.
 - A guest with our prefix and our marker but no record is an orphan:
   deleted, its runner name deregistered if registered.
 - A guest with our prefix but another marker, or no marker, is reported in
@@ -564,7 +566,10 @@ Only TCP `192.0.2.1:7443` selects the cache payload capability. The configurable
 host endpoint bound defaults to 256; the parent independently bounds grants and
 relays by that setting plus its reserved CRL budget. Guest bridge and stack add
 no equal payload cap. Each host listener accepts only its guest's grants/leases.
-TLS, upstream restrictions, expiry and revocation stay mandatory. CRLs use only
+The VM helper supplies these fixed host capability paths for either guest OS;
+without an attached per-VM listener they fail closed. Linux guest cache setup
+remains a separate adapter step. TLS, upstream restrictions, expiry and revocation
+stay mandatory. CRLs use only
 GET/HEAD `/ca.crl` at `192.0.2.1:7444`, with independent stack/broker/listener
 capacity and proxy bypass. VSOCK carries only a six-byte port announcement and
 lifetime; losing it closes the guest loopback listener and streams. Cache outage
@@ -601,7 +606,8 @@ container-pair members require proof. Old NAT/Softnet/unsandboxed helpers are
 refused; proven-owner cleanup still works. Drain old jobs before owner-controlled
 migration; no installed binary, VM, baseline, label or privilege changes implicitly.
 Read-only bootstrap shares remain an explicit opt-in for ordinary runners;
-container pairs prohibit shares. Graphics, input and typed machine options remain.
+container pairs prohibit shares. Launch device selection uses the clone manifest:
+Darwin keeps input devices; Linux has none. Typed machine options remain.
 
 Each VM is a directory in bivouac's VM store
 (`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`):
@@ -616,20 +622,39 @@ live beside their baseline so APFS can share blocks. Agent sockets live in
 the store's hidden `.run` directory, named by a hash of the VM name, so their
 path fits `sun_path` whatever the name.
 
-- Baseline check: Create, the container preflight and `doctor` refuse a
-  baseline without a manifest, of the wrong OS, without a runner directory
-  (runner guests), or whose agent protocol differs from this binary's.
+- Host runtime check: daemon startup checks socket-path capacity, the signed
+  host executable, rootless host policy and requested nested-virtualization
+  support before reconciliation. It never opens a baseline or Linux guest helper.
+  Missing, changed or invalid admission inputs block only new instances, leaving
+  retained-clone inventory, runner adoption and ownership-checked cleanup usable.
+- Baseline admission: Create, container preflight and `doctor` refuse a baseline
+  without a manifest, of the wrong guest OS, without a runner directory
+  (either runner OS), or whose agent protocol differs from this binary's.
+  Linux engine images still need no runner directory. Linux runner helper
+  admission validates a static ARM64 ELF executable. Provider construction
+  receives `vz.guest_os` (`darwin` by default, or `linux`) and `vz.helper` for
+  Linux. Linux requires explicit CPU/memory and prohibits Darwin display/share/
+  slot options and companion engines; its baseline still must be supplied.
+  Guest-root provisioning uses a Go recipe registry, currently Ubuntu 24.04
+  ARM64/VZ only; the future baseline builder will reuse it unchanged. An omitted
+  Linux baseline will later resolve once during configuration preparation to a
+  bivouac-built recipe image; admission and instance specs consume that name.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
   memory (at least the manifest's minimums), then a rename into place
-  (milliseconds). Then `bivouac.json` with controller and instance IDs.
+  (milliseconds). Then `bivouac.json` with exact provider, controller and
+  instance IDs. Ownership requires the matching provider-name prefix and marker;
+  another provider's clones remain foreign. Linux clones consume no Apple
+  macOS slot only when their validated manifests prove Linux. Unknown/corrupt
+  manifests count conservatively. Reconciliation validates retained clone OS
+  before provider operations; replacing the baseline cannot change that OS.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
   [--input] --rootless-network [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk,
-  rootless network for managed macOS runners, entropy, balloon, vsock; keyboard and pointer for runner
-  guests; no console, audio, or clipboard). It holds an fcntl lock on the
+  rootless network for managed guests, entropy, balloon, vsock; keyboard and
+  pointer for Darwin runner guests; no console, audio, or clipboard). It holds an fcntl lock on the
   manifest for the VM's life and reads the manifest only through it; the
   provider reads running state and the helper's PID from that lock. A
   manifest is never rewritten once its VM is in place. The
@@ -651,8 +676,16 @@ path fits `sun_path` whatever the name.
 - Ready: the agent runs `true`. DHCP supplies the isolated lease and virtual DNS service without guest sudo.
   Live rootless proof precedes private setup and runner registration. Only an unreachable agent is retried; an
   agent of another protocol version names its own, and readiness fails at
-  once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
-  its `session` mode must report `Aqua`, or readiness fails.
+  once. Guest preparation selects from the clone's manifest, independently of
+  the current baseline. Darwin copies its bootstrap to `/tmp/bivouac-guest` and
+  requires its `session` mode to report `Aqua`. Linux checks `Linux/aarch64` and
+  a non-root agent, then verifies the prepared root-owned helper's SHA-256 before
+  executing it. There is no Linux-on-vz upload fallback: a mismatch requires a
+  rebuilt baseline. Preparation uses `linuxguest.VZ`, preserving DHCP DNS.
+  JIT/status/cancel/diagnostics use the shared runtime over the guest agent, with
+  fresh durable ownership and live rootless proof before each operation.
+  Adoption uses the clone and installed runtime helper, without reopening the
+  baseline or host helper. VM status/stop/delete remain generic.
 - Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
   when the cap is exceeded. Errors never include guest output. Ordinary commands
   discard stderr; explicit lab diagnostics capture a bounded, sink-redacted
@@ -680,7 +713,7 @@ path fits `sun_path` whatever the name.
   guest flushes and suits only disposable clones), and
   `nested_virtualization`. There is no raw passthrough. Options are checked
   against the baseline's OS when a guest is created: the framework offers
-  nesting only to Linux guests (today the engine VM, giving its containers
+  nesting only to Linux guests (runners or engine VMs, giving their containers
   `/dev/kvm` inside the VM boundary), never to macOS guests. The daemon and
   `doctor` refuse nesting on a host without it (it needs an M3 or newer chip
   and macOS 15).
@@ -1144,6 +1177,35 @@ Windowed jobs own their compositor inside the guest/container; hardware
 rendering plus wl_shm/Pixman presentation does not imply direct scanout or
 a logged-in desktop capability. See `docs/crosvm.md` for setup and gates.
 
+### Shared Linux guest runtime
+
+`internal/linuxguest` owns Linux operation dispatch, runner preparation, JIT,
+listener/status/cancel/diagnostics, cache integration, helper fingerprinting and
+image sanitation. Providers own transport and VM lifetime; Crosvm keeps SSH and
+its upload fallback. The CLI dispatches `guest linux` directly to this package.
+
+A required execution profile travels in bounded preparation stdin and is saved
+with the per-boot identity. Every subsequent command validates that record.
+Image preparation must match the saved profile; its bounded receipt and public
+root-owned provenance record carry the same profile. A reused prepared helper
+checks that provenance before creating bootstrap state. Unknown, missing or
+mismatched profiles fail closed. Producers and consumers change together; old
+helpers fail the selected helper hash and use Crosvm's existing upload fallback.
+
+`crosvm-public-dns-ssh` preserves fixed public resolvers on `eth0`, exact
+persistent/active/resolver checks, public-DNS reuse reports, GPU/CDI checks and
+SSH host-key regeneration units. `vz-dhcp` delegates DNS to the virtual DHCP
+lease without editing guest network profiles or resolver files, and installs
+no SSH units or SSH host-key sanitation. Its `dns_dhcp` observation records
+that delegation, not proof of public-DNS reuse or live virtual DNS reachability;
+`dns_reused` and `dns_prepared` remain false. Machine identity and random seed
+sanitation are shared. Runtime and prepared helper paths stay unchanged.
+The vz Linux adapter uses this profile over the guest agent. JIT is bounded to
+128 KiB, status to 4 KiB, and diagnostic ZIP streams to 32 MiB compressed;
+extraction uses the shared path-checked, redacting sink. Linux runners are
+headless, advertise no GPU/desktop, and require `/opt/actions-runner`. Crosvm's
+SSH runtime, profile and fallback remain unchanged.
+
 ## Optional download caching
 
 An owner-authorized follow-up adds a portable, bounded opaque-object store
@@ -1159,6 +1221,22 @@ reservation until close; eviction skips them on every OS. Metadata is bounded
 to 4096 objects, including fills.
 Interrupted or corrupt objects are discarded. Archives are never
 extracted on the host, and no host directory is shared with a guest.
+
+Darwin and Linux-on-vz share the same endpoint/listener/grant/CRL transport.
+Linux starts the endpoint with its already pinned runtime helper and sends
+bootstrap over the guest agent to `linuxguest` cache setup. The shared guest
+adapter owns preload/proxy/CA environment and listener lifetime. Without the
+manifest's sudo contract, both guest OSes receive archive-only grants and the
+host rejects their release-proxy requests. Each grant records
+its release authority at issuance, bounded by `cache.release_proxy`; bootstrap
+reflects that authority. Enabling the service feature cannot upgrade an issued
+archive-only grant. Archive caching remains available. Darwin skips Keychain
+setup and removes stale proxy files. Setup failure synchronously revokes the grant, then requires
+successful fixed-helper removal before JIT fallback. Failed removal refuses
+launch. Confirmed deletion/absence revokes; uncertain deletion retains the grant.
+Service/controller loss closes transport and leaves public fallback through
+mandatory isolation. Virtual CRL traffic bypasses guest proxy payload slots.
+No second Linux helper is uploaded.
 
 On macOS the service uses literal loopback TLS identity. The provider starts a
 fixed guest helper through its owned VSOCK command channel. It opens a bounded

@@ -33,7 +33,10 @@ func (p *Provider) preflightEngine(ctx context.Context) error {
 	if p.cfg.Containers == nil {
 		return nil
 	}
-	for _, b := range []struct{ name, os string }{{p.cfg.Baseline, "darwin"}, {p.cfg.Containers.Baseline, "linux"}} {
+	if p.runner.OS != "darwin" {
+		return errors.New("container pairs require a Darwin runner")
+	}
+	for _, b := range []struct{ name, os string }{{p.cfg.Baseline, p.runner.OS}, {p.cfg.Containers.Baseline, "linux"}} {
 		if _, err := CheckBaseline(string(p.store), b.name, b.os); err != nil {
 			return err
 		}
@@ -68,13 +71,13 @@ func (p *Provider) runnerIsolation(name string) error {
 		return err
 	}
 	m, _ := p.readMeta(name)
-	if _, local := p.rt.(*local); local {
+	if _, local := p.rt.(*local); local || p.runner.OS == "linux" {
 		if p.records == nil {
 			return provider.ErrNotOwned
 		}
 		found := false
 		for _, i := range p.records.List() {
-			if i.Name == name && i.ID == m.InstanceID && i.Provider == p.name && i.Phase != state.PhaseDeregistering && p.records.ControllerID() == m.ControllerID {
+			if i.Name == name && i.ID == m.InstanceID && i.Provider == p.name && (p.runner.OS != "linux" || i.EngineName == "") && i.Phase != state.PhaseDeregistering && p.records.ControllerID() == m.ControllerID {
 				found = true
 				break
 			}
@@ -94,10 +97,15 @@ func (p *Provider) runnerIsolation(name string) error {
 }
 
 func (p *Provider) preflightRunner(ctx context.Context) error {
-	_, err := CheckBaseline(string(p.store), p.cfg.Baseline, "darwin")
+	m, err := CheckRunnerBaseline(string(p.store), p.cfg.Baseline, p.runner.OS)
 	if err != nil {
 		return err
 	}
-	err = p.isolation(ctx)
-	return err
+	if err := MachineOptions(p.cfg.Machine).CheckGuest(m); err != nil {
+		return err
+	}
+	if err := p.runner.CheckHelper(); err != nil {
+		return err
+	}
+	return p.isolation(ctx)
 }

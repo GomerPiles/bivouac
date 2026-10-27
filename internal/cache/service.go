@@ -37,12 +37,20 @@ type Bootstrap struct {
 	ReleaseProxy  bool   `json:"release_proxy"`
 	StoreUploads  bool   `json:"store_uploads"`
 }
+
+// GrantCapabilities is host-selected authority, never guest-supplied bootstrap
+// data. The service-wide settings remain an upper bound on each issued grant.
+type GrantCapabilities struct {
+	ReleaseProxy bool
+}
+
 type grant struct {
-	summary Summary
-	name    string
-	expires time.Time
-	url     string
-	crlURL  string
+	releaseProxy bool
+	summary      Summary
+	name         string
+	expires      time.Time
+	url          string
+	crlURL       string
 }
 type lease struct {
 	token, upstream, key, etag string
@@ -170,11 +178,12 @@ func certificate(host string) (tls.Certificate, string, error) {
 	return pair, string(cert), err
 }
 
-// Issue rotates a guest's capability if its bootstrap is retried.
-func (s *Service) Issue(name string) ([]byte, error) {
-	return s.issueAt(name, s.url)
+// Issue rotates a guest's capability if its bootstrap is retried. Requested
+// features are bounded by service settings and fixed for this grant's lifetime.
+func (s *Service) Issue(name string, capabilities GrantCapabilities) ([]byte, error) {
+	return s.issueAt(name, s.url, capabilities)
 }
-func (s *Service) issueAt(name, endpoint string) ([]byte, error) {
+func (s *Service) issueAt(name, endpoint string, capabilities GrantCapabilities) ([]byte, error) {
 	s.Revoke(name)
 	token := randomToken()
 	s.mu.Lock()
@@ -182,9 +191,10 @@ func (s *Service) issueAt(name, endpoint string) ([]byte, error) {
 		s.mu.Unlock()
 		return nil, errors.New("cache service closed")
 	}
-	s.grants[token] = grant{name: name, expires: time.Now().Add(s.ttl), url: endpoint, crlURL: endpoint + "/ca.crl"}
+	release := capabilities.ReleaseProxy && s.proxy.enabled.Load()
+	s.grants[token] = grant{releaseProxy: release, name: name, expires: time.Now().Add(s.ttl), url: endpoint, crlURL: endpoint + "/ca.crl"}
 	s.mu.Unlock()
-	return json.Marshal(Bootstrap{URL: endpoint, Token: token, CA: s.ca, ReleaseProxy: s.proxy.enabled.Load(), StoreUploads: s.storing.Load()})
+	return json.Marshal(Bootstrap{URL: endpoint, Token: token, CA: s.ca, ReleaseProxy: release, StoreUploads: s.storing.Load()})
 }
 func (s *Service) Revoke(name string) {
 	var abandoned []*uploadLease
@@ -656,7 +666,7 @@ func (s *Store) Stats() (int, int64, int64) {
 	return len(s.entries), s.used, s.reserved
 }
 
-// RestrictMacNetwork is called before attaching any macOS guests. Each upstream
+// RestrictMacNetwork is called before attaching guests on a macOS host. Each upstream
 // dial rejects current host addresses/prefixes and IPv6 as well as special IPs.
 func (s *Service) RestrictMacNetwork(servers []string) {
 	s.client.CloseIdleConnections()
@@ -667,7 +677,7 @@ func (s *Service) RestrictMacNetwork(servers []string) {
 }
 
 // All usable answers must be admitted before choosing one, preventing a mixed
-// public/private DNS response from bypassing denial. Isolated macOS transports
+// public/private DNS response from bypassing denial. Isolated macOS-host transports
 // discard public IPv6 answers and require an admitted IPv4 alternative.
 func upstreamIP(ips []net.IPAddr, admit func(net.IP) bool) (net.IP, error) {
 	var selected net.IP

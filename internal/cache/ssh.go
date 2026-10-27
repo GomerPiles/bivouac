@@ -277,7 +277,7 @@ func (s *Service) AttachSSHClient(ctx context.Context, name string, client *ssh.
 		_ = client.Close()
 		return nil, errors.New("guest cache listener not loopback")
 	}
-	bootstrap, err := s.issueAt(name, "https://"+listener.Addr().String())
+	bootstrap, err := s.issueAt(name, "https://"+listener.Addr().String(), GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		_ = client.Close()
 		return nil, err

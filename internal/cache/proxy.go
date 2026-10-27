@@ -98,16 +98,16 @@ func (s *Service) serveRevocationList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Service) authorized(token string) bool {
+func (s *Service) releaseAuthorized(token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g, ok := s.grants[token]
-	return ok && time.Now().Before(g.expires)
+	return ok && g.releaseProxy && s.proxy.enabled.Load() && time.Now().Before(g.expires)
 }
 
 func (s *Service) serveProxy(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.Header.Get("Proxy-Authorization"), "Bearer ")
-	if !s.authorized(token) {
+	if !s.releaseAuthorized(token) {
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
 	}
@@ -150,7 +150,7 @@ func (s *Service) serveProxy(w http.ResponseWriter, r *http.Request) {
 			count++
 		}
 	}
-	if !valid || time.Now().After(g.expires) || count >= 32 {
+	if !valid || !g.releaseProxy || !s.proxy.enabled.Load() || time.Now().After(g.expires) || count >= 32 {
 		s.mu.Unlock()
 		_, _ = buffer.WriteString("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
 		_ = buffer.Flush()
@@ -239,7 +239,7 @@ func cleanHeaders(h http.Header) {
 }
 
 func (s *Service) forward(w http.ResponseWriter, r *http.Request, token, interceptedHost string) {
-	if !s.authorized(token) {
+	if !s.releaseAuthorized(token) {
 		http.Error(w, "expired proxy capability", http.StatusForbidden)
 		return
 	}

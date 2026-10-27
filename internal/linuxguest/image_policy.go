@@ -1,4 +1,4 @@
-package crosvm
+package linuxguest
 
 import (
 	"errors"

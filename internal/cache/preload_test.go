@@ -44,7 +44,7 @@ func TestPreloadRelaysUploadsAndFallsBackToAzure(t *testing.T) {
 			if mode == "disabled" {
 				s.storing.Store(false)
 			}
-			data, err := s.Issue("guest") // Reissue: the bootstrap now carries store_uploads.
+			data, err := s.Issue("guest", GrantCapabilities{ReleaseProxy: true}) // Reissue: the bootstrap now carries store_uploads.
 			if err != nil {
 				t.Fatal(err)
 			}

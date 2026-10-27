@@ -1,0 +1,376 @@
+package vz
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/github"
+	"github.com/GomerPiles/bivouac/internal/manager"
+	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/state"
+	"github.com/GomerPiles/bivouac/internal/vm"
+)
+
+func linuxHelperFixture(t *testing.T) string {
+	t.Helper()
+	h := make([]byte, 64)
+	copy(h, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 3})
+	binary.LittleEndian.PutUint16(h[16:], 2)
+	binary.LittleEndian.PutUint16(h[18:], 183)
+	binary.LittleEndian.PutUint32(h[20:], 1)
+	binary.LittleEndian.PutUint16(h[52:], 64)
+	path := filepath.Join(t.TempDir(), "linux-helper")
+	if err := os.WriteFile(path, h, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func linuxRunnerManifest(t *testing.T, dir string) {
+	t.Helper()
+	writeTestManifest(t, dir, "linux")
+	m, err := vm.ReadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Guest.RunnerDir = "/opt/actions-runner"
+	b, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(dir, vm.ManifestFile), b, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDarwinReadinessRequiresAquaAfterBaselineLoss(t *testing.T) {
+	r := newRecorder()
+	p := newProvider(t, r)
+	spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+	ctx := context.Background()
+	if err := p.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	launch := strings.Join(r.calls[len(r.calls)-1], " ")
+	if !strings.Contains(launch, "rootless-network") || !strings.Contains(launch, " input ") {
+		t.Fatal("Darwin launch changed", launch)
+	}
+	r.session = "Background"
+	if err := p.WaitReady(ctx, spec.Name); err == nil {
+		t.Fatal("Darwin readiness skipped Aqua")
+	}
+}
+
+func TestHelperUploadUsesDarwinCloneWithoutBaseline(t *testing.T) {
+	p, r := ownedFixture(t)
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(p.vmDir("base"), vm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.installGuestHelper(context.Background(), fixtureName); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.stdin["Exec "+fixtureName+" dd of="+guestHelper+" status=none"] != string(want) {
+		t.Fatal("wrong Darwin helper uploaded")
+	}
+	before := len(r.calls)
+	if err := p.installGuestHelper(context.Background(), fixtureName); err != nil || len(r.calls) != before {
+		t.Fatal("shared helper recopied", err)
+	}
+	linuxRunnerManifest(t, p.vmDir(fixtureName))
+	if _, _, err := p.guestHelperSource(fixtureName); err == nil {
+		t.Fatal("Linux guest retained an upload path")
+	}
+}
+
+func TestLinuxAdmissionRequiresRunnerContractAndMatchingHelper(t *testing.T) {
+	for _, kind := range []string{"valid", "runner-directory", "helper-missing", "helper-invalid", "helper-architecture", "OS-mismatch"} {
+		t.Run(kind, func(t *testing.T) {
+			r := newRecorder()
+			p := newProvider(t, r)
+			helper := linuxHelperFixture(t)
+			p.runner = GuestRuntime{OS: "linux", Helper: helper}
+			linuxRunnerManifest(t, p.vmDir("base"))
+			switch kind {
+			case "runner-directory":
+				writeTestManifest(t, p.vmDir("base"), "linux")
+			case "helper-missing":
+				if err := os.Remove(helper); err != nil {
+					t.Fatal(err)
+				}
+			case "helper-invalid":
+				if err := os.WriteFile(helper, []byte("not ELF"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "helper-architecture":
+				b, err := os.ReadFile(helper)
+				if err != nil {
+					t.Fatal(err)
+				}
+				binary.LittleEndian.PutUint16(b[18:], 62)
+				if err := os.WriteFile(helper, b, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "OS-mismatch":
+				writeTestManifest(t, p.vmDir("base"), "darwin")
+			}
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+			records, err := state.Open(t.TempDir(), func() string { return p.controllerID })
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.records = records
+			if err := p.records.Put(&state.Instance{ID: "new", Name: spec.Name, Provider: p.name, Phase: state.PhaseCreating}); err != nil {
+				t.Fatal(err)
+			}
+			err = p.Create(context.Background(), spec)
+			if kind == "valid" {
+				if err != nil {
+					t.Fatal("valid baseline/helper refused", err)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, provider.ErrNotOwned) {
+				t.Fatal("admission did not reach baseline/helper validation", err)
+			}
+			if len(r.calls) != 0 {
+				t.Fatal("admission failure touched VM runtime")
+			}
+		})
+	}
+}
+
+type checkedRuntime struct {
+	Runtime
+	checks  int
+	failure error
+}
+
+func (r *checkedRuntime) ProveIsolation(name, policy string) error {
+	return r.Runtime.(interface{ ProveIsolation(string, string) error }).ProveIsolation(name, policy)
+}
+func (r *checkedRuntime) CheckRuntime(context.Context) error { r.checks++; return r.failure }
+
+func TestStartupAndRetainedAdoptionIgnoreUnavailableBaseline(t *testing.T) {
+	for _, kind := range []string{"missing", "changed"} {
+		t.Run(kind, func(t *testing.T) {
+			old, r := ownedFixture(t)
+			if kind == "missing" {
+				if err := os.RemoveAll(old.vmDir("base")); err != nil {
+					t.Fatal(err)
+				}
+				delete(r.vms, "base")
+			} else {
+				writeTestManifest(t, old.vmDir("base"), "linux")
+			}
+			runtime := &checkedRuntime{Runtime: callRuntime{r}}
+			p, err := New(old.name, old.cfg, old.runner, old.controllerID, string(old.store), runtime, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.checkIsolation = func(context.Context) error { return nil }
+			if err := p.CheckRuntime(context.Background()); err != nil || runtime.checks != 1 {
+				t.Fatal("startup depends on admission inputs", err)
+			}
+			owned, _, err := p.List(context.Background())
+			if err != nil || len(owned) != 1 {
+				t.Fatal("retained clone inventory lost", err)
+			}
+			assertReconcilesRetainedRunner(t, p, fixtureName)
+			status, err := p.RunnerStatus(context.Background(), fixtureName)
+			if err != nil || status.State != provider.RunnerListening {
+				t.Fatal("retained runner cannot be adopted", err)
+			}
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base"}
+			if err := p.Create(context.Background(), spec); err == nil {
+				t.Fatal("unavailable baseline admitted a new clone")
+			}
+			if err := p.Stop(context.Background(), fixtureName, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Delete(context.Background(), fixtureName); err != nil {
+				t.Fatal(err)
+			}
+			st, err := p.Status(context.Background(), fixtureName)
+			if err != nil || st.Exists {
+				t.Fatal("retained clone cleanup failed", err)
+			}
+		})
+	}
+}
+
+func TestStartupDoesNotValidateLinuxHelper(t *testing.T) {
+	for _, kind := range []string{"missing", "invalid"} {
+		t.Run(kind, func(t *testing.T) {
+			p, _ := ownedFixture(t)
+			helper := linuxHelperFixture(t)
+			p.runner = GuestRuntime{OS: "linux", Helper: helper}
+			linuxRunnerManifest(t, p.vmDir("base"))
+			linuxRunnerManifest(t, p.vmDir(fixtureName))
+			if kind == "missing" {
+				if err := os.Remove(helper); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(helper, []byte("invalid helper"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := context.Background()
+			if err := p.CheckRuntime(ctx); err != nil {
+				t.Fatal("startup opened Linux helper", err)
+			}
+			status, err := p.Status(ctx, fixtureName)
+			if err != nil || !status.Exists || !status.Running || !status.Owned {
+				t.Fatal("VM status opened Linux helper", err)
+			}
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+			if p.records == nil {
+				records, err := state.Open(t.TempDir(), func() string { return p.controllerID })
+				p.records = records
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.records.Put(&state.Instance{ID: "new", Name: spec.Name, Provider: p.name, Phase: state.PhaseCreating}); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Create(ctx, spec); err == nil || errors.Is(err, provider.ErrNotOwned) {
+				t.Fatal("new admission did not reach helper failure", err)
+			}
+			if err := p.Stop(ctx, fixtureName, time.Second); err != nil {
+				t.Fatal("cleanup opened Linux helper", err)
+			}
+			if err := p.Delete(ctx, fixtureName); err != nil {
+				t.Fatal("cleanup opened Linux helper", err)
+			}
+		})
+	}
+}
+
+func TestHostRuntimeFailureStillBlocksStartup(t *testing.T) {
+	p, _ := ownedFixture(t)
+	failure := errors.New("host runtime unavailable")
+	runtime := &checkedRuntime{Runtime: p.rt, failure: failure}
+	p.rt = runtime
+	if err := p.CheckRuntime(context.Background()); !errors.Is(err, failure) {
+		t.Fatal("host runtime failure ignored", err)
+	}
+}
+
+func TestNewDoesNotOpenLinuxAdmissionInputs(t *testing.T) {
+	cfg := config.VZ{Baseline: "missing"}
+	p, err := New("linux", cfg, GuestRuntime{OS: "linux", Helper: filepath.Join(t.TempDir(), "missing")}, "controller", t.TempDir(), callRuntime{newRecorder()}, nil)
+	if err != nil {
+		t.Fatal("constructor opened admission inputs", err)
+	}
+	p.checkIsolation = func(context.Context) error { return nil }
+	if err := p.CheckRuntime(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertReconcilesRetainedRunner(t *testing.T, p *Provider, name string) {
+	t.Helper()
+	cfg, err := config.Parse([]byte(config.Example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers = map[string]config.Provider{p.name: {Type: "vz", VZ: &p.cfg}}
+	store, err := state.Open(t.TempDir(), func() string { return p.controllerID })
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &state.Instance{ID: "fixture", Provider: p.name, Name: name, Phase: state.PhaseListening, ScaleSetID: 100, CreatedAt: time.Now()}
+	if err := store.Put(record); err != nil {
+		t.Fatal(err)
+	}
+	p.SetRecords(store)
+	var logs bytes.Buffer
+	m, err := manager.New(manager.Options{Config: cfg, Store: store, Providers: map[string]provider.Provider{p.name: p}, GitHub: github.NewFake(), Log: slog.New(slog.NewTextHandler(&logs, nil)), NewID: func() string { return "unused" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	m.Wait()
+	if !strings.Contains(logs.String(), "adopting running guest") {
+		t.Fatal("reconciliation did not adopt retained runner")
+	}
+	if _, ok := store.Get(record.ID); !ok {
+		t.Fatal("adopted record removed during controller shutdown")
+	}
+}
+
+func TestPairRecoveryIgnoresMissingBaselineAndEngineHelper(t *testing.T) {
+	p, r, spec := pairProvider(t)
+	ctx := context.Background()
+	if err := p.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"base", "linux-base"} {
+		if err := os.RemoveAll(p.vmDir(name)); err != nil {
+			t.Fatal(err)
+		}
+		delete(r.vms, name)
+	}
+	if err := os.Remove(p.cfg.Containers.Helper); err != nil {
+		t.Fatal(err)
+	}
+	// The host capability gate is covered independently; this fixture needs none.
+	p.cfg.Containers.Machine.NestedVirtualization = false
+	restarted, err := New(p.name, p.cfg, p.runner, p.controllerID, string(p.store), callRuntime{r}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.SetRecords(p.records)
+	restarted.checkIsolation = func(context.Context) error { return nil }
+	if err := restarted.CheckRuntime(ctx); err != nil {
+		t.Fatal("startup depends on pair admission inputs", err)
+	}
+	status, err := restarted.RunnerStatus(ctx, spec.Name)
+	if err != nil || status.State != provider.RunnerListening {
+		t.Fatal("pair runner adoption blocked by missing baseline/helper", err)
+	}
+	if err := restarted.Create(ctx, spec); err == nil {
+		t.Fatal("new pair admitted without baselines/helper")
+	}
+	if err := restarted.Stop(ctx, spec.Name, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Delete(ctx, spec.Name); err != nil {
+		t.Fatal(err)
+	}
+	statusVM, err := restarted.Status(ctx, spec.Name)
+	if err != nil || statusVM.Exists {
+		t.Fatal("retained pair cleanup failed", err)
+	}
+}

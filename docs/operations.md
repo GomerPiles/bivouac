@@ -462,6 +462,19 @@ Never use a process-name search to stop or wait for the daemon.
 The daemon runs every VM through `bivouac vm run` from its own executable, so
 that copy must carry the `com.apple.security.virtualization` entitlement;
 the daemon refuses to start without it, and `doctor` checks it.
+Host startup checks are independent of baseline and Linux helper availability:
+a missing, changed or invalid baseline/helper blocks new-instance admission,
+while reconciliation can adopt retained runners and clean up recorded clones.
+Restore the configured baseline/helper before new admissions; use `doctor` to
+check them. Retained operations use each clone's manifest and current ownership
+and isolation proof, without re-uploading helpers during adoption.
+
+An unreadable retained manifest or guest-OS mismatch parks only that record:
+no adoption, guest cleanup or registration withdrawal; its reservation remains,
+and other instances reconcile. Restore that clone's original manifest from
+trusted evidence (never substitute baseline metadata), or restore its original
+`guest_os`, then restart. Without that evidence, retain the record for owner
+recovery; do not erase it to force cleanup.
 
 **VM store.** Baselines and clones live in bivouac's VM store:
 `~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
@@ -471,7 +484,7 @@ stopped Tart-format VM, which clones it when it is on the same volume and
 writes the manifest:
 
 ```bash
-bivouac vz import --runner-dir /Users/admin/actions-runner --sudo ~/.tart/vms/<vm> <baseline>
+bivouac vz import --runner-dir /Users/admin/actions-runner --sudo <stopped-image-directory> <baseline>
 ```
 
 Pass `--sudo` only if the guest user has passwordless sudo (the release
@@ -482,10 +495,9 @@ import again after installing a new agent. A Linux engine baseline needs no
 Bivouac does not see VMs in other tools' directories, so `foreign_slots`
 must reserve Apple's guest slots for any other manager.
 
-**macOS baseline.** Bivouac reaches the guest through its own agent, not
-Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
-baselines itself, prepare one with Tart before importing it:
-boot it, then install the darwin/arm64 `bivouac` binary as
+**macOS baseline.** Prepare an operator-managed Tart-format image before
+importing it. Bivouac uses its own guest agent: boot the image, then install
+the darwin/arm64 `bivouac` binary as
 `/usr/local/bin/bivouac` (root:wheel, 0755) and
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
 in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
@@ -497,6 +509,34 @@ when its launch policy changes: it sets `ProcessType=Interactive` to avoid
 launchd's default low-priority I/O throttling. Install the updated plist during
 offline image preparation and shut down cleanly before importing the image;
 rebuilding the host binary does not update existing baseline LaunchAgents.
+
+**Linux ARM64 runners on vz.** Import a stopped, prepared Tart-format Linux
+baseline with `--runner-dir /opt/actions-runner`. It must contain the matching
+non-root guest agent and a root-owned prepared helper built with the `vz-dhcp`
+profile; use the [Go provisioning command](#preparing-a-linux-arm64-runner-baseline).
+Configure the provider's vz section with:
+
+```toml
+guest_os = "linux"
+helper = "/opt/bivouac/linux-arm64"
+baseline = "ci-linux-arm64"
+cpu = 4
+memory_gb = 4
+```
+
+Omit macOS slot, display, bootstrap-share and companion-engine settings. Linux
+uses DHCP virtual DNS without guest rewrites; helper hash mismatches require a
+rebuilt baseline. Both guest OSes keep archive caching without recorded sudo;
+the host issues an archive-only grant and release-proxy trust is omitted. Setup
+failure revokes the grant and requires confirmed adapter removal before JIT can fall back to ordinary public downloads.
+
+For explicit live validation, use an isolated `BIVOUAC_HOME`, import/copy only a
+validation baseline, reserve CPU/memory, and set `BIVOUAC_EXE`,
+`BIVOUAC_LINUX_HELPER`, `BIVOUAC_VZ_LINUX_BASELINE` and
+`BIVOUAC_VZ_CAPACITY_CONFIRMED=1`. The gated `TestRealLinuxGuest` integration test
+uses two recorded disposable clones and checks virtual DNS, public access, owned
+host-listener denial and privileged-container isolation. It never registers a
+GitHub runner. Tests and cross-builds do not establish these live gates.
 
 **Startup timing.** The daemon writes `startup stage`
 records to its normal redacted log, with provider, guest name, `stage`,
@@ -813,11 +853,9 @@ controller), rather than Apple's NAT. Endpoint-security and network-filter
 software must allow the required public DNS/HTTPS traffic for that process.
 Bivouac does not reconfigure those tools or create a host/LAN exception.
 
-For a later owner-controlled rollout, finish old NAT/Softnet/unsandboxed-rootless
-jobs with the
-installed binary and confirm empty records/registrations first. The new
-controller refuses their adoption. Validate a separate DHCP baseline and
-loopback cache config; only then schedule binary migration. This PR stages
+For a later owner-controlled rollout, follow the [upgrade prerequisite](#upgrade-prerequisite)
+with the installed binary; the new controller cannot adopt old clones. Validate
+a separate DHCP baseline and loopback cache config; only then schedule binary migration. This PR stages
 replacements and leaves the production VM backup, installed binary/config,
 labels and Tartelet untouched. Restore the old controller after validation
 when it is safe to resume its original routing. Do not merge before live gates
@@ -825,7 +863,7 @@ and an owner-approved migration plan are complete.
 
 ## Optional transparent caching
 
-Caching is disabled by default. Isolated macOS runners use guest-loopback HTTP
+Caching is disabled by default. Darwin and Linux runners on macOS use guest-loopback HTTP
 through a fixed cache-only virtual endpoint, with TLS and per-guest capabilities.
 VSOCK remains the port-announcement/lifetime transport; it carries no cache payloads:
 
@@ -1005,6 +1043,15 @@ store_uploads = true
   then, and both must finish directly and restore intact.
 - `fallback` expects caching disabled.
 - Every mode checks release downloads through fresh signed URLs.
+
+## Upgrade prerequisite
+
+- **Drain before deploying:** finish standalone and container-pair vz guests with
+  the installed binary and confirm empty records/registrations. Pre-upgrade
+  markers without the exact provider field become foreign: never adopted or
+  cleaned; running Darwin/unknown clones still consume host slots. Crosvm images
+  from an older helper need rebuilding with `require_prepared`; otherwise a
+  helper-hash mismatch uses the existing upload fallback.
 
 ## Cutover (after validation)
 
@@ -1218,3 +1265,51 @@ Never manually erase a pair record to force cleanup: a pair without its durable
 record becomes unmanaged and is intentionally excluded from generic orphan
 cleanup. Restore ownership evidence before recovery. Stopping a live supervisor
 retires its recorded pair; it is not a transparent connection restart.
+
+## Preparing a Linux ARM64 runner baseline
+
+`vz.baseline` is required. The sole recipe supports a disposable Ubuntu 24.04
+Server ARM64 image with one virtio NIC. Use an operator-managed Tart-format image;
+remove other preparation agents/accounts and credentials before capture.
+
+1. Build the matching static helper on the host:
+
+   ```sh
+   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o linux-arm64 ./cmd/bivouac
+   ```
+
+2. Stage this exact helper file and the official ARM64 runner archive in the
+   image, owned by root and protected from other users' writes. Configure the
+   identical helper file as `vz.helper` on the host; another build may hash
+   differently. Obtain the archive's published SHA-256; stage no credentials or
+   JIT input. Rebuild the baseline whenever the configured helper changes.
+3. As guest root, run the fixed command with bounded JSON stdin:
+
+   ```sh
+   /tmp/linux-arm64 guest linux provision <<'JSON'
+   {"recipe":"ubuntu-24.04-arm64-vz-runner","runner_archive":"/tmp/runner.tar.gz","runner_sha256":"<published-sha256>"}
+   JSON
+   ```
+
+   It verifies/extracts the archive, installs itself and its embedded agent unit,
+   creates the non-root Docker-enabled user, prepares DHCP DNS/MTU without forced
+   resolvers or a network restart, disables SSH/cloud-init provisioning, removes
+   standard authorization/history, and runs shared VZ image sanitation. If installed,
+   cloud-init must report `done` or `disabled` in bounded JSON before mutation;
+   degraded completion (exit 2) is accepted. Unknown layouts refuse preparation;
+   failures report only a numeric `failed_stage`.
+   Inspect or replace a failed preparation image.
+4. After success, remove remaining staging/provisioning artifacts and shut down
+   cleanly. Import the stopped image on the host:
+
+   ```sh
+   bivouac vz import --runner-dir /opt/actions-runner <stopped-image-directory> ci-linux-arm64
+   ```
+
+   Add `--sudo` only for operator-verified passwordless guest sudo; the recipe adds
+   no sudo rules. Without it archive caching works and release trust is omitted.
+5. Run `doctor` and the isolated, gated Linux fixture above (optionally
+   `BIVOUAC_VZ_LINUX_CACHE=1`) before using a new baseline.
+
+Package installation uses the image's Ubuntu repositories; this is not a
+reproducible OS-image builder. The default-baseline builder is a follow-up.

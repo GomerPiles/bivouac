@@ -7,12 +7,17 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/engine"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func enableFixtureCache(t *testing.T, p *Provider) {
@@ -239,6 +244,77 @@ func TestCacheFallbackRequiresProvenRemovalBeforeJIT(t *testing.T) {
 	for _, call := range r.calls {
 		if len(call) > 3 && call[0] == "Exec" && call[2] == guestPath && call[3] == "start" {
 			t.Fatal("JIT delivery attempted despite uncertain cache cleanup")
+		}
+	}
+}
+
+func TestDarwinCacheKeepsArchivesWithOptionalSudo(t *testing.T) {
+	for _, sudo := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without-sudo", true: "with-sudo"}[sudo], func(t *testing.T) {
+			p, r := ownedFixture(t)
+			manifest, err := vm.ReadManifest(p.vmDir(fixtureName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.Guest.Sudo = sudo
+			data, _ := json.Marshal(manifest)
+			if err := os.WriteFile(filepath.Join(p.vmDir(fixtureName), vm.ManifestFile), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			enableFixtureCache(t, p)
+			if err := p.StartRunner(context.Background(), fixtureName, []byte("synthetic-jit")); err != nil {
+				t.Fatal(err)
+			}
+			var bootstrap cache.Bootstrap
+			if err := json.Unmarshal([]byte(r.stdin["Exec "+fixtureName+" dd of=/tmp/bivouac/cache-config.json status=none"]), &bootstrap); err != nil {
+				t.Fatal("archive config missing", err)
+			}
+			if bootstrap.ReleaseProxy != sudo || bootstrap.Token == "" || bootstrap.CA == "" {
+				t.Fatal("sudo gate removed ordinary cache capability")
+			}
+			assertVZGrantReleaseCapability(t, p.cache, bootstrap, sudo)
+			trust, remove, preload, jit := false, false, -1, -1
+			for index, call := range r.calls {
+				text := strings.Join(call, " ")
+				trust = trust || strings.Contains(text, guestPath+" cache-setup") || strings.Contains(text, "of=/tmp/bivouac-cache-ca.pem")
+				remove = remove || strings.Contains(text, "rm -f /tmp/bivouac-cache-env /tmp/bivouac-cache-roots.pem /tmp/bivouac-cache-ca.pem")
+				if strings.Contains(text, "dd of=/tmp/bivouac-cache-preload.cjs") {
+					preload = index
+				}
+				if strings.Contains(text, guestPath+" start") {
+					jit = index
+				}
+			}
+			if trust != sudo || remove == sudo || preload < 0 || jit <= preload {
+				t.Fatal("archive/preload/JIT or release trust ordering differs")
+			}
+		})
+	}
+}
+
+// Valid grants must keep archive access while the host, independently of the
+// bootstrap flag, enforces release authority. Unsupported ports prove positive
+// authorization without opening an upstream socket in these offline tests.
+func assertVZGrantReleaseCapability(t *testing.T, service *cache.Service, bootstrap cache.Bootstrap, release bool) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer "+bootstrap.Token)
+	response := httptest.NewRecorder()
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatal("archive grant lost ordinary access")
+	}
+	for _, method := range []string{http.MethodConnect, http.MethodGet} {
+		request := httptest.NewRequest(method, "https://github.com:444/", nil)
+		request.Header.Set("Proxy-Authorization", "Bearer "+bootstrap.Token)
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, request)
+		want := http.StatusProxyAuthRequired
+		if release {
+			want = http.StatusForbidden
+		}
+		if response.Code != want {
+			t.Fatal("host grant release authority differs", method, response.Code)
 		}
 	}
 }

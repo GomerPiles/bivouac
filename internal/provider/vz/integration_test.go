@@ -53,7 +53,7 @@ func TestRealGuest(t *testing.T) {
 	}
 	store := vm.Store(layout.VMs)
 	cfg := config.VZ{Baseline: baseline, HostVMLimit: 2, ForeignSlots: 1}
-	p, err := New("macos", cfg, "integration-ctl", layout.VMs, &local{store: store, exe: exe}, nil)
+	p, err := New("macos", cfg, GuestRuntime{OS: "darwin"}, "integration-ctl", layout.VMs, &local{store: store, exe: exe}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

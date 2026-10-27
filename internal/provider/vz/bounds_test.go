@@ -28,7 +28,7 @@ func writeMarker(t *testing.T, p *Provider, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(provider.Metadata{ControllerID: p.controllerID, InstanceID: "fixture", NetworkPolicy: policy})
+	data, _ := json.Marshal(provider.Metadata{Provider: p.name, ControllerID: p.controllerID, InstanceID: "fixture", NetworkPolicy: policy})
 	if err := os.WriteFile(filepath.Join(p.vmDir(name), markerFile), data, 0o600); err != nil {
 		t.Fatal(err)
 	}

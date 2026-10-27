@@ -1,6 +1,6 @@
 //go:build linux
 
-package crosvm
+package linuxguest
 
 import (
 	"archive/zip"
@@ -71,12 +71,17 @@ func bootIdentity() (string, error) {
 	return value, nil
 }
 func guestConfig() (GuestConfig, error) {
+	return readGuestConfig(filepath.Join(guestRoot, "config.json"))
+}
+func readGuestConfig(path string) (GuestConfig, error) {
 	var cfg GuestConfig
-	data, err := readBounded(filepath.Join(guestRoot, "config.json"), 65536)
+	data, err := readBounded(path, 65536)
 	if err != nil {
 		return cfg, err
 	}
-	if json.Unmarshal(data, &cfg) != nil || !identifier(cfg.Name, 63) || !strings.HasPrefix(cfg.Name, "bivouac-") || !identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" {
+	d := json.NewDecoder(strings.NewReader(string(data)))
+	d.DisallowUnknownFields()
+	if d.Decode(&cfg) != nil || d.Decode(new(any)) != io.EOF || cfg.Profile.Validate() != nil || !identifier(cfg.Name, 63) || !strings.HasPrefix(cfg.Name, "bivouac-") || !identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" {
 		return cfg, errors.New("invalid fixed Linux guest configuration")
 	}
 	boot, err := bootIdentity()
@@ -110,9 +115,9 @@ func process(pid int) (guestProcess, bool, error) {
 	}
 	return guestProcess{PID: pid, Start: fields[19], Image: image}, true, nil
 }
-func listener(cfg GuestConfig) (guestProcess, bool, error) {
+func listener(root string, cfg GuestConfig) (guestProcess, bool, error) {
 	var recorded guestProcess
-	data, err := readBounded(filepath.Join(guestRoot, "listener.json"), 4096)
+	data, err := readBounded(filepath.Join(root, "listener.json"), 4096)
 	if errors.Is(err, os.ErrNotExist) {
 		return recorded, false, nil
 	}
@@ -133,11 +138,14 @@ func listener(cfg GuestConfig) (guestProcess, bool, error) {
 }
 
 // RunLinuxGuest is a private guest adapter, never a host daemon or credential
-// client. It installs no project tools. The immutable baseline supplies an
-// unconfigured official runner, Git, Docker and generic virtio/CDI runtime.
+// client. Explicit guest-root provisioning builds a baseline; ordinary runner
+// operations consume its unconfigured runner, Git, Docker and virtio/CDI runtime.
 func RunLinuxGuest(ctx context.Context, mode string, input io.Reader, out io.Writer) error {
+	if mode == "provision" {
+		return provisionLinux(ctx, input, out)
+	}
 	self, err := os.Executable()
-	if err != nil || (filepath.Base(self) != "bivouac-guest" && self != runtimeHelper) {
+	if err != nil || (filepath.Base(self) != "bivouac-guest" && self != RuntimeHelper) {
 		return errors.New("linux adapter must run from its disposable guest installation")
 	}
 	if mode == "prepare-image" {
@@ -203,20 +211,13 @@ func RunLinuxGuest(ctx context.Context, mode string, input io.Reader, out io.Wri
 	case "listener":
 		return linuxListener(ctx, cfg)
 	case "status":
-		status, err := linuxStatus(cfg)
+		status, err := linuxStatus(guestRoot, cfg)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(status)
 	case "cancel":
-		identity, live, err := listener(cfg)
-		if err != nil {
-			return err
-		}
-		if !live {
-			return nil
-		}
-		return syscall.Kill(identity.PID, syscall.SIGTERM)
+		return cancelListener(guestRoot, cfg)
 	case "hook":
 		runID, err := strconv.ParseInt(os.Getenv("GITHUB_RUN_ID"), 10, 64)
 		if err != nil || runID < 1 {
@@ -259,8 +260,8 @@ func persistentPublicDNS(ctx context.Context) (dnsPreparation, error) {
 	return configurePublicDNS(ctx, nm, func() ([]byte, error) { return readBounded("/etc/resolv.conf", 65536) }, command.Native{})
 }
 func installRuntimeHelper(self string) error {
-	if self == preparedHelper {
-		return os.Symlink(preparedHelper, runtimeHelper)
+	if self == PreparedHelper {
+		return os.Symlink(PreparedHelper, RuntimeHelper)
 	}
 	source, err := os.Open(self)
 	if err != nil {
@@ -268,7 +269,7 @@ func installRuntimeHelper(self string) error {
 	}
 	defer func() { _ = source.Close() }()
 	// #nosec G302 -- This private guest-only executable must be owner-executable.
-	destination, err := os.OpenFile(runtimeHelper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	destination, err := os.OpenFile(RuntimeHelper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 	if err != nil {
 		return err
 	}
@@ -459,8 +460,8 @@ func linuxListener(ctx context.Context, cfg GuestConfig) error {
 		Code int `json:"code"`
 	}{code})
 }
-func linuxStatus(cfg GuestConfig) (provider.RunnerStatus, error) {
-	data, err := readBounded(filepath.Join(guestRoot, "runner.exit"), 4096)
+func linuxStatus(root string, cfg GuestConfig) (provider.RunnerStatus, error) {
+	data, err := readBounded(filepath.Join(root, "runner.exit"), 4096)
 	if err == nil {
 		var exit struct{ Code int }
 		if json.Unmarshal(data, &exit) != nil {
@@ -471,7 +472,7 @@ func linuxStatus(cfg GuestConfig) (provider.RunnerStatus, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return provider.RunnerStatus{}, err
 	}
-	_, live, err := listener(cfg)
+	_, live, err := listener(root, cfg)
 	if err != nil {
 		return provider.RunnerStatus{}, err
 	}
@@ -479,14 +480,14 @@ func linuxStatus(cfg GuestConfig) (provider.RunnerStatus, error) {
 		return provider.RunnerStatus{State: provider.RunnerAbsent}, nil
 	}
 	status := provider.RunnerStatus{State: provider.RunnerStarting}
-	data, err = readBounded(filepath.Join(guestRoot, "runner.log"), 8<<20)
+	data, err = readBounded(filepath.Join(root, "runner.log"), 8<<20)
 	if err != nil {
 		return status, err
 	}
 	if strings.Contains(string(data), "Listening for Jobs") {
 		status.State = provider.RunnerListening
 	}
-	data, err = readBounded(filepath.Join(guestRoot, "job.json"), 4096)
+	data, err = readBounded(filepath.Join(root, "job.json"), 4096)
 	if err == nil {
 		var job provider.RunnerJob
 		if json.Unmarshal(data, &job) != nil || job.RunID < 1 {
@@ -519,8 +520,16 @@ func prepareLinuxGuest(ctx context.Context, self string, input io.Reader, out io
 	decoder := json.NewDecoder(io.LimitReader(input, 65537))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&cfg) != nil || decoder.Decode(new(any)) != io.EOF || !identifier(cfg.Name, 63) || !strings.HasPrefix(cfg.Name, "bivouac-") ||
-		!identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" || cfg.BootID != "" {
+		!identifier(cfg.ControllerID, 64) || cfg.RunnerDir != "/opt/actions-runner" || cfg.BootID != "" || cfg.Profile.Validate() != nil {
 		return errors.New("invalid bounded guest bootstrap")
+	}
+	// A prepared helper must agree with its root-owned image provenance before
+	// creating any per-boot state. Uploaded fallback helpers retain the ordinary
+	// bootstrap path; they do not claim prepared-image reuse.
+	if self == PreparedHelper {
+		if err := validatePreparedProfile(cfg.Profile); err != nil {
+			return err
+		}
 	}
 	stage = 2
 	if _, err := os.Stat(guestRoot); err == nil {
@@ -558,11 +567,12 @@ func prepareLinuxGuest(ctx context.Context, self string, input io.Reader, out io
 	}
 	stage = 6
 	dnsStarted := time.Now()
-	dns, err := persistentPublicDNS(ctx)
+	dns, err := cfg.Profile.prepareDNS(func() (dnsPreparation, error) { return persistentPublicDNS(ctx) })
 	observation.DNSMS = time.Since(dnsStarted).Milliseconds()
 	if err != nil {
 		return err
 	}
+	observation.DNSDHCP = dns.DHCP
 	observation.DNSReused = dns.Reused
 	observation.DNSProfileChanged = dns.ProfileChanged
 	observation.DNSResolverChanged = dns.ResolverChanged
@@ -580,4 +590,54 @@ func prepareLinuxGuest(ctx context.Context, self string, input io.Reader, out io
 	observation.TotalMS = time.Since(started).Milliseconds()
 	return json.NewEncoder(out).Encode(observation)
 
+}
+
+func validatePreparedProfile(profile ExecutionProfile) error {
+	for _, path := range []string{"/", "/etc", "/etc/bivouac"} {
+		if err := rootPath(path, true); err != nil {
+			return err
+		}
+	}
+	const marker = "/etc/bivouac/prepared-image.json"
+	if err := rootPath(marker, false); err != nil {
+		return err
+	}
+	data, err := readBounded(marker, 4096)
+	if err != nil {
+		return err
+	}
+	return validateRunningPreparedProfile(data, profile)
+}
+
+func validateRunningPreparedProfile(data []byte, profile ExecutionProfile) error {
+	hash, err := HelperSHA256("/proc/self/exe")
+	if err != nil {
+		return err
+	}
+	_, err = DecodePreparedImage(data, profile, hash)
+	return err
+}
+
+func cancelListener(root string, cfg GuestConfig) error {
+	identity, live, err := listener(root, cfg)
+	if err != nil {
+		return err
+	}
+	if !live {
+		return nil
+	}
+	return syscall.Kill(identity.PID, syscall.SIGTERM)
+}
+
+func identifier(value string, limit int) bool {
+	if value == "" || len(value) > limit || value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, char := range []byte(value) {
+		valid := char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-'
+		if !valid {
+			return false
+		}
+	}
+	return true
 }

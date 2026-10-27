@@ -150,6 +150,10 @@ type Crosvm struct {
 // bivouac's VM store, run by bivouac's own VM helper. What the image
 // provides (such as the runner directory) is in the baseline's manifest.
 type VZ struct {
+	// GuestOS selects darwin (default) or linux ARM64 runner guests.
+	GuestOS string `toml:"guest_os"`
+	// Helper is the matching static Linux/arm64 executable, for Linux runners.
+	Helper  string    `toml:"helper"`
 	Network VZNetwork `toml:"network"`
 	// Containers optionally adds an isolated Linux engine clone to each job.
 	Containers *Containers `toml:"containers"`
@@ -168,6 +172,14 @@ type VZ struct {
 	// BootstrapShare is an optional host directory shared read-only into the
 	// guest (as /Volumes/My Shared Files/bivouac). Empty means no share.
 	BootstrapShare string `toml:"bootstrap_share"`
+}
+
+// RunnerOS includes the default for programmatically constructed configs.
+func (v VZ) RunnerOS() string {
+	if v.GuestOS == "" {
+		return "darwin"
+	}
+	return v.GuestOS
 }
 
 // Machine is how a guest runs. Zero values keep the baseline manifest's or
@@ -320,7 +332,7 @@ func (c *Config) applyDefaults() {
 	for name, p := range c.Providers {
 		if p.Type == "vz" && p.VZ != nil {
 			p.VZ.Network = p.VZ.Network.WithDefaults()
-			if p.VZ.HostVMLimit == 0 {
+			if p.VZ.HostVMLimit == 0 && p.VZ.RunnerOS() == "darwin" {
 				p.VZ.HostVMLimit = 2
 			}
 		}
@@ -503,10 +515,31 @@ func (c *Config) Validate() error {
 			if p.VZ.Baseline == "" {
 				errs = append(errs, fmt.Errorf("provider %q: vz.baseline is required", name))
 			}
+			switch p.VZ.RunnerOS() {
+			case "linux":
+				if !strings.HasPrefix(p.VZ.Helper, "/") || strings.ContainsAny(p.VZ.Helper, "\x00\r\n") {
+					errs = append(errs, fmt.Errorf("provider %q: Linux runners require an absolute vz.helper path", name))
+				}
+				if p.VZ.Containers != nil || p.VZ.BootstrapShare != "" || p.VZ.Machine.Display != (Display{}) {
+					errs = append(errs, fmt.Errorf("provider %q: Linux runners prohibit companion engines, bootstrap shares and display options", name))
+				}
+				if p.VZ.CPU < 1 || p.VZ.MemoryGB < 1 {
+					errs = append(errs, fmt.Errorf("provider %q: Linux runners require explicit CPU and memory", name))
+				}
+				if p.VZ.HostVMLimit != 0 || p.VZ.ForeignSlots != 0 {
+					errs = append(errs, fmt.Errorf("provider %q: Linux runners prohibit host_vm_limit and foreign_slots", name))
+				}
+			case "darwin":
+				if p.VZ.Helper != "" {
+					errs = append(errs, fmt.Errorf("provider %q: vz.helper is only used by Linux runners", name))
+				}
+			default:
+				errs = append(errs, fmt.Errorf("provider %q: vz.guest_os must be darwin or linux", name))
+			}
 			if strings.HasPrefix(p.VZ.Baseline, NamePrefix) {
 				errs = append(errs, fmt.Errorf("provider %q: vz.baseline may not start with %q", name, NamePrefix))
 			}
-			if p.VZ.HostVMLimit < 1 || p.VZ.ForeignSlots < 0 || p.VZ.ForeignSlots >= p.VZ.HostVMLimit {
+			if p.VZ.RunnerOS() == "darwin" && (p.VZ.HostVMLimit < 1 || p.VZ.ForeignSlots < 0 || p.VZ.ForeignSlots >= p.VZ.HostVMLimit) {
 				errs = append(errs, fmt.Errorf("provider %q: need 0 <= foreign_slots < host_vm_limit", name))
 			}
 			if p.VZ.CPU < 0 || p.VZ.CPU > 1024 || p.VZ.MemoryGB < 0 || p.VZ.MemoryGB > 1024 {
@@ -576,23 +609,27 @@ func (c *Config) validateAcrossProviders(names []string) []error {
 			seen[key] = name
 		}
 	}
-	// Apple's macOS guest limit belongs to the host, so every vz provider
-	// must describe it identically.
-	first := ""
+	// DNS agreement covers every vz provider; slot agreement covers Darwin only.
+	firstDNS, firstDarwin := "", ""
 	for _, name := range names {
 		t := c.Providers[name].VZ
 		if c.Providers[name].Type != "vz" || t == nil {
 			continue
 		}
-		if first == "" {
-			first = name
-			continue
-		}
-		if !sameDNSServers(c.Providers[first].VZ.Network.DNSServers, t.Network.DNSServers) {
+		if firstDNS == "" {
+			firstDNS = name
+		} else if !sameDNSServers(c.Providers[firstDNS].VZ.Network.DNSServers, t.Network.DNSServers) {
 			errs = append(errs, errors.New("vz providers must use the same network.dns_servers for shared cache egress"))
 		}
-		if f := c.Providers[first].VZ; f.HostVMLimit != t.HostVMLimit || f.ForeignSlots != t.ForeignSlots {
-			errs = append(errs, fmt.Errorf("providers %q and %q: vz host_vm_limit and foreign_slots describe the host and must match", first, name))
+		if t.RunnerOS() != "darwin" {
+			continue
+		}
+		if firstDarwin == "" {
+			firstDarwin = name
+			continue
+		}
+		if f := c.Providers[firstDarwin].VZ; f.HostVMLimit != t.HostVMLimit || f.ForeignSlots != t.ForeignSlots {
+			errs = append(errs, fmt.Errorf("providers %q and %q: vz host_vm_limit and foreign_slots describe the host and must match", firstDarwin, name))
 		}
 	}
 	return errs

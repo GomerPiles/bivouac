@@ -84,7 +84,7 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 		t.Fatalf("logical pair list: %v %v %v", owned, foreign, err)
 	}
 	// A new provider process has only records/metadata, not saved process handles.
-	restarted, err := New(p.name, p.cfg, p.controllerID, string(p.store), callRuntime{r}, nil)
+	restarted, err := New(p.name, p.cfg, p.runner, p.controllerID, string(p.store), callRuntime{r}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestRelayProofAndTopologyDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, _ := NetworkPolicy()
-	plan := RelayPlan{StatePath: p.records.Path(), Store: string(p.store), Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
+	plan := RelayPlan{Provider: p.name, StatePath: p.records.Path(), Store: string(p.store), Name: spec.Name, InstanceID: "pair", ControllerID: p.controllerID, Engine: "docker", Policy: policy}
 	if err := plan.verify(); err != nil {
 		t.Fatal(err)
 	}
