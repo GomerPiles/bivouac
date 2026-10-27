@@ -24,7 +24,7 @@ func TestRootlessCacheCapabilitiesAreGuestOSIndependent(t *testing.T) {
 		if guestOS == "linux" {
 			manifest.OS, manifest.MacOS = "linux", nil
 		}
-		if err := writeManifest(clone, manifest); err != nil {
+		if err := WriteManifest(clone, manifest); err != nil {
 			t.Fatal(err)
 		}
 		payload, revocation, err := rootlessCachePaths(clone)

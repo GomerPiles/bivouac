@@ -45,3 +45,7 @@ func ProveIsolation(string, string) error { return ErrUnsupported }
 func RunNetwork(context.Context, string, config.VZNetwork) error { return ErrUnsupported }
 
 func NetworkChildPID(string) (int, error) { return 0, ErrUnsupported }
+
+func CreateEFIStore(string) error { return ErrUnsupported }
+
+func (Store) CloneFactory(string, string) error { return ErrUnsupported }

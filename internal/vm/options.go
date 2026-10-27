@@ -29,6 +29,9 @@ type RunOptions struct {
 // MachineOptions are typed overrides of how one VM runs; zero values keep
 // the manifest's or the framework's defaults.
 type MachineOptions struct {
+	// Factory disks are Linux-only, fixed-role attachments; never runner devices.
+	SeedDisk    string
+	ReceiptDisk string
 	// Display overrides the manifest's display (macOS guests).
 	Display Display
 	// DiskSync is "full" (default: guest flushes reach the disk), "fsync",
@@ -39,6 +42,9 @@ type MachineOptions struct {
 	Nested bool
 }
 
+// ErrForcedStop distinguishes host power-off from a guest-initiated shutdown.
+var ErrForcedStop = errors.New("host forced power-off")
+
 // ErrNestedUnsupported reports a host whose framework cannot nest.
 var ErrNestedUnsupported = errors.New("this Mac does not support nested virtualization: it needs an M3 or newer chip and macOS 15 or later")
 
@@ -46,6 +52,9 @@ var ErrNestedUnsupported = errors.New("this Mac does not support nested virtuali
 // virtualization for a guest other than Linux, or a display for a guest
 // other than macOS.
 func (o MachineOptions) CheckGuest(m Manifest) error {
+	if (o.SeedDisk != "" || o.ReceiptDisk != "") && m.OS != "linux" {
+		return errors.New("factory disks require a Linux guest")
+	}
 	if o.Nested && m.OS != "linux" {
 		return fmt.Errorf("nested virtualization is available only to Linux guests, not %s: Apple's Virtualization framework offers it to no macOS guest", m.OS)
 	}
@@ -76,6 +85,16 @@ func diskSyncMode(name string) (int, error) {
 
 // Validate checks the options without a VM.
 func (o MachineOptions) Validate() error {
+	for _, p := range []string{o.SeedDisk, o.ReceiptDisk} {
+		if p != "" && (!filepath.IsAbs(p) || strings.ContainsAny(p, "\x00\r\n")) {
+			return errors.New("factory disk path must be absolute")
+		}
+	}
+	if o.SeedDisk != "" || o.ReceiptDisk != "" {
+		if o.DiskSync != "" && o.DiskSync != "full" {
+			return errors.New("factory disks require full synchronization")
+		}
+	}
 	if _, err := diskSyncMode(o.DiskSync); err != nil {
 		return err
 	}
@@ -158,6 +177,12 @@ func (o RunOptions) Args() []string {
 	if o.Machine.DiskSync != "" {
 		args = append(args, "--disk-sync", o.Machine.DiskSync)
 	}
+	if o.Machine.SeedDisk != "" {
+		args = append(args, "--seed-disk", o.Machine.SeedDisk)
+	}
+	if o.Machine.ReceiptDisk != "" {
+		args = append(args, "--receipt-disk", o.Machine.ReceiptDisk)
+	}
 	if o.Machine.Nested {
 		args = append(args, "--nested")
 	}
@@ -181,6 +206,8 @@ func ParseArgs(args []string) (RunOptions, error) {
 	var display string
 	fs.StringVar(&display, "display", "", "")
 	fs.StringVar(&o.Machine.DiskSync, "disk-sync", "", "")
+	fs.StringVar(&o.Machine.SeedDisk, "seed-disk", "", "")
+	fs.StringVar(&o.Machine.ReceiptDisk, "receipt-disk", "", "")
 	fs.BoolVar(&o.Machine.Nested, "nested", false, "")
 	if err := fs.Parse(args); err != nil {
 		return o, err

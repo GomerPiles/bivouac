@@ -53,7 +53,8 @@ type machineOptions struct {
 	// diskSync is a VZDiskImageSynchronizationMode.
 	diskSync int
 	// nested enables nested virtualization (Linux guests only).
-	nested bool
+	nested                bool
+	seedDisk, receiptDisk string
 }
 
 // machine is one VZVirtualMachine on its own serial queue.
@@ -121,7 +122,32 @@ func buildConfiguration(f *framework, dir string, c Manifest, opts machineOption
 	if err != nil {
 		return 0, err
 	}
-	f.send(config, "setStorageDevices:", f.array(block))
+	devices := []objc.ID{block}
+	for _, extra := range []struct {
+		path, id string
+		readOnly bool
+	}{{opts.seedDisk, "bivouac-seed", true}, {opts.receiptDisk, "bivouac-receipt", false}} {
+		if extra.path == "" {
+			continue
+		}
+		if c.OS != "linux" {
+			return 0, errors.New("factory disks require Linux")
+		}
+		attachment, err := f.makeErr("VZDiskImageStorageDeviceAttachment", "initWithURL:readOnly:cachingMode:synchronizationMode:error:", f.url(extra.path), extra.readOnly, caching, syncFull)
+		if err != nil {
+			return 0, err
+		}
+		device, err := f.make("VZVirtioBlockDeviceConfiguration", "initWithAttachment:", attachment)
+		if err != nil {
+			return 0, err
+		}
+		if !objc.Send[bool](device, f.sel("respondsToSelector:"), f.sel("setBlockDeviceIdentifier:")) {
+			return 0, errors.New("factory disks require macOS 12.3 or later")
+		}
+		f.send(device, "setBlockDeviceIdentifier:", f.str(extra.id))
+		devices = append(devices, device)
+	}
+	f.send(config, "setStorageDevices:", f.array(devices...))
 
 	nic, err := f.make("VZVirtioNetworkDeviceConfiguration", "")
 	if err != nil {
@@ -403,4 +429,21 @@ func (f *framework) setNetworkMTU(attachment objc.ID, mtu int) error {
 		return errors.New("network attachment MTU readback differs")
 	}
 	return nil
+}
+
+// CreateEFIStore creates a never-booted Linux EFI variable store. Existing files
+// are refused by the framework; the caller owns the destination directory.
+func CreateEFIStore(path string) error {
+	f, err := openFramework()
+	if err != nil {
+		return err
+	}
+	queue := f.queueCreate("dev.bivouac.efi", 0)
+	if queue == 0 {
+		return errors.New("create EFI dispatch queue")
+	}
+	f.onQueue(queue, func() {
+		_, err = f.makeErr("VZEFIVariableStore", "initCreatingVariableStoreAtURL:options:error:", f.url(path), uint64(0))
+	})
+	return err
 }

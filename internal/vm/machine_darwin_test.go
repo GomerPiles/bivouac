@@ -75,15 +75,18 @@ func TestConfigurationsValidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := Manifest{Version: ManifestVersion, OS: guest, Arch: "arm64", CPU: 2, MemoryMiB: 4096, MAC: "02:00:00:00:00:01", Guest: Guest{AgentVersion: 1}}
+			if guest == "linux" {
+				if err := CreateEFIStore(filepath.Join(dir, NVRAMFile)); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var setupErr string
 			f.onQueue(queue, func() {
 				var nsErr objc.ID
 				if guest == "linux" {
-					if f.send(f.send(f.class("VZEFIVariableStore"), "alloc"), "initCreatingVariableStoreAtURL:options:error:", f.url(filepath.Join(dir, NVRAMFile)), uint64(0), errOut(&nsErr)) == 0 {
-						setupErr = f.errorText(nsErr)
-					}
 					return
 				}
+
 				hw := f.send(f.send(f.class("VZMacHardwareModel"), "alloc"), "initWithDataRepresentation:", f.data(model))
 				if hw == 0 || !objc.Send[bool](hw, f.sel("isSupported")) {
 					setupErr = "unsupported macOS hardware model"
@@ -98,13 +101,26 @@ func TestConfigurationsValidate(t *testing.T) {
 				t.Skipf("%s guest on this host: %s", guest, setupErr)
 			}
 			display := Display{}.withDefaults(c.Display)
-			for _, opts := range []machineOptions{
+			combinations := []machineOptions{
 				{networkFD: -1, display: display},
 				{networkFD: -1, display: display, input: true, share: dir},
 				{networkFD: fds[0], display: display},
 				{networkFD: -1, display: Display{Width: 2560, Height: 1600, PPI: 144}, diskSync: syncNone},
 				{networkFD: -1, display: display, diskSync: syncFsync},
-			} {
+			}
+			if guest == "linux" {
+				for _, name := range []string{"seed.iso", "receipt.img"} {
+					if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 1<<20), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				combinations = append(combinations, []machineOptions{
+					{networkFD: fds[0], seedDisk: filepath.Join(dir, "seed.iso"), diskSync: syncFull},
+					{networkFD: fds[0], receiptDisk: filepath.Join(dir, "receipt.img"), diskSync: syncFull},
+					{networkFD: fds[0], seedDisk: filepath.Join(dir, "seed.iso"), receiptDisk: filepath.Join(dir, "receipt.img"), diskSync: syncFull},
+				}...)
+			}
+			for _, opts := range combinations {
 				var buildErr error
 				var valid bool
 				var reason string

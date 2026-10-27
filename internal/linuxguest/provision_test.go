@@ -56,11 +56,11 @@ func TestProvisionRegistryAndBoundedRequest(t *testing.T) {
 	r := registry[0]
 	request := ProvisionRequest{Recipe: r.name, RunnerArchive: "/tmp/runner with spaces;$(literal).tar.gz", RunnerSHA256: strings.Repeat("a", 64)}
 	data, _ := json.Marshal(request)
-	if got, err := decodeProvisionRequest(bytes.NewReader(data)); err != nil || got != request {
+	if got, err := DecodeProvisionRequest(bytes.NewReader(data)); err != nil || got != request {
 		t.Fatal("bounded request", err)
 	}
 	for _, bad := range []string{string(data) + " {}", strings.Replace(string(data), `{`, `{"unknown":true,`, 1), strings.Repeat(" ", 4097), strings.Replace(string(data), r.name, "unknown", 1), strings.Replace(string(data), request.RunnerArchive, "../runner", 1), strings.Replace(string(data), request.RunnerSHA256, strings.Repeat("A", 64), 1)} {
-		if _, err := decodeProvisionRequest(strings.NewReader(bad)); err == nil {
+		if _, err := DecodeProvisionRequest(strings.NewReader(bad)); err == nil {
 			t.Fatal("invalid request accepted")
 		}
 	}

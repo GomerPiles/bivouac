@@ -9,16 +9,20 @@ import (
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/GomerPiles/bivouac/internal/vzrecipe"
 )
 
-// ProvisionRequest is the guest-root image recipe contract. A future host
-// builder can send this same request to the static helper in its build guest.
+// ProvisionRequest is the guest-root image recipe contract used by the host factory.
 // It supplies no commands, units, user names, destinations or privilege policy.
 type ProvisionRequest struct {
 	Recipe        string `json:"recipe"`
 	RunnerArchive string `json:"runner_archive"`
 	RunnerSHA256  string `json:"runner_sha256"`
 }
+
+// ProvisionRecipeName is shared with host configuration and the factory registry.
+const ProvisionRecipeName = vzrecipe.DefaultName
 
 type provisionRecipe struct {
 	name, distro, version, arch string
@@ -30,12 +34,12 @@ type provisionRecipe struct {
 // supported layout today; another image type/distro adds an explicit recipe.
 func provisionRecipes() []provisionRecipe {
 	return []provisionRecipe{{
-		name: "ubuntu-24.04-arm64-vz-runner", distro: "ubuntu", version: "24.04", arch: "arm64", profile: VZ,
+		name: ProvisionRecipeName, distro: "ubuntu", version: "24.04", arch: "arm64", profile: VZ,
 		packages: []string{"ca-certificates", "curl", "git", "sudo", "python3", "build-essential", "docker.io", "netplan.io", "systemd-resolved"},
 	}}
 }
 
-func decodeProvisionRequest(input io.Reader) (ProvisionRequest, error) {
+func DecodeProvisionRequest(input io.Reader) (ProvisionRequest, error) {
 	var request ProvisionRequest
 	data, err := io.ReadAll(io.LimitReader(input, 4097))
 	if err != nil || len(data) > 4096 {
