@@ -71,7 +71,7 @@ function Add-Type {param($TypeDefinition) [pscustomobject]@{noise='type'}}
 function Get-DiskImage {param($ImagePath) [pscustomobject]@{Attached=$false}}
 function Mount-DiskImage {param($ImagePath,$Access,[switch]$NoDriveLetter,[switch]$PassThru) if($Access -ne 'ReadWrite'){throw 'access'};[pscustomobject]@{Fake=$true}}
 function Get-Disk {[pscustomobject]@{Number=123}}
-function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100}}
+function Get-Partition {param($DiskNumber) [pscustomobject]@{PartitionNumber=2;Size=100;Guid='{11111111-1111-1111-1111-111111111111}'}}
 function Add-PartitionAccessPath {param($DiskNumber,$PartitionNumber,$AccessPath)
  $null=New-Item -ItemType Directory -Path (Join-Path $AccessPath 'Windows\Panther\Unattend') -Force
  [IO.File]::WriteAllText((Join-Path $AccessPath 'Windows\Panther\Unattend\setup-step.json'),'{"step":70,"failed":true}')
@@ -88,7 +88,7 @@ function Dismount-DiskImage {param($ImagePath) [pscustomobject]@{noise='dismount
 	if err := os.WriteFile(path, []byte(mocks+runnerCheck+(videoFacts+offlineFiles)+inspectDisk), 0600); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "mode": "setup"})
+	data, _ := json.Marshal(map[string]string{"root": root, "instance_id": id, "disk": filepath.Join(workspace, "disk.vhdx"), "mode": "setup", "windows_guid": "{11111111-1111-1111-1111-111111111111}"})
 	b, err := executeHost(context.Background(), path, data, true)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestOfflineFilesystemFacts(t *testing.T) {
 
 func TestOfflineEligibility(t *testing.T) {
 	userExists := false
-	good := Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &userExists, RunnerState: "unconfigured"}
+	good := Inspection{SystemSetupInProgress: 1, OOBEInProgress: 1, ImageStateKind: "generalized_to_oobe", UnattendPointerKind: "absent", AnswerDirectoryEmpty: true, GuestUserExists: &userExists, RunnerState: "absent"}
 	if !good.Eligible() {
 		t.Fatal("clean generalized image rejected")
 	}
@@ -289,8 +289,8 @@ func TestWorkspaceLock(t *testing.T) {
 }
 
 func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
-	required, err := requiredSpace(100, 0, false)
-	if err != nil || required != (10<<30)+220 {
+	required, err := requiredSpace(100, 200, false)
+	if err != nil || required != (10<<30)+850 {
 		t.Fatal("copy space formula")
 	}
 	required, err = requiredSpace(100, 200, true)
@@ -331,10 +331,5 @@ func TestSpaceAdmissionAndFinalPaths(t *testing.T) {
 	if err != nil || !strings.EqualFold(actual, windows.UTF16ToString(long[:n])) {
 		t.Fatal("final handle path mismatch")
 	}
-	if _, err = missingOwner("expected-template"); err == nil {
-		t.Fatal("missing expected template accepted")
-	}
-	if _, err = missingOwner(""); err != nil {
-		t.Fatal("optional owner record required")
-	}
+
 }

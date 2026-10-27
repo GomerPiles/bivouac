@@ -49,20 +49,30 @@ function Assert-OfflinePath([string]$Root,[string]$Path) {
 }
 function New-OfflineDirectory([string]$Root,[string]$Path) {
  Assert-OfflinePath $Root $Path
- if(!(Test-Path -LiteralPath $Path)){New-Item -ItemType Directory -Path $Path -Force | Out-Null}
- if(!(Get-Item -LiteralPath $Path).PSIsContainer){throw 'offline directory'}
+ if(!(Test-Path -LiteralPath $Path)){
+  $parent=Split-Path -Parent $Path
+  if([IO.Path]::GetFullPath($Path).TrimEnd('\') -ieq [IO.Path]::GetFullPath($Root).TrimEnd('\')){throw 'offline root unavailable'}
+  New-OfflineDirectory $Root $parent
+  $owner=(Get-Acl -LiteralPath $parent).GetOwner([Security.Principal.SecurityIdentifier])
+  # Create one ordinary component at a time, inheriting the guest parent's
+  # DACL and owner rather than the elevated host caller's ownership.
+  New-Item -ItemType Directory -Path $Path | Out-Null
+  Set-OfflineOwner $Path $owner
+ }
+ if(!(Get-Item -Force -LiteralPath $Path).PSIsContainer){throw 'offline directory'}
+}
+function Initialize-OfflineSetupDirectories([string]$Mount) {
+ foreach($relative in @('Windows\Panther','Windows\Setup\Scripts','Windows\Panther\Unattend')){
+  New-OfflineDirectory $Mount (Join-Path $Mount $relative)
+ }
 }
 function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
  $system=Join-Path $Mount 'Windows\System32'
- New-OfflineDirectory $Mount $system
+ Assert-OfflinePath $Mount $system
+ if(!(Test-Path -LiteralPath $system -PathType Container)){throw 'Windows system directory unavailable'}
  foreach($relative in @('HostDriverStore','HostDriverStore\FileRepository')){
   $path=Join-Path $system $relative
-  Assert-OfflinePath $Mount $path
-  if(!(Test-Path -LiteralPath $path)){
-   $owner=(Get-Acl -LiteralPath (Split-Path -Parent $path)).GetOwner([Security.Principal.SecurityIdentifier])
-   New-OfflineDirectory $Mount $path
-   Set-OfflineOwner $path $owner
-  }
+  New-OfflineDirectory $Mount $path
  }
  $repository=Join-Path $system 'HostDriverStore\FileRepository'
  $parentACL=Get-Acl -LiteralPath $repository
@@ -86,12 +96,11 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
   $expected=@($driver.files.PSObject.Properties)
   if(!$expected.Count -or $expected.Count -gt 8192 -or $files.Count -ne $expected.Count -or $directories.Count -ne @($driver.directories).Count){throw 'partial snapshot'}
   foreach($directory in $driver.directories){if(!$directories.ContainsKey($directory)){throw 'partial directory'}}
-  $target=Join-Path $repository $driver.name;$temporary=$target+'.bivouac-staging';$replaced=$target+'.bivouac-replaced'
-  # Templates prepared by App Sandbox may already hold this driver directory.
-  # It is replaced, never merged; only bivouac's own staging names must be absent.
-  foreach($path in @($target,$temporary,$replaced)){Assert-OfflinePath $Mount $path}
-  foreach($path in @($temporary,$replaced)){if(Test-Path -LiteralPath $path){throw 'existing driver staging'}}
-  if((Test-Path -LiteralPath $target) -and !(Get-Item -Force -LiteralPath $target).PSIsContainer){throw 'driver target is not a directory'}
+  $target=Join-Path $repository $driver.name;$temporary=$target+'.bivouac-staging'
+  foreach($path in @($target,$temporary,($target+'.bivouac-replaced'))){
+   Assert-OfflinePath $Mount $path
+   if(Test-Path -LiteralPath $path){throw 'existing driver target or staging'}
+  }
   try {
    New-OfflineDirectory $Mount $temporary
    # Only owner and inherited guest permissions come from the guest parent.
@@ -113,14 +122,9 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
    }
    foreach($directory in $driver.directories){$path=Join-Path $temporary $directory;Set-OfflineOwner $path ($parentACL.GetOwner([Security.Principal.SecurityIdentifier]))}
    # Rename on the mounted volume publishes only the complete verified tree.
-   # An existing tree moves aside first and returns if publication fails.
-   if(Test-Path -LiteralPath $target){
-    [IO.Directory]::Move($target,$replaced)
-    try{[IO.Directory]::Move($temporary,$target)}catch{[IO.Directory]::Move($replaced,$target);throw}
-   } else {[IO.Directory]::Move($temporary,$target)}
+   [IO.Directory]::Move($temporary,$target)
   } finally {
    if(Test-Path -LiteralPath $temporary){Assert-OfflinePath $Mount $temporary;Remove-Item -LiteralPath $temporary -Recurse -Force}
-   if((Test-Path -LiteralPath $replaced) -and (Test-Path -LiteralPath $target)){Assert-OfflinePath $Mount $replaced;Remove-Item -LiteralPath $replaced -Recurse -Force}
   }
  }
 }

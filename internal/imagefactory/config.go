@@ -27,17 +27,21 @@ type Asset struct {
 }
 
 type Config struct {
-	Source           string     `json:"source"`
-	SourceSHA256     string     `json:"source_sha256"`
-	ExpectedTemplate string     `json:"expected_template,omitempty"`
-	GuestUser        string     `json:"guest_user"`
-	CPU              uint32     `json:"cpu"`
-	MemoryMB         uint64     `json:"memory_mb"`
-	SetupAssets      []Asset    `json:"setup_assets"`
-	RenderProbe      PinnedFile `json:"render_probe"`
-	Drivers          []string   `json:"drivers"`
-	ImageRoot        string     `json:"image_root"`
-	TimeoutSeconds   int        `json:"timeout_seconds"`
+	ISO            string     `json:"iso"`
+	ISOSHA256      string     `json:"iso_sha256"`
+	EditionID      string     `json:"edition_id"`
+	ImageIndex     uint32     `json:"image_index,omitempty"`
+	DiskGB         uint32     `json:"disk_gb"`
+	GuestUser      string     `json:"guest_user"`
+	CPU            uint32     `json:"cpu"`
+	MemoryMB       uint64     `json:"memory_mb"`
+	SetupAssets    []Asset    `json:"setup_assets"`
+	RenderProbe    PinnedFile `json:"render_probe"`
+	Drivers        []string   `json:"drivers"`
+	ImageRoot      string     `json:"image_root"`
+	TimeoutSeconds int        `json:"timeout_seconds"`
+	// RetainFailed comes from the command line only (--retain-failed).
+	RetainFailed bool `json:"-"`
 }
 
 // DecodeConfig rejects unknown fields and trailing input without returning
@@ -55,6 +59,12 @@ func DecodeConfig(r io.Reader) (Config, error) {
 	}
 	if c.CPU == 0 {
 		c.CPU = 4
+	}
+	if c.EditionID == "" {
+		c.EditionID = "Professional"
+	}
+	if c.DiskGB == 0 {
+		c.DiskGB = 127
 	}
 	if c.MemoryMB == 0 {
 		c.MemoryMB = 8192
@@ -101,18 +111,18 @@ func safeUser(s string) bool {
 func (c Config) Validate() error {
 	// Configured paths are Windows paths whatever the build's OS, so split
 	// on backslashes rather than with filepath.
-	sourceDir := c.Source[:max(strings.LastIndex(c.Source, `\`), 0)]
-	if !localPath(c.Source) || !strings.HasSuffix(strings.ToLower(c.Source), ".vhdx") || !pin(c.SourceSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.Source) || within(sourceDir, c.ImageRoot) {
-		return errors.New("source and image root must be disjoint local absolute paths with a source SHA-256")
+	sourceDir := c.ISO[:max(strings.LastIndex(c.ISO, `\`), 0)]
+	if !localPath(c.ISO) || !strings.HasSuffix(strings.ToLower(c.ISO), ".iso") || !pin(c.ISOSHA256) || !localPath(c.ImageRoot) || len(strings.TrimRight(c.ImageRoot, `\`)) < 4 || within(c.ImageRoot, c.ISO) || within(sourceDir, c.ImageRoot) {
+		return errors.New("ISO and image root must be disjoint local absolute paths with an ISO SHA-256")
 	}
-	if !safeUser(c.GuestUser) || len(c.ExpectedTemplate) > 128 || strings.ContainsAny(c.ExpectedTemplate, "\\/:\x00\r\n") {
-		return errors.New("invalid guest user or template name")
+	if !safeUser(c.GuestUser) || !mediaIdentifier(c.EditionID, 64) || c.ImageIndex > 128 || c.DiskGB < 64 || c.DiskGB > 256 {
+		return errors.New("invalid user, edition, image index or disk size (64-256 GiB)")
 	}
 	if c.CPU < 1 || c.CPU > 4 || c.MemoryMB < 1024 || c.MemoryMB > 8192 || c.TimeoutSeconds < 300 || c.TimeoutSeconds > 3600 {
 		return errors.New("image build requires 1-4 CPU, 1024-8192 MiB and a 300-3600 second timeout")
 	}
 	validFile := func(f PinnedFile) bool { return localPath(f.Source) && !within(c.ImageRoot, f.Source) && pin(f.SHA256) }
-	if !validFile(c.RenderProbe) || len(c.SetupAssets) > 1 {
+	if !validFile(c.RenderProbe) || len(c.SetupAssets) != 1 {
 		return errors.New("pinned render probe and bounded setup assets are required")
 	}
 	seen := map[string]bool{}
@@ -242,11 +252,6 @@ type RunnerEntry struct {
 	Directory bool   `json:"directory"`
 }
 
-type InspectionReport struct {
-	BuildID string      `json:"build_id"`
-	Facts   *Inspection `json:"inspection"`
-}
-
 // PublishedError distinguishes a usable, committed image from a failed build.
 type PublishedError struct {
 	BuildID string
@@ -263,40 +268,7 @@ func (i Inspection) Generalized() bool {
 }
 
 func (i Inspection) Eligible() bool {
-	return i.Generalized() && !i.GuestStatePresent && !i.AgentPresent && !i.AgentTaskPresent && !i.RunnerTaskPresent && (i.RunnerState == "absent" || i.RunnerState == "unconfigured" || i.diagLogsOnly())
-}
-
-// diagLogsOnly admits residue that is only regular files in _diag, such as
-// logs from template preparation; guest setup removes them before its runner
-// check. Anything in _work, any directory, or any omitted name stays refused.
-func (i Inspection) diagLogsOnly() bool {
-	if i.RunnerState != "residue" || len(i.RunnerResidue) != 1 {
-		return false
-	}
-	diag, ok := i.RunnerResidue["_diag"]
-	if !ok || diag.Truncated || diag.OmittedNames != 0 || len(diag.Entries) == 0 {
-		return false
-	}
-	for _, e := range diag.Entries {
-		if e.Directory {
-			return false
-		}
-	}
-	return true
-}
-
-// RunnerInput checks the conditional asset requirement after offline inspection,
-// before any guest can be created. Inspect itself does not need setup media.
-func (i Inspection) RunnerInput(c Config) error {
-	if i.RunnerState != "absent" {
-		return nil
-	}
-	for _, asset := range c.SetupAssets {
-		if strings.EqualFold(asset.Name, "RUNNER.ZIP") {
-			return nil
-		}
-	}
-	return errors.New("runner is absent; a pinned RUNNER.ZIP asset is required before boot")
+	return i.Generalized() && !i.GuestStatePresent && !i.AgentPresent && !i.AgentTaskPresent && !i.RunnerTaskPresent && i.RunnerState == "absent"
 }
 
 type Driver struct {
@@ -312,15 +284,15 @@ type Manifest struct {
 	AutologonAccountMatches bool                 `json:"autologon_account_matches"`
 	AgentTask               guestagent.TaskFacts `json:"agent_task"`
 	RunnerTask              guestagent.TaskFacts `json:"runner_task"`
+	PreventDeviceEncryption bool                 `json:"prevent_device_encryption"`
 	Topology                *windesktop.Topology `json:"topology,omitempty"`
 	AgentSHA256             string               `json:"agent_sha256"`
 	WindowsContract         int                  `json:"windows_contract"`
 	BuildID                 string               `json:"build_id"`
 	GuestName               string               `json:"guest_name"`
 	GuestUser               string               `json:"guest_user"`
-	Source                  string               `json:"source"`
-	SourceSHA256            string               `json:"source_sha256"`
-	Template                string               `json:"template,omitempty"`
+	Media                   MediaRecord          `json:"media"`
+	Security                GuestSecurity        `json:"security"`
 	Output                  string               `json:"output"`
 	Size                    int64                `json:"size"`
 	SHA256                  string               `json:"sha256"`
@@ -349,4 +321,13 @@ func cleanupOwned(terminate func() error, absent func() error, detach func() err
 		return errors.Join(errors.New("build workspace retained: disk detach unconfirmed"), err)
 	}
 	return remove()
+}
+
+// exitTypeName passes only HCS's documented exit types into errors.
+func exitTypeName(t string) string {
+	switch t {
+	case "None", "GracefulExit", "ForcedExit", "UnexpectedExit", "Unknown":
+		return t
+	}
+	return "other"
 }

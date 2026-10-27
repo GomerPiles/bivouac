@@ -3,6 +3,7 @@
 package imagefactory
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -41,6 +42,10 @@ func sendFactoryFrame(w io.Writer, kind byte, b []byte) error {
 
 // Speak the real framed protocol without executing any guest commands.
 func fakeFactoryAgent(respond func([]string, []byte) ([]byte, int)) guestagent.Dialer {
+	return fakeFactoryAgentFrames(respond, 32768, 0)
+}
+
+func fakeFactoryAgentFrames(respond func([]string, []byte) ([]byte, int), frameSize, writeSize int) guestagent.Dialer {
 	return func(context.Context) (net.Conn, error) {
 		host, guest := net.Pipe()
 		go func() {
@@ -74,20 +79,45 @@ func fakeFactoryAgent(respond func([]string, []byte) ([]byte, int)) guestagent.D
 				}
 			}
 			output, code := respond(request.Argv, input)
+			var wire bytes.Buffer
 			for len(output) > 0 {
-				n := min(len(output), 32768)
-				if sendFactoryFrame(guest, 'O', output[:n]) != nil {
+				n := min(len(output), frameSize)
+				if sendFactoryFrame(&wire, 'O', output[:n]) != nil {
 					return
 				}
 				output = output[n:]
 			}
-			if sendFactoryFrame(guest, 'E', []byte("guest-private-output")) != nil {
+			if sendFactoryFrame(&wire, 'E', []byte("guest-private-output")) != nil {
 				return
 			}
 			status := binary.BigEndian.AppendUint32(nil, uint32(code)) // #nosec G115 -- small fixture exit codes.
-			_ = sendFactoryFrame(guest, 'X', status)
+			if sendFactoryFrame(&wire, 'X', status) != nil {
+				return
+			}
+			if writeSize <= 0 {
+				_, _ = guest.Write(wire.Bytes())
+				return
+			}
+			for wire.Len() > 0 {
+				if _, err := guest.Write(wire.Next(min(writeSize, wire.Len()))); err != nil {
+					return
+				}
+			}
 		}()
 		return host, nil
+	}
+}
+
+// answerInstallation lets a preparation fake pass the installation self-test
+// with valid facts and hands every other command to respond.
+func answerInstallation(respond func([]string, []byte) ([]byte, int)) func([]string, []byte) ([]byte, int) {
+	return func(argv []string, input []byte) ([]byte, int) {
+		if slices.Equal(argv, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}) {
+			task := guestagent.TaskFacts{TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, TaskPolicy: true, TaskSecurity: true}
+			b, _ := json.Marshal(guestagent.InstallationFacts{AutologonAccountMatches: true, TaskUser: true, TaskHighest: true, TaskInteractive: true, TaskAction: true, TaskPriority: 4, OwnerTrusted: true, ACLProtected: true, ACLExpected: true, RunnerTask: task})
+			return b, 0
+		}
+		return respond(argv, input)
 	}
 }
 
@@ -122,7 +152,7 @@ func TestFactoryAgentConversation(t *testing.T) {
 			if payload.Data["require_setup"] != true || payload.Data["script_sha256"] != r.Manifest.ValidationSHA256 {
 				return nil, 14
 			}
-			return []byte(`{"guest_ready":true,"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0,"vendor_id":4098,"device_id":1,"adapter_count":2,"hardware_adapter_count":1,"gpu_device_diagnostics_valid":true,"display_device_count":2,"virtual_render_device_count":1,"virtual_render_problem_code":0,"topology_valid":true,"active_display_count":1,"primary_display_count":1,"primary_width":1024,"primary_height":768,"virtual_equals_primary":true,"primary_adapter_kind":1,"vdd_node_count":0,"hyperv_video_enabled":true,"hyperv_video_started":true}`), 0
+			return []byte(`{"secure_boot":true,"tpm_present":true,"tpm_ready":true,"guest_ready":true,"desktop_ready":true,"hardware_d3d11":true,"presented":true,"pixel_readback":true,"stage":7,"hresult":0,"vendor_id":4098,"device_id":1,"adapter_count":2,"hardware_adapter_count":1,"gpu_device_diagnostics_valid":true,"display_device_count":2,"virtual_render_device_count":1,"virtual_render_problem_code":0,"topology_valid":true,"active_display_count":1,"primary_display_count":1,"primary_width":1024,"primary_height":768,"virtual_equals_primary":true,"primary_adapter_kind":1,"vdd_node_count":0,"hyperv_video_enabled":true,"hyperv_video_started":true}`), 0
 		case payload.Script == sanitizeEntry:
 			stages = append(stages, "sanitize")
 			return []byte("sanitized-shutdown-scheduled"), 0

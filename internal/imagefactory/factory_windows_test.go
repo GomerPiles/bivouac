@@ -43,7 +43,7 @@ func TestGrantsNeverTargetInput(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatal("input reached native grant seam")
 	}
-	for _, source := range []string{testConfig().Source, filepath.Dir(testConfig().Source)} {
+	for _, source := range []string{testConfig().ISO, filepath.Dir(testConfig().ISO)} {
 		if mutateOwnedPath(workspace, source, func(string) error { t.Fatal("source reached ACL seam"); return nil }) == nil {
 			t.Fatal("source ACL change accepted")
 		}
@@ -77,7 +77,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 		case makeISO:
 			phases = append(phases, "iso")
 			answer = data["unattend"]
-		case offlinePayload + stageSetup:
+		case offlineEncryption + offlinePayload + stageSetup:
 			phases = append(phases, "answer")
 			if answer != data["unattend"] {
 				t.Fatal("answer file differs from ISO")
@@ -96,7 +96,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 	if !reflect.DeepEqual(phases, []string{"iso", "answer"}) || len(copied) != len(c.SetupAssets)+2 {
 		t.Fatal("media preparation order")
 	}
-	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract {
+	if !pin(r.Manifest.AgentSHA256) || r.Manifest.WindowsContract != guestagent.WindowsContract || !r.Manifest.PreventDeviceEncryption {
 		t.Fatal("agent manifest pin missing")
 	}
 	for name, script := range mediaScripts() {
@@ -115,7 +115,7 @@ func TestSetupMediaGeneration(t *testing.T) {
 // of their mount, service, guest or HCS operations.
 func TestPowerShellSyntax(t *testing.T) {
 	script := `$ErrorActionPreference='Stop';$data=[Console]::In.ReadToEnd()|ConvertFrom-Json;foreach($text in $data){$tokens=$null;$errors=$null;[void][Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){exit 1}};[Console]::Out.Write('parsed')`
-	texts := []string{makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, offlinePayload, guestBootstrap}
+	texts := []string{embeddedSignatures, offlineEncryption, embeddedSignatures + bootHelpers + baseDisk, offlineEncryption + offlinePayload + stageSetup, bootHelpers, baseDisk, bootHelpers + baseDisk, makeISO, runnerExtract, guestVideo, videoFacts, videoFacts + guestVideo + guestSetup, guestSetup, stageSetup, guestSpecialize, guestValidate, imageSanitize, autologonSecret, inspectDisk, detachDisk, runnerCheck, offlineFiles, offlinePayload, guestBootstrap}
 	texts = append(texts, guestVideo+guestSpecialize+disableFirstLogonAnimation)
 	b, _ := json.Marshal(texts)
 	if got := runTestPS(t, script, b); got != "parsed" {
@@ -229,7 +229,7 @@ func TestNativeDocumentAndOwnership(t *testing.T) {
 	if doc.VirtualMachine.Devices.Plan9 != nil || len(doc.VirtualMachine.Devices.HvSocket.HvSocketConfig.ServiceTable) != 1 {
 		t.Fatal("unexpected guest service or share")
 	}
-	if doc.VirtualMachine.Devices.Scsi["Primary"].Attachments["0"].Path == c.Source {
+	if doc.VirtualMachine.Devices.Scsi["Primary"].Attachments["0"].Path == c.ISO {
 		t.Fatal("source attached directly")
 	}
 	p := hcs.Properties{ID: r.Name, Owner: r.Owner, SystemType: hcs.SystemTypeVM, RuntimeID: "example", State: hcs.StateRunning}

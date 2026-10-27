@@ -3,6 +3,18 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $rotated=$false
 $step=17
+function Read-BitLockerDiagnostics {
+ $result=@{conversion=[uint32]::MaxValue;protection=[uint32]::MaxValue}
+ try{
+  $volumes=@(Get-CimInstance -Namespace 'root\CIMV2\Security\MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Filter "DriveLetter='C:'" -OperationTimeoutSec 10)
+  if($volumes.Count -ne 1){return $result}
+  $conversion=Invoke-CimMethod -InputObject $volumes[0] -MethodName GetConversionStatus -OperationTimeoutSec 10
+  $protection=Invoke-CimMethod -InputObject $volumes[0] -MethodName GetProtectionStatus -OperationTimeoutSec 10
+  if($conversion.ReturnValue -eq 0 -and $conversion.ConversionStatus -ge 0 -and $conversion.ConversionStatus -le 5){$result.conversion=[uint32]$conversion.ConversionStatus}
+  if($protection.ReturnValue -eq 0 -and $protection.ProtectionStatus -ge 0 -and $protection.ProtectionStatus -le 2){$result.protection=[uint32]$protection.ProtectionStatus}
+ }catch{}
+ return $result
+}
 try {
  if($env:COMPUTERNAME -ine $data.name -or $env:USERNAME -ine $data.user) {exit 11}
  $step=19
@@ -274,62 +286,139 @@ public static class DesktopProbe {
    if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Force}
   }
  }
+ # Render-probe wait and failure diagnostics. Keep this independent of the report.
+ Set-Variable -Name FactoryRenderWaitSeconds -Option Constant -Value 180
+ Set-Variable -Name LabRenderWaitSeconds -Option Constant -Value 50
+ function Get-RenderProbeWaitSeconds([bool]$RequireSetup) {
+  if($RequireSetup){return $FactoryRenderWaitSeconds};return $LabRenderWaitSeconds
+ }
+ function Initialize-RenderDirectory {
+  if('RenderOutputDirectory' -as [type]){return}
+  $null=Add-Type -TypeDefinition @"
+using System;using System.Runtime.InteropServices;
+public static class RenderOutputDirectory {
+ [StructLayout(LayoutKind.Sequential)] struct Attributes {public uint length;public IntPtr descriptor;public int inherit;}
+ [DllImport("kernel32.dll",EntryPoint="CreateDirectoryW",CharSet=CharSet.Unicode,ExactSpelling=true,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool CreateDirectory(string path,ref Attributes attributes);
+ [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text,uint revision,out IntPtr descriptor,out uint size);
+ [DllImport("kernel32.dll"),DefaultDllImportSearchPaths(DllImportSearchPath.System32)] static extern IntPtr LocalFree(IntPtr memory);
+ public static int Create(string path,string sddl) {
+  IntPtr sd;uint size;
+  if(!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl,1,out sd,out size))return Marshal.GetLastWin32Error();
+  try{Attributes attributes=new Attributes();attributes.length=(uint)Marshal.SizeOf(typeof(Attributes));attributes.descriptor=sd;
+   return CreateDirectory(path,ref attributes)?0:Marshal.GetLastWin32Error();
+  }finally{LocalFree(sd);}
+ }
+}
+"@
+ }
+ function Assert-RenderDirectory([string]$Path,[Security.AccessControl.DirectorySecurity]$Expected){
+  $item=Get-Item -Force -LiteralPath $Path
+  if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'probe directory type'}
+  $actual=Get-Acl -LiteralPath $Path
+  if(!$actual.AreAccessRulesProtected -or !$actual.GetOwner([Security.Principal.SecurityIdentifier]).Equals($Expected.GetOwner([Security.Principal.SecurityIdentifier])) -or $actual.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $Expected.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)){throw 'probe directory security'}
+  if(@(Get-ChildItem -Force -LiteralPath $Path | Select-Object -First 1).Count){throw 'probe directory not empty'}
+ }
+ function Write-RenderProbeFailure([ref]$Written,[string]$Task,[uint32]$Session,$Budget,[uint32]$WaitSeconds) {
+  if($Written.Value){return};$Written.Value=$true
+  try {
+   $facts=[ordered]@{task_observed=$false;task_state=[uint32]0;last_result=[uint32]0;process_observed=$false;render_count=[uint32]0;render_running=$false;render_cpu_ms=[uint64]0;display_observed=$false;present_display_count=[uint32]0;gpu_count=[uint32]0;gpu_observed=$false;gpu_problem_code=[uint32]0;gpu_devnode_status=[uint32]0;explorer_observed=$false;explorer_age_seconds=[uint32]0;wait_seconds=[uint32]0;wait_budget_seconds=$WaitSeconds}
+   if($null -ne $Budget){$facts.wait_seconds=[uint32][Math]::Min([uint32]::MaxValue,[Math]::Floor($Budget.Elapsed.TotalSeconds))}
+   try {
+    $scheduled=Get-ScheduledTask -TaskName $Task -ErrorAction Stop
+    $info=Get-ScheduledTaskInfo -TaskName $Task -ErrorAction Stop
+    $facts.task_state=[uint32]$scheduled.State
+    $facts.last_result=[BitConverter]::ToUInt32([BitConverter]::GetBytes([int64]$info.LastTaskResult),0)
+    $facts.task_observed=$true
+   }catch{}
+   try {
+    $processes=@(Get-Process -ErrorAction Stop | Where-Object {$_.SessionId -eq $Session -and $_.ProcessName -in @('render','explorer')} | Select-Object -First 257)
+    if($processes.Count -gt 256){throw 'process bound'}
+    $renders=@($processes | Where-Object ProcessName -eq 'render')
+    $cpu=[uint64]0
+    foreach($process in $renders){$cpu += [uint64][Math]::Max(0,[Math]::Floor($process.TotalProcessorTime.TotalMilliseconds))}
+    $facts.render_count=[uint32]$renders.Count;$facts.render_running=($renders.Count -gt 0);$facts.render_cpu_ms=$cpu;$facts.process_observed=$true
+    $desktop=@($processes | Where-Object ProcessName -eq 'explorer' | Sort-Object StartTime | Select-Object -First 1)
+    if($desktop.Count){$facts.explorer_age_seconds=[uint32][Math]::Min([uint32]::MaxValue,[Math]::Max(0,[Math]::Floor(((Get-Date)-$desktop[0].StartTime).TotalSeconds)));$facts.explorer_observed=$true}
+   }catch{}
+   try {
+    $displays=@(Get-CimInstance -ClassName Win32_PnPEntity -Filter "PNPClass='Display'" -OperationTimeoutSec 5 -ErrorAction Stop | Where-Object Present -eq $true | Select-Object -First 33)
+    if($displays.Count -gt 32){throw 'display bound'}
+    $gpu=@($displays | Where-Object DeviceID -like 'PCI\VEN_1414&DEV_008E*')
+    $facts.present_display_count=[uint32]$displays.Count;$facts.gpu_count=[uint32]$gpu.Count;$facts.display_observed=$true
+    if($gpu.Count -eq 1 -and $null -ne $gpu[0].ConfigManagerErrorCode){
+     $status=Get-PnpDeviceProperty -InstanceId $gpu[0].DeviceID -KeyName 'DEVPKEY_Device_DevNodeStatus' -ErrorAction Stop
+     if($null -ne $status.Data){$facts.gpu_problem_code=[uint32]$gpu[0].ConfigManagerErrorCode;$facts.gpu_devnode_status=[uint32]$status.Data;$facts.gpu_observed=$true}
+    }
+   }catch{}
+   $json=$facts | ConvertTo-Json -Compress -Depth 2
+   if([Text.Encoding]::UTF8.GetByteCount($json) -le 2048){[Console]::Out.Write($json);[Console]::Out.Flush()}
+  }catch{}
+ }
+ $renderFailureWritten=$false;$probeBudget=$null
+ $probeWaitSeconds=Get-RenderProbeWaitSeconds ($data.require_setup -eq $true)
  $step=32
  # The pinned prebuilt probe hard-codes this output directory; remove with the Go probe.
  $spikeBase='C:\ProgramData\BivouacHcsSpike'
  if(Test-Path -LiteralPath $spikeBase){exit 32}
- $spikeOwned=$false;$renderRegistered=$false
+ $spikeOwned=$false;$renderRegistered=$false;$renderPrimaryStep=0
  try {
-  New-Item -ItemType Directory -Path $spikeBase | Out-Null
+  Initialize-RenderDirectory
+  $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+  $security=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)
+  if([RenderOutputDirectory]::Create($spikeBase,$security) -ne 0){throw 'probe directory creation'}
   $spikeOwned=$true
-  Set-Acl -LiteralPath $spikeBase -AclObject $acl
+  Assert-RenderDirectory $spikeBase $acl
   $step=23
   $task='bivouac-hcs-spike-render'
-  if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){exit 15}
+  if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){$renderPrimaryStep=15;exit 15}
   $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest
   $action=New-ScheduledTaskAction -Execute $probe -WorkingDirectory $base
-  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+  $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds ($probeWaitSeconds+30)) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
   Register-ScheduledTask -TaskName $task -Principal $principal -Action $action -Settings $settings | Out-Null
   $renderRegistered=$true
   $step=24
   Start-ScheduledTask -TaskName $task
   $result=Join-Path $spikeBase 'render.json'
   $probeBudget=[Diagnostics.Stopwatch]::StartNew()
-  while(!(Test-Path -LiteralPath $result)) {if($probeBudget.Elapsed.TotalSeconds -gt 50){exit 16};Start-Sleep -Milliseconds 200}
+  while(!(Test-Path -LiteralPath $result)) {if($probeBudget.Elapsed.TotalSeconds -ge $probeWaitSeconds){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;$renderPrimaryStep=16;exit 16};Start-Sleep -Milliseconds 200}
   $step=33
   $directory=Get-Item -Force -LiteralPath $spikeBase
-  if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){exit 33}
+  if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){$renderPrimaryStep=33;exit 33}
   $output=Get-Item -Force -LiteralPath $result
-  if($output -isnot [IO.FileInfo] -or $output.LinkType -or ($output.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $output.Length -gt 4096){exit 33}
+  if($output -isnot [IO.FileInfo] -or $output.LinkType -or ($output.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $output.Length -gt 4096){$renderPrimaryStep=33;exit 33}
   $destination=Join-Path $base 'render.json'
-  if(Test-Path -LiteralPath $destination){exit 33}
+  if(Test-Path -LiteralPath $destination){$renderPrimaryStep=33;exit 33}
   Move-Item -LiteralPath $result -Destination $destination
   [IO.Directory]::Delete($spikeBase,$false)
   $spikeOwned=$false
   $result=$destination
   $step=25
-  if((Get-Item -LiteralPath $result).Length -gt 4096){exit 25}
+  if((Get-Item -LiteralPath $result).Length -gt 4096){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds;$renderPrimaryStep=25;exit 25}
   $observed=Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
   # Emit only fixed booleans/numbers; no guest-controlled text or filesystem dump.
-  $report=[ordered]@{credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code}
+  $secureBoot=[bool](Confirm-SecureBootUEFI)
+  $tpm=Get-Tpm
+  $bitlocker=Read-BitLockerDiagnostics
+  $report=[ordered]@{secure_boot=$secureBoot;tpm_present=[bool]$tpm.TpmPresent;tpm_ready=[bool]$tpm.TpmReady;credential_rotated=[bool]$rotated;guest_ready=$true;desktop_ready=($observed.desktop_ready -eq $true);hardware_d3d11=($observed.hardware_d3d11 -eq $true);presented=($observed.presented -eq $true);pixel_readback=($observed.pixel_readback -eq $true);stage=[uint32]$observed.stage;hresult=[uint32]$observed.hresult;vendor_id=[uint32]$observed.vendor_id;device_id=[uint32]$observed.device_id;adapter_count=[uint32]$observed.adapter_count;hardware_adapter_count=[uint32]$observed.hardware_adapter_count;default_vendor_id=[uint32]$observed.default_vendor_id;default_device_id=[uint32]$observed.default_device_id;gpu_device_diagnostics_valid=[bool]$gpuStatus.valid;display_device_count=[uint32]$gpuStatus.display_count;virtual_render_device_count=[uint32]$gpuStatus.virtual_count;virtual_render_problem_code=[uint32]$gpuStatus.problem_code}
+  $report.bitlocker_conversion_status=$bitlocker.conversion
+  $report.bitlocker_protection_status=$bitlocker.protection
   foreach($field in @('topology_valid','virtual_equals_primary','hyperv_video_enabled','hyperv_video_started','probe_foreground','probe_on_primary','probe_input_received','security_window_found','security_on_primary')){
-   if($topology.$field -isnot [bool]){exit 29}
+   if($topology.$field -isnot [bool]){$renderPrimaryStep=29;exit 29}
    $report[$field]=[bool]$topology.$field
   }
   foreach($field in @('active_display_count','primary_display_count','primary_width','primary_height','primary_adapter_kind','vdd_node_count')){
    $report[$field]=[uint32]$topology.$field
   }
   $report=$report | ConvertTo-Json -Compress -Depth 3
-  if([Text.Encoding]::UTF8.GetByteCount($report) -gt 8192){exit 25}
+  if([Text.Encoding]::UTF8.GetByteCount($report) -gt 8192){$renderPrimaryStep=25;exit 25}
   [Console]::Out.Write($report)
   [Console]::Out.Flush()
- } finally {
+ } catch {$renderPrimaryStep=$step;throw} finally {
   try {
    if($renderRegistered){
-    Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $task -Confirm:$false
+    try{Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue}finally{Unregister-ScheduledTask -TaskName $task -Confirm:$false}
    }
-  } finally {
+  }catch{if(!$renderPrimaryStep){$renderPrimaryStep=34}} finally {
    if($spikeOwned){try{
     $directory=Get-Item -Force -LiteralPath $spikeBase
     if(!$directory.PSIsContainer -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'probe output directory changed'}
@@ -341,8 +430,9 @@ public static class DesktopProbe {
      if($entry.PSIsContainer){[IO.Directory]::Delete($entry.FullName,$false)}else{[IO.File]::Delete($entry.FullName)}
     }
     [IO.Directory]::Delete($spikeBase,$false)
-   }catch{exit 34}}
+   }catch{if(!$renderPrimaryStep){$renderPrimaryStep=34}}}
   }
+  if($renderPrimaryStep -eq 34){exit 34}
  }
  exit 0
-} catch {exit $step}
+} catch {if($step -in @(24,25)){Write-RenderProbeFailure ([ref]$renderFailureWritten) $task $session $probeBudget $probeWaitSeconds};exit $step}
