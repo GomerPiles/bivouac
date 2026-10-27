@@ -99,8 +99,8 @@ const consoleReport = `param($data);if($PSVersionTable.PSVersion.Major -ne 5 -or
 func TestGuestBootstrapOutput(t *testing.T) {
 	dial := localAgent(t)
 	module := filepath.Join(t.TempDir(), "OutputFixture.psm1")
-	// Deterministic first-import host output, in addition to the inbox module's
-	// read-only absent-task lookup. Only the temporary module is written.
+	// Deterministic first-import output on every stream. No host service is
+	// needed to prove suppression; the unguarded control below proves the noise.
 	noise := `Write-Output 'incidental-pipeline';Write-Host 'incidental-host';Write-Warning 'incidental-warning';Write-Verbose 'incidental-verbose' -Verbose;$DebugPreference='Continue';Write-Debug 'incidental-debug';Write-Information 'incidental-information' -InformationAction Continue;Write-Progress -Activity 'incidental-progress' -PercentComplete 1;`
 	if err := os.WriteFile(module, []byte(noise), 0600); err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestGuestBootstrapOutput(t *testing.T) {
 		"encoding_probe": "\u00e9\u4e2d",
 	}
 	data := map[string]any{"report": report, "module": module}
-	script := `param($data);Import-Module -Name $data.module;Get-ScheduledTask -TaskName 'bivouac-absent-output-test' -ErrorAction SilentlyContinue;` + noise + `& {` + consoleReport + `} $data;` + noise
+	script := `param($data);Import-Module -Name $data.module;` + noise + `& {` + consoleReport + `} $data;` + noise
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	output, err := guestRun(ctx, dial, script, data)
