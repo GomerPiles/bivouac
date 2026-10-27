@@ -15,7 +15,7 @@ try {
  foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\actions-runner')){Assert-Ordinary $path}
  if(Test-Path -LiteralPath 'C:\ProgramData\BivouacHcsSpike'){exit 32}
  if(!(Test-Path -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe' -PathType Leaf)){exit 1}
- # The template has recreated this directory after removal; it must not ship.
+ # Legacy component directories must be absent before publication.
  if(Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox')){exit 31}
  foreach($path in @('C:\actions-runner\.runner','C:\actions-runner\.credentials','C:\actions-runner\.credentials_rsaparams','C:\actions-runner\_work','C:\actions-runner\_diag')){if(Test-Path -LiteralPath $path){exit 1}}
  $probeBase='C:\ProgramData\Bivouac\Image\Probe'

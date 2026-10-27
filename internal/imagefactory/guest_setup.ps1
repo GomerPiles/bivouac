@@ -77,8 +77,7 @@ foreach($entry in @(@('HCSRENDER.EXE','hcs-render-probe.exe'),@('HCSVALIDATE.PS1
  $step=37;Write-SetupStep $step $false
  if(@(Get-VDDPackages).Count){throw 'VDD packages remain'}
  $step=38;Write-SetupStep $step $false
- # Specialize removes this directory, but the template can recreate it before
- # first logon. Remove it again here; sanitation verifies it before shutdown.
+ # Verify legacy removal again before installing the agent; sanitation checks it too.
  $appSandbox=Join-Path $env:SystemRoot 'AppSandbox'
  if(Test-Path -LiteralPath $appSandbox){
   $current=$appSandbox
@@ -161,18 +160,6 @@ Start-ScheduledTask -TaskName 'bivouac-guest-agent'
 
 $step=70;Write-SetupStep $step $false
 . (Join-Path $PSScriptRoot 'HCSCHECK.PS1')
-# Offline inspection admits a template whose only runner residue is regular
-# files in _diag (logs from template preparation). Remove them; the runner
-# recreates _diag when it starts.
-$diag='C:\actions-runner\_diag'
-if(Test-Path -LiteralPath $diag){
- $item=Get-Item -Force -LiteralPath $diag
- if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'runner residue'}
- foreach($entry in @(Get-ChildItem -Force -LiteralPath $diag)){
-  if($entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'runner residue'}
-  $null=Remove-Item -Force -LiteralPath $entry.FullName
- }
-}
 if(!(Assert-CleanRunner 'C:\actions-runner')){
  $runnerZip=Join-Path $PSScriptRoot 'RUNNER.ZIP'
  if(!(Test-Path -LiteralPath $runnerZip -PathType Leaf)){throw 'runner absent'}

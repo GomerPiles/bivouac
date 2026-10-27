@@ -49,7 +49,7 @@ function Read-FactoryFiles([string]$Root,$Facts) {
  foreach($path in @((Join-Path $Root 'Program Files'),$agentDirectory)){
   if((Test-Path -LiteralPath $path) -and !(Test-OrdinaryFilePath $path)){throw 'agent install path'}
  }
- # Any existing install directory, even incomplete, refuses template reuse.
+ # Any existing install directory, even incomplete, refuses image preparation.
  $Facts.agent_present=Test-Path -LiteralPath $agentDirectory
  $Facts.agent_task_present=Test-Path -LiteralPath (Join-Path $Root 'Windows\System32\Tasks\bivouac-guest-agent')
  $Facts.runner_task_present=Test-Path -LiteralPath (Join-Path $Root 'Windows\System32\Tasks\bivouac-guest-runner')
