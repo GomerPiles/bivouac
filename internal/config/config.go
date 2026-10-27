@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/vzrecipe"
+
 	"github.com/BurntSushi/toml"
 )
 
@@ -332,6 +334,9 @@ func (c *Config) applyDefaults() {
 	for name, p := range c.Providers {
 		if p.Type == "vz" && p.VZ != nil {
 			p.VZ.Network = p.VZ.Network.WithDefaults()
+			if p.VZ.RunnerOS() == "linux" && p.VZ.Baseline == "" {
+				p.VZ.Baseline = vzrecipe.DefaultName
+			}
 			if p.VZ.HostVMLimit == 0 && p.VZ.RunnerOS() == "darwin" {
 				p.VZ.HostVMLimit = 2
 			}
@@ -512,7 +517,7 @@ func (c *Config) Validate() error {
 			if c.Cache.Enabled && !c.Cache.loopback() {
 				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
 			}
-			if p.VZ.Baseline == "" {
+			if p.VZ.Baseline == "" && p.VZ.RunnerOS() == "darwin" {
 				errs = append(errs, fmt.Errorf("provider %q: vz.baseline is required", name))
 			}
 			switch p.VZ.RunnerOS() {

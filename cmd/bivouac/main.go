@@ -43,13 +43,14 @@ Daemon:
   uninstall remove the login item
 
 Setup:
-  doctor           check host, config, credentials, engines
-  config validate  check the config file   (also: config example, config path)
-  secret set       store a credential-store item from a file or stdin
-  secret check     report whether an item exists   (also: secret delete)
-  vz import        copy a Tart-format VM into the VM store as a baseline
-  vz list          show guests bivouac owns and guests it does not
-  vz cleanup       delete orphaned guests that carry bivouac's own metadata
+  doctor              check host, config, credentials, engines
+  config validate     check the config file   (also: config example, config path)
+  secret set          store a credential-store item from a file or stdin
+  secret check        report whether an item exists   (also: secret delete)
+  vz build-baseline   build the pinned Linux ARM64 runner baseline (macOS)
+  vz import           copy a Tart-format VM into the VM store as a baseline
+  vz list             show guests bivouac owns and guests it does not
+  vz cleanup          delete orphaned guests that carry bivouac's own metadata
   vmhost run          elevated foreground VM host (Windows HCS guests)
   vmhost install      register the optional VM host service (elevated; also: uninstall)
   vmhost start|stop   start or stop the installed service without elevation

@@ -156,8 +156,21 @@ Those runs predate per-grant release authority and the cloud-init preflight,
 which have offline coverage only. Release-proxy trust with guest sudo, Linux
 and Darwin providers under one controller, network changes during a job, and
 private-peer probes remain open. The Linux-only provisioning and runtime tests
-run in hosted Ubuntu CI, not in local macOS checks. The default-baseline
-builder and deny-list consolidation are follow-ups.
+run in hosted Ubuntu CI, not in local macOS checks.
+
+`bivouac vz build-baseline` built the default baseline live on Apple Silicon
+from the pinned qcow2 disk and runner archive, in an isolated home with no
+host installs: 9 min including downloads, 2 min with verified cached inputs.
+The NoCloud seed ran provisioning from its mounted ISO, the receipt disk carried
+the success receipt, and the fresh-NVRAM cold gate passed. With `vz.baseline`
+omitted, config resolved the default, `doctor` passed, and the Linux fixture
+(with cache) passed on two cold clones. SIGKILL of the builder mid-provisioning
+left its helper running; the next `--replace` build stopped it, removed and
+logged the staging, rebuilt and swapped the published baseline, which passed
+the fixture again. After a helper change, `doctor` named the stale baseline
+and the printed `--replace` command rebuilt it in under 2 min. Not run live: a scale-set job on the built image, timeout
+and failed-stage reporting, and the publish-collision and swap crash windows,
+which have offline coverage. Deny-list consolidation remains open.
 
 ## Shared Linux runtime
 

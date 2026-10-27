@@ -635,11 +635,12 @@ path fits `sun_path` whatever the name.
   admission validates a static ARM64 ELF executable. Provider construction
   receives `vz.guest_os` (`darwin` by default, or `linux`) and `vz.helper` for
   Linux. Linux requires explicit CPU/memory and prohibits Darwin display/share/
-  slot options and companion engines; its baseline still must be supplied.
-  Guest-root provisioning uses a Go recipe registry, currently Ubuntu 24.04
-  ARM64/VZ only; the future baseline builder will reuse it unchanged. An omitted
-  Linux baseline will later resolve once during configuration preparation to a
-  bivouac-built recipe image; admission and instance specs consume that name.
+  slot options and companion engines. An omitted Linux baseline resolves once,
+  in pure config preparation, to the recipe default
+  `ubuntu-24.04-arm64-vz-runner`; explicit names remain unchanged and Darwin
+  still requires a name. Admission and instance specs consume that resolved
+  name. Shared Linux admission compares factory provenance with the configured
+  helper and reports the build command for absent or stale factory baselines.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
   memory (at least the manifest's minimums), then a rename into place
@@ -723,6 +724,44 @@ path fits `sun_path` whatever the name.
   and 128 MiB extracted.
 - Delete: requires the `bivouac-` prefix, a name different from the
   baseline, a marker whose controller ID matches, and no lock holder.
+
+`bivouac vz build-baseline` explicitly builds the pinned Ubuntu ARM64 image;
+the daemon never downloads or builds. HTTPS inputs and local overrides are
+verified by exact size/SHA-256 and cached by digest outside VM/cache stores.
+Downloads have an idle timeout. A bounded pure-Go qcow2 v2/v3 reader converts
+standard, raw-deflate, zero and unallocated clusters to sparse raw, refusing
+backing files, encryption, snapshots, incompatible features and external data.
+It validates metadata offsets and GPT/ESP before extending to 16..512 GiB
+(default 64), never shrinking the virtual disk. Host admission reserves one
+target disk, inputs/seed and 1 GiB headroom. Build CPU/memory (default 4/4 GiB)
+are outside the daemon budget.
+
+An exclusive factory lock protects fsynced journals in `.factory`. Flat hidden
+`.build-<id>`/`.gate-<id>` names are journaled before creation; identities precede
+launch. Recovery removes matching identities or expected regular factory files
+when creation was interrupted before an identity update. It signals only a
+recorded directory's argv-proven helper and removes owned journal/input temps.
+Unknown state is retained and reported without blocking unrelated builds.
+Bounded host launch logs are archived before cleanup; `doctor` reports leftovers.
+
+A pure-Go ISO9660/Joliet NoCloud seed supplies the exact helper, pinned runner
+and request on a read-only `bivouac-seed` disk. Fixed list-form commands start a
+nonblocking transient oneshot after cloud-final, with ordinary poweroff on either
+outcome. A full-sync `bivouac-receipt` disk must contain one bounded success JSON
+line followed only by zeros across all 1 MiB. These Linux-only attachments are
+refused by runner proofs; only guest-initiated helper shutdown permits capture.
+
+A fresh never-booted EFI store replaces provisioning NVRAM. An APFS-cloned gate
+boots without factory disks, sharing Linux readiness/preparation behind separate
+factory identity/isolation checks. It requires disabled cloud-init and root
+filesystem size at least 90% of the disk, then is force-stopped and deleted;
+the candidate never boots again. Fsynced exclusive rename publishes it.
+Manifest provenance is structurally validated for retained-clone readability;
+new admission compares current recipe/agent/helper pins and gives an exact build
+command. Imports omit provenance. Replacement checks run before building and
+again under the daemon exclusive lock through `RENAME_SWAP` and retired cleanup.
+Old/new identities journaled before publication let recovery recognize either
+side of a crash without deleting the published target.
 
 The runner package is baked into the baseline; `doctor` reports its version.
 A host-cached package copied at boot is a later option if baseline updates

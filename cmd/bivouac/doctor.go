@@ -21,6 +21,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vm"
+	"github.com/GomerPiles/bivouac/internal/vzbuild"
 	"github.com/miekg/dns"
 )
 
@@ -66,6 +67,14 @@ func (e env) doctor(ctx context.Context, args []string) error {
 		add("PASS", "credential", fmt.Sprintf("item %q present in the credential store", cfg.GitHub.PrivateKeySecret))
 	}
 
+	for _, name := range cfg.ProviderNames() {
+		if cfg.Providers[name].Type == "vz" {
+			if err := vzbuild.FactoryStatus(e.layout.VMs); err != nil {
+				add("WARN", "vz factory", err.Error())
+			}
+			break
+		}
+	}
 	for _, name := range cfg.ProviderNames() {
 		p := cfg.Providers[name]
 		if p.Type == "crosvm" {
@@ -185,13 +194,7 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if err := vm.Store(e.layout.VMs).CheckSocketPath(); err != nil {
 		add("FAIL", "vm store "+name, err.Error())
 	}
-	if m, err := vz.CheckRunnerBaseline(e.layout.VMs, t.Baseline, guest.OS); err != nil {
-		add("FAIL", "baseline "+name, err.Error())
-	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {
-		add("FAIL", "machine "+name, err.Error())
-	} else {
-		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s: guest agent protocol %d, runner in %s", t.Baseline, e.layout.VMs, m.Guest.AgentVersion, m.Guest.RunnerDir))
-	}
+	doctorVZBaseline(e.layout.VMs, name, *t, guest, add)
 	if err := guest.CheckHelper(); err != nil {
 		add("FAIL", "guest helper "+name, err.Error())
 	}
@@ -293,5 +296,15 @@ func doctorDNS(ctx context.Context, name string, servers []string, allow func(ne
 		add("WARN", "DNS lookup "+name, "live lookup failed through the guest resolver path")
 	} else {
 		add("PASS", "DNS lookup "+name, "live lookup through the guest resolver path")
+	}
+}
+
+func doctorVZBaseline(store, name string, t config.VZ, guest vz.GuestRuntime, add func(string, string, string)) {
+	if m, err := vz.CheckRunnerBaseline(store, t.Baseline, name, guest); err != nil {
+		add("FAIL", "baseline "+name, err.Error())
+	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {
+		add("FAIL", "machine "+name, err.Error())
+	} else {
+		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s: guest agent protocol %d, runner in %s", t.Baseline, store, m.Guest.AgentVersion, m.Guest.RunnerDir))
 	}
 }

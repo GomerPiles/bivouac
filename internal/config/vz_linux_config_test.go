@@ -61,7 +61,7 @@ func TestVZLinuxRejectsUnusedMacOSOptionsAndInvalidHelper(t *testing.T) {
 			case "containers":
 				v.Containers = &Containers{}
 			case "baseline":
-				v.Baseline = ""
+				v.Baseline = "bivouac-invalid"
 			}
 			if c.Validate() == nil {
 				t.Fatal("invalid Linux settings accepted")
