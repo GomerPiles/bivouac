@@ -1,7 +1,8 @@
 //go:build windows
 
 // sandbox-lab is an opt-in Windows Sandbox experiment. It never loads a
-// controller configuration, calls GitHub, or mutates the HCS VM host.
+// controller configuration, uses GitHub credentials, or mutates the installed
+// HCS VM host. Public release payloads may be downloaded into its private cache.
 package main
 
 import (
@@ -371,11 +372,22 @@ func run(parent context.Context) error {
 	defer cancel()
 	args := os.Args[1:]
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "help") {
-		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--discovery-probe | --secure-probe | --native-probe | --network-probe | --reverse-probe] [--broker <session-id>] [--hold <duration>]\nsandbox-lab broker-session <lab-root> | broker-account-check <session-id>\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
+		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--discovery-probe | --secure-probe | --native-probe | --network-probe | --reverse-probe] [--broker <session-id>] [--hold <duration>] [--baseline-probe] [--tool cmake --tool ninja --tool-cache <directory>]\nsandbox-lab broker-session <lab-root> | broker-account-check <session-id>\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
 		return err
 	}
 	if len(args) == 1 {
+		if args[0] == "agent" || args[0] == "agent-secure" || args[0] == "agent-tcp" || args[0] == "agent-reverse" {
+			if err := guestToolEnvironment(); err != nil {
+				return err
+			}
+		}
 		switch args[0] {
+		case "guest-tools":
+			return prepareGuestTools(ctx)
+		case "start-msvc-layout":
+			return startGuestMSVCLayout(ctx)
+		case "tool-check":
+			return toolCheck(ctx, os.Stdout)
 		case "agent":
 			return agent(parent, false)
 		case "agent-secure":

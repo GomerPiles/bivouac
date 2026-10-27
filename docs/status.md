@@ -264,7 +264,32 @@ capability and a Sandbox-only configuration with no HCS images. Fixtures cover
 cross-capability denial, unchanged HCS ownership, sanitized metadata/errors and
 service permissions excluding stop for discovery-only accounts. The protected
 installed service, production configuration and other HCS worktree are unchanged;
-this integration and the owner-filtered enumeration require live validation.
+shared-service deployment still requires live validation. Owner-filtered
+enumeration passed two complete secure launches through the temporary broker.
+
+The Sandbox lab now supports opt-in pinned PowerShell 7.6.9, MinGit
+2.56.0.windows.4, CMake 4.4.4 and Ninja 1.13.2 through a separate verified
+host payload cache and offline guest extraction. Live probes verified versions,
+PowerShell execution, Git repository creation and a compiler-free CMake/Ninja
+configure/build, plus agent-child PATH and executable versions before/after
+agent restart over mutual TLS. Two fresh four-tool secure launches used one
+temporary broker elevation, passed cancellation/refusal/ownership/cleanup
+checks, and reached bootstrap in 24.103 and 24.115 s. Cached host acquisition,
+rehashing and staging took 383 and 387 ms, measured separately. The full-archive
+guest tool steps took about 8.4 s. These are trusted smoke observations, not
+GitHub job readiness or compiler/SDK benchmarks. The subsequent CMake CLI
+extraction optimization omits HTML docs and the GUI; it has unit coverage but
+has not been timed live. The catalog is not wired into the HCS image builder.
+
+A setup-only MSVC/SDK layout probe verifies the pinned Microsoft bootstrapper
+signature and runs it only inside its own networked Sandbox. Two attempts
+failed with CLR exit `0xe0434352`; fixed-category diagnostics found an I/O
+exception on the local-guest-path retry. No complete layout, offline install
+or C++ compile is validated. Raw setup logs were not copied to the host; the
+new bounded method-name diagnostics are not yet validated live. Both guests
+were stopped with ownership/absence proof. The resource guard also refused an
+attempt before launch. Further live testing requires available host headroom;
+the reserve was not reduced and no host installer or policy change was made.
 
 Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
 RDP-session predicates, XML escaping/device defaults and real TLS handshakes

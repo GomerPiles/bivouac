@@ -191,6 +191,9 @@ func (h *labHost) nativeProbe(ctx context.Context, self string, result *labResul
 	}
 	result.Agent = true
 	result.Smoke = &smoke
+	if err := h.nativeToolCheck(ctx); err != nil {
+		return err
+	}
 	if h.secure {
 		if err := h.authorizationProbes(ctx, self, result); err != nil {
 			return err
@@ -267,7 +270,7 @@ func (h *labHost) nativeProbe(ctx context.Context, self string, result *labResul
 		return errors.New("native reconnect stdin unproven")
 	}
 	result.NativeRestart = true
-	return nil
+	return h.nativeToolCheck(ctx)
 }
 
 func loopbackProbe(ctx context.Context, out io.Writer) error {

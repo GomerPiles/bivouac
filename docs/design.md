@@ -868,8 +868,9 @@ lifetime and cleanup remain unchanged; discovery never starts an idle-exit timer
 The shared discovery package uses an owner-filtered HCS enumeration and returns
 only bounded running-Sandbox native/runtime UUIDs. It opens no VM handle and
 does not adopt Sandbox systems into HCS ownership. The lab uses the same query
-implementation. This integration has fixture coverage only; the installed
-service and its configuration have not been updated. LocalSystem/reboot and
+implementation. The owner-filtered query passed two fresh secure tool-profile
+launches through the temporary broker. Shared-service integration has fixture
+coverage only; the installed service and its configuration have not been updated. LocalSystem/reboot and
 another primary client account remain live gates. A smaller guest-callback
 registry setup remains speculative because wildcard service/system policy is
 not exposed by Sandbox's documented configuration.
@@ -879,11 +880,45 @@ recorded guest boot. Fresh Sandbox build 26100 reports no developer SDK/toolset
 in the probed locations, with Defender service and real-time protection off and
 Tamper Protection off. These are default-Sandbox facts, not an inventory of the
 running production image or proof that every security mechanism is inactive.
-Developer tooling follows the previously agreed opt-in pinned catalog model;
-it is not implemented by the HCS display/image stack. Sandbox cannot bake a
+Developer tooling now has a small shared `internal/wintools` catalog, used by
+the Sandbox lab, with source-pinned official ZIPs for PowerShell, MinGit,
+CMake and Ninja. Unknown/duplicate selections refuse. The ordinary host
+downloads at a bounded rate into a separate content-addressed cache; every
+cache hit and staged copy is rehashed. Corrupt existing entries refuse instead
+of being replaced. Partial downloads remain diagnostic artifacts, not usable
+cache entries. The cache is private to the development account, never a mapped
+writable directory. No downloaded executable runs on the host.
+
+The fresh guest rechecks each ZIP pin, validates all entry paths/types and
+case-insensitive uniqueness before extraction into an empty protected root,
+and bounds file count and expanded bytes. It verifies versions, PowerShell
+execution, Git repository creation and an actual CMake/Ninja build without a
+compiler. The CMake CLI recipe omits HTML documentation and its GUI, retaining
+modules, text help, ctest/cpack and licenses. That optimization has unit
+coverage; its timing is not yet validated live. MinGit supplies headless Git,
+not Git Bash or the full hosted-runner environment. Agent PATH is process-local;
+runner children are checked over authenticated transport before and after
+agent restart. Tool reports bind exact recipe/version/digest/variant to the
+recorded boot. The normal HCS image builder does not yet consume this catalog.
+
+Sandbox cannot bake a
 user-selected base image through its public configuration, so verified cached
 payloads and per-guest provisioning are required. Warm preparation may hide
 that cost; reuse after a job cannot preserve the fresh-guest guarantee.
+
+MSVC/Windows SDK acquisition has a separate trusted setup-only lab mode. It
+enables guest networking, accepts only the reviewed bootstrapper pin, verifies
+its timestamped Microsoft signature in the guest and runs fixed component
+selectors for x64/x86 C++ tools and SDK 26100. The bounded below-normal task
+creates an offline layout entirely in the guest; only a successful layout may
+be exported to the private public-report directory. Raw setup logs remain in
+the guest; diagnostics emit bounded error classes and method identifiers,
+never log lines or URLs. Acquisition exit zero would still not establish
+payload inventory trust, offline installation, compiler functionality or
+reboot handling. Both live attempts failed with a CLR exception, with an I/O
+exception category observed on the local-path retry. No layout or SDK profile
+was admitted. No installer ran on the host. Further live work is refused when
+the unchanged 12-GiB host reserve plus 4-GiB guest cannot fit.
 
 Explicit network probes run trusted code only. Direct and reverse TCP variants
 reuse the shared agent framing over TLS 1.3 with exact per-launch certificate

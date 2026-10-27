@@ -28,6 +28,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/GomerPiles/bivouac/internal/winrunner"
+	"github.com/GomerPiles/bivouac/internal/wintools"
 	"golang.org/x/sys/windows"
 )
 
@@ -253,6 +254,7 @@ type bootFacts struct {
 	Smoke  *smokeFacts `json:"smoke,omitempty"`
 }
 type labResult struct {
+	SetupNetwork           bool               `json:"setup_network"`
 	NetworkProbe           bool               `json:"network_probe"`
 	ReverseProbe           bool               `json:"reverse_probe"`
 	Bootstrap              bool               `json:"bootstrap"`
@@ -284,6 +286,9 @@ type labResult struct {
 	Discovery              []discoveryAttempt `json:"discovery,omitempty"`
 	Smoke                  *smokeFacts        `json:"smoke,omitempty"`
 	Baseline               *baselineFacts     `json:"baseline,omitempty"`
+	Tools                  *toolFacts         `json:"tools,omitempty"`
+	ToolPrepareMS          int64              `json:"tool_prepare_ms"`
+	MSVCLayout             *msvcLayoutFacts   `json:"msvc_layout,omitempty"`
 }
 
 func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
@@ -302,9 +307,30 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	broker := flags.String("broker", "", "use an already elevated lab metadata broker session; requires secure-probe and never requests UAC")
 	baseline := flags.Bool("baseline-probe", false, "inspect guest tools and effective protection without changing policy")
 	reserve := flags.Uint64("reserve-memory-mb", 12288, "physical host memory to leave free beyond this 4096 MiB lab guest")
+	toolCache := flags.String("tool-cache", "", "existing private directory for verified public tool ZIPs")
+	msvcBootstrap := flags.String("msvc-layout-bootstrap", "", "setup-only networked guest: create a bounded offline layout with the pinned Microsoft bootstrapper")
+	toolNames := []string{}
+	flags.Func("tool", "enable a reviewed offline Windows tool; repeat for multiple tools", func(name string) error {
+		toolNames = append(toolNames, name)
+		return nil
+	})
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *base == "" || *bivouac == "" || *runner == "" {
 		return errors.New("run requires --root, --bivouac, --runner and --runner-sha256")
 	}
+	recipes, err := wintools.Resolve(toolNames)
+	if err != nil {
+		return err
+	}
+	if len(recipes) > 0 && *toolCache == "" {
+		return errors.New("enabled tools require a separate private tool-cache directory")
+	}
+	if *msvcBootstrap != "" && (*network || *reverse || *native || *secure || *discovery || *broker != "") {
+		return errors.New("MSVC layout acquisition requires its own setup-only run")
+	}
+	if *msvcBootstrap != "" && wintools.Verify(*msvcBootstrap, msvcBootstrapRecipe()) != nil {
+		return errors.New("reviewed Microsoft layout bootstrapper required")
+	}
+	guestNetwork := *network || *msvcBootstrap != ""
 	if *reverse {
 		*network = true
 	}
@@ -387,6 +413,33 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 			return err
 		}
 	}
+	if *msvcBootstrap != "" {
+		if err := copyAsset(*msvcBootstrap, filepath.Join(h.input, "vs_buildtools.exe"), 5<<20); err != nil {
+			return err
+		}
+		if os.WriteFile(filepath.Join(h.input, "msvc-layout.ps1"), []byte(msvcLayoutScript), 0o600) != nil {
+			return errors.New("publish guest layout probe")
+		}
+	}
+	toolStarted := time.Now()
+	cacheHits := map[string]bool{}
+	for _, recipe := range recipes {
+		asset, hit, err := wintools.Acquire(ctx, *toolCache, recipe)
+		if err != nil {
+			return err
+		}
+		if err := copyAsset(asset, filepath.Join(h.input, recipe.Name+".zip"), 128<<20); err != nil {
+			return err
+		}
+		if err := wintools.Verify(filepath.Join(h.input, recipe.Name+".zip"), recipe); err != nil {
+			return err
+		}
+		cacheHits[recipe.Name] = hit
+	}
+	toolPrepareMS := time.Since(toolStarted).Milliseconds()
+	if err := writeJSON(filepath.Join(h.input, "tools.json"), toolNames); err != nil {
+		return err
+	}
 	if err := winrunner.VerifyArchive(filepath.Join(h.input, "runner.zip"), *digest); err != nil {
 		return err
 	}
@@ -421,9 +474,20 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		}
 		h.client = client
 	}
-	config, err := xml.Marshal(newConfig(h.input, h.output, *network))
+	config, err := xml.Marshal(newConfig(h.input, h.output, guestNetwork))
 	if err != nil {
 		return errors.New("sandbox XML unavailable")
+	}
+	if !labMemoryAvailable(*reserve) {
+		return errors.New("host memory headroom changed during preparation")
+	}
+	data, err = h.call(ctx, "list")
+	if err != nil {
+		return err
+	}
+	ids, err = listed(data)
+	if err != nil || len(ids) != 0 {
+		return errors.New("sandbox slot changed during preparation; no instance launched")
 	}
 	created := time.Now()
 	data, err = h.call(ctx, "start", "--id", id, "--config", string(config))
@@ -440,7 +504,7 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	if err := writeJSON(filepath.Join(root, "record.json"), h.record); err != nil {
 		return err
 	}
-	result := labResult{NetworkProbe: *network, ReverseProbe: *reverse, CreateMS: time.Since(created).Milliseconds()}
+	result := labResult{NetworkProbe: *network, ReverseProbe: *reverse, CreateMS: time.Since(created).Milliseconds(), ToolPrepareMS: toolPrepareMS, SetupNetwork: *msvcBootstrap != ""}
 	defer func() {
 		begun := time.Now()
 		cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -473,17 +537,39 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	result.Bootstrap = true
 	result.Smoke = boot.Smoke
 	result.ReadyMS = time.Since(created).Milliseconds()
-	if boot.Smoke == nil || !boot.Smoke.valid(*network) {
+	if boot.Smoke == nil || !boot.Smoke.valid(guestNetwork) {
 		return errors.New("sandbox direct smoke predicates failed")
 	}
 	if err := h.prove(ctx); err != nil {
 		return err
 	}
 	result.Ownership = true
+	var tools toolFacts
+	if readJSON(filepath.Join(h.output, "tools.json"), &tools) != nil || !tools.valid(h.record, recipes) {
+		return errors.New("guest tool preparation unproven")
+	}
+	if len(recipes) > 0 {
+		var inherited toolFacts
+		for readJSON(filepath.Join(h.output, "tool-environment.json"), &inherited) != nil {
+			if pause(ctx) != nil {
+				return errors.New("guest agent tool environment unavailable")
+			}
+		}
+		if !inherited.valid(h.record, recipes) {
+			return errors.New("guest agent tool environment unproven")
+		}
+	}
+	for i := range tools.Tools {
+		tools.Tools[i].CacheHit = cacheHits[tools.Tools[i].Name]
+	}
+	result.Tools = &tools
 	if *baseline {
 		if err := h.baselineProbe(ctx, &result); err != nil {
 			return err
 		}
+	}
+	if *msvcBootstrap != "" {
+		return h.msvcLayoutProbe(ctx, &result)
 	}
 	if *discovery {
 		return h.discoveryProbe(ctx, &result)

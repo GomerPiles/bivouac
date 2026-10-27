@@ -375,6 +375,44 @@ LLVM and C++ Build Tools plus a Windows SDK. That was a design agreement;
 the merged HCS display/image stack does not implement this catalog. Missing
 catalog code does not establish what an existing customized image contains.
 
+The lab implements the first four portable tools in that plan: PowerShell,
+MinGit, CMake and Ninja. They are selected with repeated `--tool` flags and
+use `internal/wintools` source pins, not latest-at-launch resolution. The image
+builder has not yet adopted that package. For an existing private development
+cache directory, append these arguments to the ordinary offline lab invocation:
+
+```powershell
+--tool pwsh --tool git --tool cmake --tool ninja --tool-cache '<private-cache-directory>'
+```
+
+The reviewed recipes currently select PowerShell 7.6.9 (MIT), MinGit
+2.56.0.windows.4 (GPL-2.0), CMake 4.4.4 (BSD-3-Clause) and Ninja 1.13.2
+(Apache-2.0); bundled third-party notices remain in the archives/installations.
+Selecting a tool opts into its distribution and license. MinGit is the headless
+Git distribution; Bash, npm and full hosted-runner parity are not supplied.
+CMake's CLI variant retains ctest/cpack, modules, text help and licenses, while
+omitting its GUI and HTML documentation. The variant is recorded with its pin.
+
+The host caps new payload downloads at 4 MiB/s, validates official release
+delivery redirects and hashes every cache hit/staged archive. Corrupt existing
+entries and interrupted `.partial` entries refuse reuse; there is no automatic
+cache repair/eviction. The guest verifies the pin again and rejects unsafe ZIP
+paths, alternate streams, reserved device names, case collisions, links and
+oversized expansion before writing files. Installation uses fresh protected
+guest directories. No tool executable runs on the host. Agent PATH is only
+process-local and is inherited by child commands, including after agent restart.
+
+Live full-archive four-tool profiles passed PowerShell execution, Git repository
+creation and a CMake/Ninja configure/build without a compiler. Two cached
+secure runs reached bootstrap in 24.103/24.115 s; host acquisition, rehashing and
+staging took 383/387 ms separately. Each guest still spent about 8.4 s preparing
+tools. Full mutual-TLS admission/refusal, stdin, exit, cancellation and restart
+checks passed, including versions resolved through the child process's PATH.
+Both launches used one temporary broker elevation and were stopped by exact
+recorded identity. These do not establish real job readiness or a compiler/SDK.
+The later CLI trimming optimization is covered by extraction tests, with live
+timing pending; the above measurements used full CMake archives.
+
 An older guest image policy configured Defender scanning and Search, checked
 effective protection, and restored settings on failed verification. The current
 production image was not inspected or modified during this spike. The new
@@ -395,6 +433,35 @@ Portable archives can reduce that cost for tools designed to run unpacked;
 copying an installed MSVC tree is not assumed to reproduce Visual Studio or
 MSBuild discovery. A prepared warm spare can hide setup latency, while each
 completed job must still discard its guest.
+
+The separate `--msvc-layout-bootstrap <file>` feasibility mode accepts only the
+reviewed Microsoft Build Tools bootstrapper pin in `msvcBootstrapRecipe`.
+It cannot be combined with native/TCP transport probes or an existing broker.
+It enables networking only for a trusted setup guest, checks a valid timestamped
+Microsoft signature there, and starts a below-normal guest-local task selecting
+`Microsoft.VisualStudio.Component.VC.Tools.x86.x64` and
+`Microsoft.VisualStudio.Component.Windows11SDK.26100`, with `en-US` and no
+recommended/optional workload expansion. The fixed bootstrapper deadline is
+four minutes; task and parent deadlines are also bounded. This is a feasibility
+probe, not a sufficient budget for arbitrary complete layouts. No Visual Studio
+installer, certificate or setup policy is applied on the host.
+
+A successful result would export a public offline layout to this run's report
+directory; that output must not be treated as an admitted tool cache or executed
+on the host. Full package/manifests integrity, offline installation, certificate
+requirements, reboot handling and a C++/Windows SDK build remain separate gates.
+The tested bootstrapper verified its signature but exited `0xe0434352` both
+from a mapped source and after copying to local guest paths. The local retry's
+fixed diagnostics identified an I/O exception; its precise cause is unknown.
+No layout was admitted. Raw setup logs remain in the guest; fixed categories and
+bounded method identifiers avoid recording log lines, paths or URLs. The newest
+method diagnostics have not been tested live. All probe guests were stopped.
+
+Microsoft's [Build Tools component directory](https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=vs-2022)
+defines those selectors. Its [offline deployment parameters](https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio?view=vs-2022)
+distinguish `--noWeb` payload refusal from installer update behavior; an eventual
+offline installer must constrain both and must not silently accept reboot-required
+results as a ready runner.
 
 The lab leaves 12 GiB free physical host memory beyond its 4-GiB guest by default
 (`--reserve-memory-mb`). The guard samples current headroom and refuses failure

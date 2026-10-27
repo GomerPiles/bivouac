@@ -22,6 +22,8 @@ try {
  Add-Type -AssemblyName System.IO.Compression.FileSystem
  [IO.Compression.ZipFile]::ExtractToDirectory('C:\BivouacBootstrap\runner.zip','C:\actions-runner')
  $facts.stage=3
+ & 'C:\Program Files\Bivouac\sandbox-lab.exe' @('guest-tools') *> $null
+ if($LASTEXITCODE -ne 0){throw 'guest tools'}
  $mode='agent'
  if($settings.secure_probe){$mode='agent-secure'}
  if($settings.network_probe){$mode='agent-tcp'}
