@@ -1226,9 +1226,12 @@ Darwin and Linux-on-vz share the same endpoint/listener/grant/CRL transport.
 Linux starts the endpoint with its already pinned runtime helper and sends
 bootstrap over the guest agent to `linuxguest` cache setup. The shared guest
 adapter owns preload/proxy/CA environment and listener lifetime. Without the
-manifest's sudo contract, both guest OSes disable only release-proxy trust and
-retain archive caching. Darwin skips Keychain setup and removes stale proxy
-files. Setup failure synchronously revokes the grant, then requires
+manifest's sudo contract, both guest OSes receive archive-only grants and the
+host rejects their release-proxy requests. Each grant records
+its release authority at issuance, bounded by `cache.release_proxy`; bootstrap
+reflects that authority. Enabling the service feature cannot upgrade an issued
+archive-only grant. Archive caching remains available. Darwin skips Keychain
+setup and removes stale proxy files. Setup failure synchronously revokes the grant, then requires
 successful fixed-helper removal before JIT fallback. Failed removal refuses
 launch. Confirmed deletion/absence revokes; uncertain deletion retains the grant.
 Service/controller loss closes transport and leaves public fallback through

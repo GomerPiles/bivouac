@@ -522,19 +522,6 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 	if err = json.Unmarshal(bootstrap, &settings); err != nil {
 		return errors.New("invalid cache bootstrap")
 	}
-	guest, err := p.guestContract(name)
-	if err != nil {
-		return err
-	}
-	if settings.ReleaseProxy && !guest.Sudo {
-		settings.ReleaseProxy = false
-		ordinary, err := json.Marshal(settings)
-		if err != nil {
-			return errors.New("prepare archive-only cache bootstrap")
-		}
-		defer clear(ordinary)
-		bootstrap = ordinary
-	}
 	if !settings.ReleaseProxy {
 		// guest.sh selects proxy/trust environment by this file's presence.
 		// A stale release adapter must not turn archive-only setup into a proxy.

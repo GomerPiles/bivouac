@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/diag"
 	"github.com/GomerPiles/bivouac/internal/linuxguest"
 	"github.com/GomerPiles/bivouac/internal/provider"
@@ -242,10 +241,6 @@ func (p *Provider) installLinuxCache(ctx context.Context, name string) error {
 	if err := p.linuxHealthy(ctx, name); err != nil {
 		return err
 	}
-	guest, err := p.guestContract(name)
-	if err != nil {
-		return err
-	}
 	// The runtime helper is the prepared helper pinned at readiness. Adoption
 	// never attaches another endpoint or needs the selected host helper file.
 	bootstrap, err := p.attachCacheEndpoint(ctx, name, linuxguest.RuntimeHelper)
@@ -253,19 +248,6 @@ func (p *Provider) installLinuxCache(ctx context.Context, name string) error {
 		return err
 	}
 	defer clear(bootstrap)
-	var settings cache.Bootstrap
-	if json.Unmarshal(bootstrap, &settings) != nil {
-		return errors.New("invalid cache bootstrap")
-	}
-	if settings.ReleaseProxy && !guest.Sudo {
-		settings.ReleaseProxy = false // archive caching requires no guest privilege
-		ordinary, err := json.Marshal(settings)
-		if err != nil {
-			return errors.New("prepare archive-only cache bootstrap")
-		}
-		defer clear(ordinary)
-		bootstrap = ordinary
-	}
 	_, err = p.linuxCommand(ctx, name, "cache-setup", bytes.NewReader(bootstrap), statusOutputLimit)
 	return err
 }

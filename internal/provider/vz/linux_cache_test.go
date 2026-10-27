@@ -201,6 +201,7 @@ func TestLinuxCacheAttachesBeforeJITWithOptionalSudo(t *testing.T) {
 			if runtime.bootstrap.ReleaseProxy != sudo || runtime.bootstrap.RevocationURL != cachelink.RevocationURL {
 				t.Fatal("sudo gate or fixed CRL endpoint changed")
 			}
+			assertVZGrantReleaseCapability(t, p.cache, runtime.bootstrap, sudo)
 			setup, seed := -1, -1
 			for index, call := range guest.calls {
 				text := strings.Join(call, " ")

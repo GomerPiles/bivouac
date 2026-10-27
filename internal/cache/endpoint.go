@@ -119,8 +119,9 @@ func (c *endpointConn) Close() error {
 
 // AttachEndpoint requires current provider ownership and isolation proof. listener
 // must be the provider-owned per-VM cache capability, never guest-selected.
+// Capabilities are selected by the provider from its proven guest contract.
 // A successful attachment survives the setup context and is revoked by name.
-func (s *Service) AttachEndpoint(ctx context.Context, name string, control net.Conn, l, revocation net.Listener) ([]byte, error) {
+func (s *Service) AttachEndpoint(ctx context.Context, name string, control net.Conn, l, revocation net.Listener, capabilities GrantCapabilities) ([]byte, error) {
 	if control == nil || l == nil || revocation == nil {
 		if revocation != nil {
 			_ = revocation.Close()
@@ -145,7 +146,7 @@ func (s *Service) AttachEndpoint(ctx context.Context, name string, control net.C
 	if err != nil {
 		return fail()
 	}
-	bootstrap, err := s.issueAt(name, "https://127.0.0.1:"+port)
+	bootstrap, err := s.issueAt(name, "https://127.0.0.1:"+port, capabilities)
 	if err != nil {
 		_ = l.Close()
 		return fail()

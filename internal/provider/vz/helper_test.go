@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,6 +272,7 @@ func TestDarwinCacheKeepsArchivesWithOptionalSudo(t *testing.T) {
 			if bootstrap.ReleaseProxy != sudo || bootstrap.Token == "" || bootstrap.CA == "" {
 				t.Fatal("sudo gate removed ordinary cache capability")
 			}
+			assertVZGrantReleaseCapability(t, p.cache, bootstrap, sudo)
 			trust, remove, preload, jit := false, false, -1, -1
 			for index, call := range r.calls {
 				text := strings.Join(call, " ")
@@ -286,5 +289,32 @@ func TestDarwinCacheKeepsArchivesWithOptionalSudo(t *testing.T) {
 				t.Fatal("archive/preload/JIT or release trust ordering differs")
 			}
 		})
+	}
+}
+
+// Valid grants must keep archive access while the host, independently of the
+// bootstrap flag, enforces release authority. Unsupported ports prove positive
+// authorization without opening an upstream socket in these offline tests.
+func assertVZGrantReleaseCapability(t *testing.T, service *cache.Service, bootstrap cache.Bootstrap, release bool) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.Header.Set("Authorization", "Bearer "+bootstrap.Token)
+	response := httptest.NewRecorder()
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatal("archive grant lost ordinary access")
+	}
+	for _, method := range []string{http.MethodConnect, http.MethodGet} {
+		request := httptest.NewRequest(method, "https://github.com:444/", nil)
+		request.Header.Set("Proxy-Authorization", "Bearer "+bootstrap.Token)
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, request)
+		want := http.StatusProxyAuthRequired
+		if release {
+			want = http.StatusForbidden
+		}
+		if response.Code != want {
+			t.Fatal("host grant release authority differs", method, response.Code)
+		}
 	}
 }

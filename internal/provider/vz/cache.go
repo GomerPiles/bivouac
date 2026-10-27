@@ -3,6 +3,8 @@ package vz
 import (
 	"context"
 	"errors"
+
+	"github.com/GomerPiles/bivouac/internal/cache"
 )
 
 // attachCacheEndpoint is the host transport for either guest OS. The caller
@@ -10,6 +12,10 @@ import (
 // lifetime after setup and cache.Service revokes it by guest name.
 func (p *Provider) attachCacheEndpoint(ctx context.Context, name, helper string) ([]byte, error) {
 	if err := p.runnerIsolation(name); err != nil {
+		return nil, err
+	}
+	guest, err := p.guestContract(name)
+	if err != nil {
 		return nil, err
 	}
 	stream, err := p.rt.Duplex(context.WithoutCancel(ctx), name, []string{helper, "cache", "endpoint"})
@@ -22,5 +28,5 @@ func (p *Provider) attachCacheEndpoint(ctx context.Context, name, helper string)
 		_ = stream.Close()
 		return nil, err
 	}
-	return p.cache.AttachEndpoint(ctx, name, stream, listener, revocation)
+	return p.cache.AttachEndpoint(ctx, name, stream, listener, revocation, cache.GrantCapabilities{ReleaseProxy: guest.Sudo})
 }

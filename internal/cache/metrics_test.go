@@ -78,7 +78,7 @@ func TestCacheSummaryCountsActualRangesAndIgnoresHead(t *testing.T) {
 	if err != nil || own != want {
 		t.Fatal("authenticated numeric summary differs", own, err)
 	}
-	otherData, err := s.Issue("other-guest")
+	otherData, err := s.Issue("other-guest", GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestGuestCacheSummaryAcceptsOtherLiteralEndpoint(t *testing.T) {
 		t.Skip("IPv6 loopback unavailable")
 	}
 	defer s.Close()
-	data, err := s.Issue("vz-fixture")
+	data, err := s.Issue("vz-fixture", GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestGuestCacheSummaryReportsUploadsWhenStored(t *testing.T) {
 	defer backend.Close()
 	s, _, _ := testService(t, backend)
 	s.EnableUploadStore()
-	data, err := s.Issue("stored")
+	data, err := s.Issue("stored", GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}

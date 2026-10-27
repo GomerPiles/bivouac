@@ -27,7 +27,7 @@ func testService(t *testing.T, backend *httptest.Server) (*Service, Bootstrap, *
 	t.Cleanup(s.Close)
 	s.client = backend.Client()
 	s.validate = func(u *url.URL) bool { return u.Host == strings.TrimPrefix(backend.URL, "https://") }
-	data, err := s.Issue("guest")
+	data, err := s.Issue("guest", GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -346,7 +346,7 @@ func TestUploadRelayRefusesWhatItCannotCarry(t *testing.T) {
 // guest's own token a request is refused and cannot disturb the upload.
 func TestUploadRelayRequiresTheGuestToken(t *testing.T) {
 	s, b, client, blob, upstream := uploadFixture(t)
-	data, err := s.Issue("other")
+	data, err := s.Issue("other", GrantCapabilities{ReleaseProxy: true})
 	if err != nil {
 		t.Fatal(err)
 	}

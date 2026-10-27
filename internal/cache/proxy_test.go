@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"net"
@@ -30,13 +31,17 @@ func proxyFixture(t *testing.T, handler http.Handler) (*Service, *http.Client, B
 	transport.Proxy = nil
 	service.client = &http.Client{Transport: transport, Timeout: time.Minute}
 	service.EnableReleaseProxy()
+	data, err := service.Issue("guest", GrantCapabilities{ReleaseProxy: true})
+	if err != nil || json.Unmarshal(data, &bootstrap) != nil {
+		t.Fatal("proxy fixture grant unavailable")
+	}
+	clear(data)
 	bootstrap.CA += string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: backend.Certificate().Raw}))
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM([]byte(bootstrap.CA))
 	endpoint, _ := url.Parse(bootstrap.URL)
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(endpoint), TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, ProxyConnectHeader: http.Header{"Proxy-Authorization": {"Bearer " + bootstrap.Token}}}, Timeout: time.Minute}
 	t.Cleanup(client.CloseIdleConnections)
-	bootstrap.ReleaseProxy = true
 	return service, client, bootstrap
 }
 

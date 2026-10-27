@@ -527,8 +527,8 @@ memory_gb = 4
 Omit macOS slot, display, bootstrap-share and companion-engine settings. Linux
 uses DHCP virtual DNS without guest rewrites; helper hash mismatches require a
 rebuilt baseline. Both guest OSes keep archive caching without recorded sudo;
-only release-proxy trust is omitted. Setup failure revokes the grant and requires
-confirmed adapter removal before JIT can fall back to ordinary public downloads.
+the host issues an archive-only grant and release-proxy trust is omitted. Setup
+failure revokes the grant and requires confirmed adapter removal before JIT can fall back to ordinary public downloads.
 
 For explicit live validation, use an isolated `BIVOUAC_HOME`, import/copy only a
 validation baseline, reserve CPU/memory, and set `BIVOUAC_EXE`,
