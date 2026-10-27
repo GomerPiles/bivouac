@@ -19,15 +19,23 @@ import (
 // LabRunnerRunFacts says whether the configured account, without its
 // administrator rights, is refused starting the elevated runner task. The lab
 // asks while the probe holds the task: under IgnoreNew an accepted run starts
-// nothing, so only the exit status differs.
+// nothing, so only the exit status differs. schtasks exits 1 for any error, so
+// the same token must also read the agent task, which keeps Task Scheduler's
+// default read entry for its principal: that proves schtasks works under the
+// token and that the runner refusals are about access. AgentRunAccepted is a
+// diagnostic of why the runner task omits that entry (a task's own user may
+// run a task it can read); it does not gate.
 type LabRunnerRunFacts struct {
-	FilteredToken    bool `json:"filtered_token"`
-	FilteredRefused  bool `json:"filtered_refused"`
-	ElevatedAccepted bool `json:"elevated_accepted"`
+	FilteredToken      bool `json:"filtered_token"`
+	AgentQueryAccepted bool `json:"agent_query_accepted"`
+	RunnerQueryRefused bool `json:"runner_query_refused"`
+	FilteredRefused    bool `json:"filtered_refused"`
+	ElevatedAccepted   bool `json:"elevated_accepted"`
+	AgentRunAccepted   bool `json:"agent_run_accepted"`
 }
 
 func (f LabRunnerRunFacts) Valid() bool {
-	return f.FilteredToken && f.FilteredRefused && f.ElevatedAccepted
+	return f.FilteredToken && f.AgentQueryAccepted && f.RunnerQueryRefused && f.FilteredRefused && f.ElevatedAccepted
 }
 
 func labRunnerRun(ctx context.Context) LabRunnerRunFacts {
@@ -41,8 +49,15 @@ func labRunnerRun(ctx context.Context) LabRunnerRunFacts {
 	if token, err := labFilteredToken(); err == nil {
 		f.FilteredToken = labTokenFiltered(token)
 		if f.FilteredToken {
-			code, err := runWithToken(ctx, token, schtasks, args)
-			f.FilteredRefused = err == nil && code != 0
+			run := func(args ...string) (bool, bool) {
+				code, err := runWithToken(ctx, token, schtasks, args)
+				return err == nil && code == 0, err == nil && code != 0
+			}
+			f.AgentQueryAccepted, _ = run("/Query", "/TN", guestagent.WindowsTaskName)
+			_, f.RunnerQueryRefused = run("/Query", "/TN", guestagent.WindowsRunnerTaskName)
+			_, f.FilteredRefused = run(args...)
+			// The agent is running and its task uses IgnoreNew: nothing starts.
+			f.AgentRunAccepted, _ = run("/Run", "/TN", guestagent.WindowsTaskName)
 		}
 		_ = token.Close()
 	}
@@ -126,7 +141,7 @@ func labMediumIntegrity(token windows.Token) bool {
 	return err == nil && label.Label.Sid != nil && label.Label.Sid.Equals(medium)
 }
 
-// runWithToken runs a fixed argv under token with independent NUL streams and
+// runWithToken runs a fixed argv under token, with no window or inherited handles, and
 // returns its exit code, bounded at 20 seconds.
 func runWithToken(ctx context.Context, token windows.Token, binary string, args []string) (uint32, error) {
 	application, err := windows.UTF16PtrFromString(binary)
