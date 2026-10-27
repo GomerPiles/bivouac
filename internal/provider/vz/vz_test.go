@@ -259,7 +259,7 @@ func newProvider(t *testing.T, r *recorder) *Provider {
 		writeTestManifest(t, filepath.Join(store, name), guestOS)
 	}
 	cfg := config.VZ{Baseline: "base", CPU: 4, MemoryGB: 8, HostVMLimit: 2}
-	p, err := New("macos", cfg, "ctl-1", store, callRuntime{r}, nil)
+	p, err := New("macos", cfg, GuestRuntime{OS: "darwin"}, "ctl-1", store, callRuntime{r}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +509,7 @@ func TestCheckNestedFollowsTheHost(t *testing.T) {
 // before it accepts a job whose guest could never start.
 func TestRuntimeRefusesStoreTooLongForAgentSockets(t *testing.T) {
 	store := filepath.Join(t.TempDir(), strings.Repeat("v", 100))
-	p, err := New("macos", config.VZ{}, "controller", store, nil, nil)
+	p, err := New("macos", config.VZ{}, GuestRuntime{OS: "darwin"}, "controller", store, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

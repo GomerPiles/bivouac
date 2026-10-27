@@ -75,7 +75,7 @@ func TestRootlessGuestLab(t *testing.T) {
 		t.Fatal("lab has retained records; recover before continuing")
 	}
 	rt := &local{store: vm.Store(layout.VMs), exe: exe}
-	p, err := New("macos", config.VZ{Baseline: baseline, CPU: 2, MemoryGB: 4, HostVMLimit: 2, ForeignSlots: 1, Network: settings.network}, records.ControllerID(), layout.VMs, rt, nil)
+	p, err := New("macos", config.VZ{Baseline: baseline, CPU: 2, MemoryGB: 4, HostVMLimit: 2, ForeignSlots: 1, Network: settings.network}, GuestRuntime{OS: "darwin"}, records.ControllerID(), layout.VMs, rt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func TestRootlessGuestLab(t *testing.T) {
 				service.Close()
 				download("cache-outage", proxy)
 			}
-			restarted, err := New(p.name, p.cfg, p.controllerID, string(p.store), rt, nil)
+			restarted, err := New(p.name, p.cfg, p.runner, p.controllerID, string(p.store), rt, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

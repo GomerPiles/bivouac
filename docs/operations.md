@@ -462,6 +462,12 @@ Never use a process-name search to stop or wait for the daemon.
 The daemon runs every VM through `bivouac vm run` from its own executable, so
 that copy must carry the `com.apple.security.virtualization` entitlement;
 the daemon refuses to start without it, and `doctor` checks it.
+Host startup checks are independent of baseline and Linux helper availability:
+a missing, changed or invalid baseline/helper blocks new-instance admission,
+while reconciliation can adopt retained runners and clean up recorded clones.
+Restore the configured baseline/helper before new admissions; use `doctor` to
+check them. Retained operations use each clone's manifest and current ownership
+and isolation proof, without re-uploading helpers during adoption.
 
 **VM store.** Baselines and clones live in bivouac's VM store:
 `~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.

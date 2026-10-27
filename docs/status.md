@@ -131,6 +131,14 @@ Open:
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 
+The vz paths select launch devices, helper source and readiness preparation by
+guest OS. Current configuration callers still select Darwin; Linux runner
+configuration and operations are not enabled. Unit regressions cover Darwin
+runner/container-pair behavior, Linux device/bootstrap selection, and startup,
+manager adoption and cleanup after baseline loss or change. Separate regressions
+cover missing/invalid Linux helpers and OS-independent host cache capability
+paths. These are offline checks, with no new live provider evidence.
+
 ## Shared Linux runtime
 
 The transport-neutral `internal/linuxguest` runtime supplies explicit Crosvm

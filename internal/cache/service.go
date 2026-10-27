@@ -656,7 +656,7 @@ func (s *Store) Stats() (int, int64, int64) {
 	return len(s.entries), s.used, s.reserved
 }
 
-// RestrictMacNetwork is called before attaching any macOS guests. Each upstream
+// RestrictMacNetwork is called before attaching guests on a macOS host. Each upstream
 // dial rejects current host addresses/prefixes and IPv6 as well as special IPs.
 func (s *Service) RestrictMacNetwork(servers []string) {
 	s.client.CloseIdleConnections()
@@ -667,7 +667,7 @@ func (s *Service) RestrictMacNetwork(servers []string) {
 }
 
 // All usable answers must be admitted before choosing one, preventing a mixed
-// public/private DNS response from bypassing denial. Isolated macOS transports
+// public/private DNS response from bypassing denial. Isolated macOS-host transports
 // discard public IPv6 answers and require an admitted IPv4 alternative.
 func upstreamIP(ips []net.IPAddr, admit func(net.IP) bool) (net.IP, error) {
 	var selected net.IP

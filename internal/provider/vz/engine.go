@@ -58,7 +58,7 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		if err := p.preflightRunner(ctx); err != nil {
 			return err
 		}
-		return p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine))
+		return p.createVM(ctx, spec, p.runner.OS, MachineOptions(p.cfg.Machine))
 	}
 	i, err := p.pairRecord(spec.Name)
 	if err != nil {
@@ -80,7 +80,7 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 		}
 	}
 	spec.Meta.EngineName = i.EngineName
-	if err = p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine)); err != nil {
+	if err = p.createVM(ctx, spec, p.runner.OS, MachineOptions(p.cfg.Machine)); err != nil {
 		return err
 	}
 	meta := spec.Meta
@@ -99,6 +99,10 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 		if err != nil {
 			return err
 		}
+		launch, err := p.runnerLaunch(name)
+		if err != nil {
+			return err
+		}
 		m, _ := p.readMeta(name)
 		m.NetworkPolicy = rootnet.PolicyID
 		data, err := json.Marshal(m)
@@ -108,7 +112,6 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 		if err := state.WriteAtomic(filepath.Join(p.vmDir(name), markerFile), data, 0o600); err != nil {
 			return err
 		}
-		launch := p.runnerLaunch()
 		return p.startVM(ctx, name, launch, log)
 	}
 	a, b, err := p.pairStatus(ctx, name)
@@ -162,10 +165,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err := p.runnerIsolation(name); err != nil {
 		return err
 	}
-	if err := p.startupStage(name, "script_install", func() error { return p.installGuestScript(ctx, name) }); err != nil {
-		return err
-	}
-	if err := p.startupStage(name, "aqua_session_check", func() error { return p.checkSession(ctx, name) }); err != nil {
+	if err := p.prepareRunnerGuest(ctx, name); err != nil {
 		return err
 	}
 	if p.cfg.Containers == nil {

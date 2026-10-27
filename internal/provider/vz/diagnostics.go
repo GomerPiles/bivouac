@@ -51,6 +51,9 @@ func (p *Provider) CollectDiagnostics(ctx context.Context, name, dir string) err
 	if err := p.ownsGuest(name); err != nil {
 		return err
 	}
+	if err := p.requireDarwinRunner(name); err != nil {
+		return err
+	}
 	budget := newDiagBudget()
 	var errs []error
 	runnerDir, err := p.runnerDir(name)

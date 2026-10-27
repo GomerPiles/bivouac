@@ -565,7 +565,10 @@ Only TCP `192.0.2.1:7443` selects the cache payload capability. The configurable
 host endpoint bound defaults to 256; the parent independently bounds grants and
 relays by that setting plus its reserved CRL budget. Guest bridge and stack add
 no equal payload cap. Each host listener accepts only its guest's grants/leases.
-TLS, upstream restrictions, expiry and revocation stay mandatory. CRLs use only
+The VM helper supplies these fixed host capability paths for either guest OS;
+without an attached per-VM listener they fail closed. Linux guest cache setup
+remains a separate adapter step. TLS, upstream restrictions, expiry and revocation
+stay mandatory. CRLs use only
 GET/HEAD `/ca.crl` at `192.0.2.1:7444`, with independent stack/broker/listener
 capacity and proxy bypass. VSOCK carries only a six-byte port announcement and
 lifetime; losing it closes the guest loopback listener and streams. Cache outage
@@ -602,7 +605,8 @@ container-pair members require proof. Old NAT/Softnet/unsandboxed helpers are
 refused; proven-owner cleanup still works. Drain old jobs before owner-controlled
 migration; no installed binary, VM, baseline, label or privilege changes implicitly.
 Read-only bootstrap shares remain an explicit opt-in for ordinary runners;
-container pairs prohibit shares. Graphics, input and typed machine options remain.
+container pairs prohibit shares. Launch device selection uses the clone manifest:
+Darwin keeps input devices; Linux has none. Typed machine options remain.
 
 Each VM is a directory in bivouac's VM store
 (`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`):
@@ -617,9 +621,18 @@ live beside their baseline so APFS can share blocks. Agent sockets live in
 the store's hidden `.run` directory, named by a hash of the VM name, so their
 path fits `sun_path` whatever the name.
 
-- Baseline check: Create, the container preflight and `doctor` refuse a
-  baseline without a manifest, of the wrong OS, without a runner directory
-  (runner guests), or whose agent protocol differs from this binary's.
+- Host runtime check: daemon startup checks socket-path capacity, the signed
+  host executable, rootless host policy and requested nested-virtualization
+  support before reconciliation. It never opens a baseline or Linux guest helper.
+  Missing, changed or invalid admission inputs block only new instances, leaving
+  retained-clone inventory, runner adoption and ownership-checked cleanup usable.
+- Baseline admission: Create, container preflight and `doctor` refuse a baseline
+  without a manifest, of the wrong guest OS, without a runner directory
+  (either runner OS), or whose agent protocol differs from this binary's.
+  Linux engine images still need no runner directory. Linux runner helper
+  admission validates a static ARM64 ELF executable. Provider construction
+  receives an explicit guest OS/helper selection; current configuration callers
+  select Darwin. No Linux runner TOML configuration is enabled yet.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
   memory (at least the manifest's minimums), then a rename into place
@@ -629,8 +642,8 @@ path fits `sun_path` whatever the name.
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
   bindings to Virtualization.framework (graphics device, virtio disk,
-  rootless network for managed macOS runners, entropy, balloon, vsock; keyboard and pointer for runner
-  guests; no console, audio, or clipboard). It holds an fcntl lock on the
+  rootless network for managed guests, entropy, balloon, vsock; keyboard and
+  pointer for Darwin runner guests; no console, audio, or clipboard). It holds an fcntl lock on the
   manifest for the VM's life and reads the manifest only through it; the
   provider reads running state and the helper's PID from that lock. A
   manifest is never rewritten once its VM is in place. The
@@ -652,8 +665,12 @@ path fits `sun_path` whatever the name.
 - Ready: the agent runs `true`. DHCP supplies the isolated lease and virtual DNS service without guest sudo.
   Live rootless proof precedes private setup and runner registration. Only an unreachable agent is retried; an
   agent of another protocol version names its own, and readiness fails at
-  once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
-  its `session` mode must report `Aqua`, or readiness fails.
+  once. Guest preparation selects from the clone's manifest, independently of
+  the current baseline. Darwin copies its bootstrap to `/tmp/bivouac-guest` and
+  requires its `session` mode to report `Aqua`. Linux skips both operations;
+  neutral-runtime preparation and Linux runner operations remain separate work.
+  Until that adapter is connected, Linux JIT/status/cancel/diagnostics refuse
+  rather than executing the Darwin script. VM status/stop/delete are generic.
 - Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
   when the cap is exceeded. Errors never include guest output. Ordinary commands
   discard stderr; explicit lab diagnostics capture a bounded, sink-redacted

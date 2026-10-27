@@ -84,7 +84,7 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 		t.Fatalf("logical pair list: %v %v %v", owned, foreign, err)
 	}
 	// A new provider process has only records/metadata, not saved process handles.
-	restarted, err := New(p.name, p.cfg, p.controllerID, string(p.store), callRuntime{r}, nil)
+	restarted, err := New(p.name, p.cfg, p.runner, p.controllerID, string(p.store), callRuntime{r}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

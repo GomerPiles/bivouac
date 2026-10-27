@@ -86,18 +86,11 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	var networkUpdates <-chan struct{}
 	var rootNetwork *networkProcess
 	if opts.RootlessNetwork {
-		cachePath, revocationPath := "", ""
-		if c.OS == "darwin" {
-			cachePath, err = Store(filepath.Dir(opts.Dir)).CacheSocketPath(filepath.Base(opts.Dir))
-			if err != nil {
-				return err
-			}
-		}
-		if cachePath != "" {
-			revocationPath, err = Store(filepath.Dir(opts.Dir)).RevocationSocketPath(filepath.Base(opts.Dir))
-			if err != nil {
-				return err
-			}
+		// Cache capabilities belong to the host transport, for every guest OS.
+		// Without an attached per-VM listener, the fixed endpoint fails closed.
+		cachePath, revocationPath, err := rootlessCachePaths(opts.Dir)
+		if err != nil {
+			return err
 		}
 		network, vmFile, err := startRootless(ctx, c.MAC, cachePath, revocationPath, opts.Network, opts.CacheMaxConnections)
 		if err != nil {
@@ -207,4 +200,19 @@ func (m *machine) proxy(host net.Conn, port uint32) {
 		_ = c.CloseWrite()
 	}
 	wg.Wait()
+}
+
+// Endpoint paths are host capabilities. Guest OS does not select or widen them.
+func rootlessCachePaths(dir string) (string, string, error) {
+	store := Store(filepath.Dir(dir))
+	name := filepath.Base(dir)
+	payload, err := store.CacheSocketPath(name)
+	if err != nil {
+		return "", "", err
+	}
+	revocation, err := store.RevocationSocketPath(name)
+	if err != nil {
+		return "", "", err
+	}
+	return payload, revocation, nil
 }

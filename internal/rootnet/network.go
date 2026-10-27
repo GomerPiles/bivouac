@@ -1,4 +1,5 @@
-// Package rootnet is a bounded, rootless Ethernet-to-public-sockets network.
+// Package rootnet is a bounded, rootless Ethernet-to-public-sockets network
+// for guests on macOS hosts, independent of the guest OS.
 package rootnet
 
 import (

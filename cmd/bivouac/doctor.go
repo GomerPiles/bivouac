@@ -173,6 +173,11 @@ func (e env) doctor(ctx context.Context, args []string) error {
 }
 
 func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
+	// Configuration still selects Darwin; Linux runner configuration follows.
+	e.doctorVZGuest(ctx, name, p, vz.GuestRuntime{OS: "darwin"}, host, cfg, add)
+}
+
+func (e env) doctorVZGuest(ctx context.Context, name string, p config.Provider, guest vz.GuestRuntime, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
 	t := p.VZ
 	if exe, err := os.Executable(); err != nil {
 		add("FAIL", "vm "+name, err.Error())
@@ -184,12 +189,15 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if err := vm.Store(e.layout.VMs).CheckSocketPath(); err != nil {
 		add("FAIL", "vm store "+name, err.Error())
 	}
-	if m, err := vz.CheckBaseline(e.layout.VMs, t.Baseline, "darwin"); err != nil {
+	if m, err := vz.CheckRunnerBaseline(e.layout.VMs, t.Baseline, guest.OS); err != nil {
 		add("FAIL", "baseline "+name, err.Error())
 	} else if err := vz.MachineOptions(t.Machine).CheckGuest(m); err != nil {
 		add("FAIL", "machine "+name, err.Error())
 	} else {
 		add("PASS", "baseline "+name, fmt.Sprintf("%q in %s: guest agent protocol %d, runner in %s", t.Baseline, e.layout.VMs, m.Guest.AgentVersion, m.Guest.RunnerDir))
+	}
+	if err := guest.CheckHelper(); err != nil {
+		add("FAIL", "guest helper "+name, err.Error())
 	}
 	if err := vz.CheckNested(*t); err != nil {
 		add("FAIL", "machine "+name, err.Error())
@@ -208,7 +216,7 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if c := t.Containers; c != nil {
 		cpu += c.CPU
 		mem += c.MemoryGB
-		tp, err := vz.New(name, *t, "doctor", e.layout.VMs, nil, nil)
+		tp, err := vz.New(name, *t, guest, "doctor", e.layout.VMs, nil, nil)
 		if err == nil {
 			err = tp.CheckContainers(ctx)
 		}
@@ -224,13 +232,22 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if gb := int(host.MemoryBytes >> 30); gb > 0 && mem > gb-cfg.Budget.ReserveMemoryGB {
 		add("FAIL", "budget "+name, fmt.Sprintf("job memory %d GB exceeds host %d GB minus reserve %d", mem, gb, cfg.Budget.ReserveMemoryGB))
 	}
+	doctorVZSlots(name, guest.OS, *t, add)
+	if guest.OS == "darwin" {
+		if ps, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "command").Output(); err == nil && strings.Contains(string(ps), "Tartelet.app") {
+			add("WARN", "tartelet", "Tartelet is running; keep foreign_slots >= its VM count during validation")
+		}
+	}
+}
+
+func doctorVZSlots(name, guestOS string, t config.VZ, add func(string, string, string)) {
+	if guestOS != "darwin" {
+		return
+	}
 	if t.HostVMLimit-t.ForeignSlots < 1 {
 		add("FAIL", "slots "+name, "foreign_slots leaves no guest slot")
 	} else {
 		add("PASS", "slots "+name, fmt.Sprintf("%d of %d host VM slot(s) usable (foreign_slots %d)", t.HostVMLimit-t.ForeignSlots, t.HostVMLimit, t.ForeignSlots))
-	}
-	if ps, err := exec.CommandContext(ctx, "/bin/ps", "-axo", "command").Output(); err == nil && strings.Contains(string(ps), "Tartelet.app") {
-		add("WARN", "tartelet", "Tartelet is running; keep foreign_slots >= its VM count during validation")
 	}
 }
 

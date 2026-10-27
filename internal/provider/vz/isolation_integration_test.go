@@ -166,7 +166,7 @@ func validateGuestIsolation(t *testing.T, ctx context.Context, p *Provider, name
 		t.Log("owner-controlled private peer remains unverified")
 	}
 	// Recreate the provider to exercise durable ownership + live-helper rootless proof.
-	adopted, err := New(p.name, p.cfg, p.controllerID, string(p.store), p.rt, nil)
+	adopted, err := New(p.name, p.cfg, p.runner, p.controllerID, string(p.store), p.rt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
