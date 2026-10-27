@@ -112,7 +112,7 @@ func (h Store) stage(src, name string, m Manifest) error {
 			return fmt.Errorf("copy %s: %w", f, err)
 		}
 	}
-	if err := writeManifest(stage, m); err != nil {
+	if err := WriteManifest(stage, m); err != nil {
 		return err
 	}
 	if err := unix.RenamexNp(stage, dst, unix.RENAME_EXCL); err != nil {

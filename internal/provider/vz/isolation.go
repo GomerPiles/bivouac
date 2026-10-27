@@ -37,7 +37,13 @@ func (p *Provider) preflightEngine(ctx context.Context) error {
 		return errors.New("container pairs require a Darwin runner")
 	}
 	for _, b := range []struct{ name, os string }{{p.cfg.Baseline, p.runner.OS}, {p.cfg.Containers.Baseline, "linux"}} {
-		if _, err := CheckBaseline(string(p.store), b.name, b.os); err != nil {
+		var err error
+		if b.os == "linux" {
+			_, err = CheckLinuxBaseline(string(p.store), b.name, p.cfg.Containers.Helper, "")
+		} else {
+			_, err = CheckBaseline(string(p.store), b.name, b.os)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -97,7 +103,7 @@ func (p *Provider) runnerIsolation(name string) error {
 }
 
 func (p *Provider) preflightRunner(ctx context.Context) error {
-	m, err := CheckRunnerBaseline(string(p.store), p.cfg.Baseline, p.runner.OS)
+	m, err := CheckRunnerBaseline(string(p.store), p.cfg.Baseline, p.name, p.runner)
 	if err != nil {
 		return err
 	}

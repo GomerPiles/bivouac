@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/provider/vz"
+	"github.com/GomerPiles/bivouac/internal/vzrecipe"
 )
 
 func TestDoctorVZSlotsApplyOnlyToDarwinGuests(t *testing.T) {
@@ -24,5 +26,19 @@ func TestDoctorVZSlotsApplyOnlyToDarwinGuests(t *testing.T) {
 				t.Fatal("doctor applied Apple slots to Linux guests")
 			}
 		}
+	}
+}
+
+func TestDoctorMissingDefaultLinuxBaselineBuildGuidance(t *testing.T) {
+	cfg := config.VZ{Baseline: vzrecipe.DefaultName, GuestOS: "linux", Helper: "/opt/bivouac/linux-helper"}
+	failed := false
+	doctorVZBaseline(t.TempDir(), "fixture", cfg, vz.GuestRuntime{OS: "linux", Helper: cfg.Helper}, func(level, name, detail string) {
+		if level != "FAIL" || name != "baseline fixture" || detail != "default Linux baseline is missing; run `bivouac vz build-baseline --provider fixture`" {
+			t.Fatal("doctor guidance differs", detail)
+		}
+		failed = true
+	})
+	if !failed {
+		t.Fatal("doctor omitted missing baseline")
 	}
 }

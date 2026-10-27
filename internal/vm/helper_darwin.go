@@ -81,7 +81,7 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
 	defer signal.Stop(signals)
 
-	mopts := machineOptions{share: opts.Share, networkFD: -1, networkMTU: opts.Network.WithDefaults().MTU, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested}
+	mopts := machineOptions{share: opts.Share, networkFD: -1, networkMTU: opts.Network.WithDefaults().MTU, input: opts.Input, display: opts.Machine.Display.withDefaults(c.Display), diskSync: diskSync, nested: opts.Machine.Nested, seedDisk: opts.Machine.SeedDisk, receiptDisk: opts.Machine.ReceiptDisk}
 	var networkDone <-chan error
 	var networkUpdates <-chan struct{}
 	var rootNetwork *networkProcess
@@ -136,14 +136,17 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 	cancelled := ctx.Done()
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
+	forced := false
 	var counterLog counterLogState
 	networkLog := slog.New(slog.NewJSONHandler(log, nil))
 	for {
 		select {
 		case <-cancelled:
 			cancelled = nil
+			forced = true
 			_ = m.stop()
 		case <-signals:
+			forced = true
 			logf("powering off")
 			_ = m.stop()
 		case networkErr := <-networkDone:
@@ -159,9 +162,9 @@ func RunHelper(ctx context.Context, opts RunOptions, log io.Writer) error {
 		}
 		switch m.state() {
 		case stateStopped:
-			terminal = "guest stopped"
-			logf("guest stopped")
-			return nil
+			terminal, err = stoppedResult(forced)
+			logf("%s", terminal)
+			return err
 		case stateError:
 			terminal = "VM stopped with an error"
 			return errors.New(terminal)

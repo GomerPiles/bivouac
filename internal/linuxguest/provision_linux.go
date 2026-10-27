@@ -62,7 +62,7 @@ func provisionLinux(ctx context.Context, input io.Reader, out io.Writer) (result
 			result = failure
 		}
 	}()
-	request, err := decodeProvisionRequest(input)
+	request, err := DecodeProvisionRequest(input)
 	if err != nil {
 		return err
 	}

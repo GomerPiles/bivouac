@@ -11,12 +11,13 @@ import (
 
 // Layout is where bivouac keeps its files on this host.
 type Layout struct {
-	Config      string // the one config file
-	State       string // durable state: mode, instances, pid, status
-	Logs        string // daemon and launch logs
-	Diagnostics string // per-instance diagnostics, under Logs
-	Cache       string // bounded opaque objects, separate from ownership state
-	VMs         string // macOS VM store: baselines and their clones
+	Config         string // the one config file
+	State          string // durable state: mode, instances, pid, status
+	Logs           string // daemon and launch logs
+	Diagnostics    string // per-instance diagnostics, under Logs
+	Cache          string // bounded opaque objects, separate from ownership state
+	BaselineInputs string // verified factory inputs, separate from VM and cache stores
+	VMs            string // macOS VM store: baselines and their clones
 }
 
 // Resolve returns the layout. BIVOUAC_HOME puts everything under one
@@ -67,12 +68,13 @@ func Resolve() (Layout, error) {
 
 func under(configDir, stateDir, logDir string) Layout {
 	return Layout{
-		Config:      filepath.Join(configDir, "config.toml"),
-		State:       filepath.Join(stateDir, "state"),
-		Logs:        logDir,
-		Diagnostics: filepath.Join(logDir, "diagnostics"),
-		Cache:       filepath.Join(stateDir, "cache"),
-		VMs:         filepath.Join(stateDir, "vms"),
+		Config:         filepath.Join(configDir, "config.toml"),
+		State:          filepath.Join(stateDir, "state"),
+		Logs:           logDir,
+		Diagnostics:    filepath.Join(logDir, "diagnostics"),
+		Cache:          filepath.Join(stateDir, "cache"),
+		VMs:            filepath.Join(stateDir, "vms"),
+		BaselineInputs: filepath.Join(stateDir, "baseline-inputs"),
 	}
 }
 

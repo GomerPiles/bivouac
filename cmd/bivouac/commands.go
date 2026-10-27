@@ -226,6 +226,9 @@ func (e env) vzCmd(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errUsage
 	}
+	if args[0] == "build-baseline" {
+		return e.vzBuildBaseline(ctx, args[1:])
+	}
 	if args[0] == "import" {
 		return e.vzImport(args[1:])
 	}

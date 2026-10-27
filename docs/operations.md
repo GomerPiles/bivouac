@@ -809,16 +809,17 @@ launchd's default low-priority I/O throttling. Install the updated plist during
 offline image preparation and shut down cleanly before importing the image;
 rebuilding the host binary does not update existing baseline LaunchAgents.
 
-**Linux ARM64 runners on vz.** Import a stopped, prepared Tart-format Linux
-baseline with `--runner-dir /opt/actions-runner`. It must contain the matching
-non-root guest agent and a root-owned prepared helper built with the `vz-dhcp`
-profile; use the [Go provisioning command](#preparing-a-linux-arm64-runner-baseline).
-Configure the provider's vz section with:
+**Linux ARM64 runners on vz.** Use
+[`bivouac vz build-baseline`](#preparing-a-linux-arm64-runner-baseline) to build
+the pinned default image, or import your own stopped, prepared Tart-format image
+with `--runner-dir /opt/actions-runner`. Both require the matching non-root guest
+agent and root-owned prepared helper with the `vz-dhcp` profile. Configure the
+provider's vz section with:
 
 ```toml
 guest_os = "linux"
 helper = "/opt/bivouac/linux-arm64"
-baseline = "ci-linux-arm64"
+# baseline = "ci-linux-arm64" # optional custom image
 cpu = 4
 memory_gb = 4
 ```
@@ -1567,48 +1568,56 @@ retires its recorded pair; it is not a transparent connection restart.
 
 ## Preparing a Linux ARM64 runner baseline
 
-`vz.baseline` is required. The sole recipe supports a disposable Ubuntu 24.04
-Server ARM64 image with one virtio NIC. Use an operator-managed Tart-format image;
-remove other preparation agents/accounts and credentials before capture.
+Build the matching static helper, then build the pinned default image with the
+signed host binary. No Tart or other host installs are needed:
 
-1. Build the matching static helper on the host:
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o linux-arm64 ./cmd/bivouac
+bivouac vz build-baseline --provider linux   # or --helper ./linux-arm64 without a config
+```
 
-   ```sh
-   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o linux-arm64 ./cmd/bivouac
-   ```
+`--provider` may be omitted with exactly one Linux vz provider; it supplies the
+helper, network settings and baseline name. Append a name for a custom baseline.
+The recipe `ubuntu-24.04-arm64-vz-runner` pins the Ubuntu 24.04 ARM64 qcow2
+cloud disk (`release-20261017`) and Actions runner 2.338.2 by size and SHA-256.
+Inputs are kept by digest in the home's `baseline-inputs` and reverified before
+reuse; `--image FILE` and `--runner-archive FILE` supply local copies. Packages
+still come from Ubuntu's repositories, so builds are verified, not reproducible.
 
-2. Stage this exact helper file and the official ARM64 runner archive in the
-   image, owned by root and protected from other users' writes. Configure the
-   identical helper file as `vz.helper` on the host; another build may hash
-   differently. Obtain the archive's published SHA-256; stage no credentials or
-   JIT input. Rebuild the baseline whenever the configured helper changes.
-3. As guest root, run the fixed command with bounded JSON stdin:
+Defaults: 64 GiB sparse disk (`--disk-gb` 16..512), 4 CPU/4 GiB build VM
+(`--cpu`, `--memory-gb`). Free space must cover one full disk plus inputs. The
+build VM is outside the daemon budget; leave host headroom. Provisioning is
+bounded to 45 minutes and the cold-boot gate to 10.
 
-   ```sh
-   /tmp/linux-arm64 guest linux provision <<'JSON'
-   {"recipe":"ubuntu-24.04-arm64-vz-runner","runner_archive":"/tmp/runner.tar.gz","runner_sha256":"<published-sha256>"}
-   JSON
-   ```
+After changing the helper, stop this home's daemon and rerun with `--replace`.
+Only a stopped, factory-built baseline is replaced, never an imported one.
+Every build first recovers recorded factory staging, stopping only proven
+factory helpers; unrecognized entries are kept and reported, and `doctor` lists
+leftovers. A failed build names its preserved launch log
+(`factory-<id>-provision.log` or `-gate.log` in bivouac's logs directory).
 
-   It verifies/extracts the archive, installs itself and its embedded agent unit,
-   creates the non-root Docker-enabled user, prepares DHCP DNS/MTU without forced
-   resolvers or a network restart, disables SSH/cloud-init provisioning, removes
-   standard authorization/history, and runs shared VZ image sanitation. If installed,
-   cloud-init must report `done` or `disabled` in bounded JSON before mutation;
-   degraded completion (exit 2) is accepted. Unknown layouts refuse preparation;
-   failures report only a numeric `failed_stage`.
-   Inspect or replace a failed preparation image.
-4. After success, remove remaining staging/provisioning artifacts and shut down
-   cleanly. Import the stopped image on the host:
+Linux configuration can omit the baseline; an explicit one selects your own:
 
-   ```sh
-   bivouac vz import --runner-dir /opt/actions-runner <stopped-image-directory> ci-linux-arm64
-   ```
+```toml
+[providers.linux]
+type = "vz"
+scaleset = "bivouac-linux-validation"
+[providers.linux.vz]
+guest_os = "linux"
+helper = "/opt/bivouac/linux-arm64"
+# baseline = "custom-linux"  # default: ubuntu-24.04-arm64-vz-runner
+cpu = 4
+memory_gb = 4
+```
 
-   Add `--sudo` only for operator-verified passwordless guest sudo; the recipe adds
-   no sudo rules. Without it archive caching works and release trust is omitted.
-5. Run `doctor` and the isolated, gated Linux fixture above (optionally
-   `BIVOUAC_VZ_LINUX_CACHE=1`) before using a new baseline.
+To prepare an image manually, stage the helper and a verified runner archive as
+root-owned protected files in a disposable Ubuntu 24.04 ARM64 image, run
+`guest linux provision` as root with a bounded `ProvisionRequest` (recipe,
+archive path, SHA-256) on stdin, shut down cleanly, and import:
 
-Package installation uses the image's Ubuntu repositories; this is not a
-reproducible OS-image builder. The default-baseline builder is a follow-up.
+```sh
+bivouac vz import --runner-dir /opt/actions-runner <stopped-image-directory> custom-linux
+```
+
+Add `--sudo` only for operator-verified passwordless guest sudo. Run `doctor`
+and the isolated Linux fixture before using any new baseline.

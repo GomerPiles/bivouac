@@ -35,6 +35,7 @@ type Manifest struct {
 	// MacOS identifies a macOS guest's platform; absent for Linux guests.
 	MacOS *MacOSPlatform `json:"macos,omitempty"`
 	Guest Guest          `json:"guest"`
+	Build *Build         `json:"build,omitempty"`
 }
 
 // MacOSPlatform is a macOS VM's hardware model and machine identifier, as
@@ -96,6 +97,11 @@ func (m Manifest) validate() error {
 	if mac, err := net.ParseMAC(m.MAC); err != nil || len(mac) != 6 || mac[0]&1 != 0 {
 		return errors.New("VM manifest has an invalid MAC address")
 	}
+	if m.Build != nil {
+		if err := m.Build.validate(m); err != nil {
+			return err
+		}
+	}
 	return m.Display.Validate()
 }
 
@@ -119,8 +125,8 @@ func parseManifest(data []byte) (Manifest, error) {
 	return m, m.validate()
 }
 
-// writeManifest writes m into dir, which is not yet in place.
-func writeManifest(dir string, m Manifest) error {
+// WriteManifest writes m into dir, which is not yet in place.
+func WriteManifest(dir string, m Manifest) error {
 	if err := m.validate(); err != nil {
 		return err
 	}

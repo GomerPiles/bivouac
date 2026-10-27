@@ -60,7 +60,7 @@ func TestTartConfigImportsAsManifest(t *testing.T) {
 
 func TestManifestRoundTripsAndRejectsUnsupported(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeManifest(dir, testManifest()); err != nil {
+	if err := WriteManifest(dir, testManifest()); err != nil {
 		t.Fatal(err)
 	}
 	if m, err := ReadManifest(dir); err != nil || !reflect.DeepEqual(m, testManifest()) {

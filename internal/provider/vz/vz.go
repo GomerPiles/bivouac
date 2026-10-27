@@ -220,7 +220,18 @@ func (p *Provider) createVM(ctx context.Context, spec provider.Spec, wantOS stri
 	if spec.Baseline == "" || strings.HasPrefix(spec.Baseline, config.NamePrefix) {
 		return fmt.Errorf("refusing baseline %q", spec.Baseline)
 	}
-	m, err := CheckBaseline(string(p.store), spec.Baseline, wantOS)
+	var m vm.Manifest
+	var err error
+	if wantOS == "linux" {
+		// Engine baselines are not built by a Linux runner provider.
+		helper, provider := p.runner.Helper, p.name
+		if p.cfg.Containers != nil {
+			helper, provider = p.cfg.Containers.Helper, ""
+		}
+		m, err = CheckLinuxBaseline(string(p.store), spec.Baseline, helper, provider)
+	} else {
+		m, err = CheckBaseline(string(p.store), spec.Baseline, wantOS)
+	}
 	if err != nil {
 		return err
 	}
@@ -251,7 +262,7 @@ func CheckBaseline(store, name, wantOS string) (vm.Manifest, error) {
 	m, err := vm.ReadManifest(vm.Store(store).Dir(name))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return m, fmt.Errorf("baseline %q has no bivouac manifest in %s; import it with `bivouac vz import`", name, store)
+		return m, fmt.Errorf("baseline %q has no bivouac manifest in %s; import it with `bivouac vz import`: %w", name, store, err)
 	case err != nil:
 		return m, fmt.Errorf("baseline %q: %w", name, err)
 	case m.OS != wantOS:
@@ -379,32 +390,15 @@ func (p *Provider) proc(name string) (Process, bool) {
 
 // WaitReady implements provider.Provider: the guest agent runs a command.
 func (p *Provider) waitVM(ctx context.Context, name string) error {
-	proc, started := p.proc(name)
-	wait := 500 * time.Millisecond
-	for {
-		if started {
-			select {
-			case <-proc.Done():
-				return fmt.Errorf("VM helper exited before the guest was ready: %w", proc.Err())
-			default:
-			}
-		}
-		_, err := p.output(ctx, name, []string{"true"}, nil)
-		if err == nil {
-			return nil
-		}
-		// Only an unreachable agent may still be booting. One that answered
-		// and refused (such as an outdated protocol version) stays refused.
-		if ctx.Err() == nil && !errors.Is(err, guestagent.ErrUnavailable) {
-			return fmt.Errorf("guest agent is not ready: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-		}
-		wait = min(wait*2, 3*time.Second)
+	var done <-chan struct{}
+	exit := func() error { return nil }
+	if proc, ok := p.proc(name); ok {
+		done = proc.Done()
+		exit = proc.Err
 	}
+	return WaitAgent(ctx, func(ctx context.Context, args []string, in io.Reader, limit int) ([]byte, error) {
+		return p.guest(ctx, name, args, in, limit)
+	}, done, exit)
 }
 
 func (p *Provider) installGuestScript(ctx context.Context, name string) error {
