@@ -173,10 +173,7 @@ func (e env) doctor(ctx context.Context, args []string) error {
 }
 
 func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
-	e.doctorVZGuest(ctx, name, p, vz.GuestRuntime{OS: p.VZ.RunnerOS(), Helper: p.VZ.Helper}, host, cfg, add)
-}
-
-func (e env) doctorVZGuest(ctx context.Context, name string, p config.Provider, guest vz.GuestRuntime, host hostinfo.Info, cfg *config.Config, add func(level, name, detail string)) {
+	guest := vz.GuestRuntime{OS: p.VZ.RunnerOS(), Helper: p.VZ.Helper}
 	t := p.VZ
 	if exe, err := os.Executable(); err != nil {
 		add("FAIL", "vm "+name, err.Error())

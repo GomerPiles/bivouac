@@ -105,7 +105,7 @@ func TestHelperUploadUsesDarwinCloneWithoutBaseline(t *testing.T) {
 }
 
 func TestLinuxAdmissionRequiresRunnerContractAndMatchingHelper(t *testing.T) {
-	for _, kind := range []string{"runner-directory", "helper-missing", "helper-invalid", "helper-architecture", "OS-mismatch"} {
+	for _, kind := range []string{"valid", "runner-directory", "helper-missing", "helper-invalid", "helper-architecture", "OS-mismatch"} {
 		t.Run(kind, func(t *testing.T) {
 			r := newRecorder()
 			p := newProvider(t, r)
@@ -136,12 +136,23 @@ func TestLinuxAdmissionRequiresRunnerContractAndMatchingHelper(t *testing.T) {
 				writeTestManifest(t, p.vmDir("base"), "darwin")
 			}
 			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
-			p.records, _ = state.Open(t.TempDir(), func() string { return p.controllerID })
+			records, err := state.Open(t.TempDir(), func() string { return p.controllerID })
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.records = records
 			if err := p.records.Put(&state.Instance{ID: "new", Name: spec.Name, Provider: p.name, Phase: state.PhaseCreating}); err != nil {
 				t.Fatal(err)
 			}
-			if err := p.Create(context.Background(), spec); err == nil {
-				t.Fatal("invalid baseline/helper admitted")
+			err = p.Create(context.Background(), spec)
+			if kind == "valid" {
+				if err != nil {
+					t.Fatal("valid baseline/helper refused", err)
+				}
+				return
+			}
+			if err == nil || errors.Is(err, provider.ErrNotOwned) {
+				t.Fatal("admission did not reach baseline/helper validation", err)
 			}
 			if len(r.calls) != 0 {
 				t.Fatal("admission failure touched VM runtime")
@@ -234,8 +245,19 @@ func TestStartupDoesNotValidateLinuxHelper(t *testing.T) {
 			if err != nil || !status.Exists || !status.Running || !status.Owned {
 				t.Fatal("VM status opened Linux helper", err)
 			}
-			if err := p.Create(ctx, provider.Spec{Name: "bivouac-macos-new", Baseline: "base"}); err == nil {
-				t.Fatal("new admission ignored helper failure")
+			spec := provider.Spec{Name: "bivouac-macos-new", Baseline: "base", Meta: provider.Metadata{ControllerID: p.controllerID, InstanceID: "new"}}
+			if p.records == nil {
+				records, err := state.Open(t.TempDir(), func() string { return p.controllerID })
+				p.records = records
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.records.Put(&state.Instance{ID: "new", Name: spec.Name, Provider: p.name, Phase: state.PhaseCreating}); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.Create(ctx, spec); err == nil || errors.Is(err, provider.ErrNotOwned) {
+				t.Fatal("new admission did not reach helper failure", err)
 			}
 			if err := p.Stop(ctx, fixtureName, time.Second); err != nil {
 				t.Fatal("cleanup opened Linux helper", err)

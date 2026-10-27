@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/GomerPiles/bivouac/internal/config"
 	"testing"
+
+	"github.com/GomerPiles/bivouac/internal/config"
 )
 
 func TestDoctorVZSlotsApplyOnlyToDarwinGuests(t *testing.T) {
