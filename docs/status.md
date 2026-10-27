@@ -57,7 +57,8 @@ Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
 `go build ./...`, `go test -race ./...`, cgo-disabled builds for macOS
 arm64/amd64, Windows amd64 and Linux amd64, and PowerShell 5.1/7 parsing.
 HCS/vmhost also pass vet with the `integration` tag; this does not run their
-opt-in live labs.
+opt-in live labs. The guest-agent, runner-task and install-media image changes
+were checked without `-race` (no cgo on that host); hosted CI runs the rest.
 Local macOS rootless checks pass `gofmt`, normal/integration `go vet`,
 `golangci-lint`, full race tests, a host build, and Windows
 amd64/Linux arm64 cross-builds. Hosted CI checks each PR revision on macOS,
