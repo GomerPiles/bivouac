@@ -4,7 +4,8 @@ This is a credential-free spike, not an enabled CI provider. It uses the
 Windows Sandbox installation and CLI already on the host. It never reads a
 normal bivouac home, changes CI mode, contacts the bivouac VM host service,
 installs a host service/task/driver, edits host firewall rules or registers runners. The
-explicit `--native-probe` option requests UAC for read-only discovery only;
+explicit `--native-probe` and `--secure-probe` options request UAC for read-only
+discovery only;
 its manager and guest-command transport remain unelevated.
 Keep any concurrent HCS development in its own worktree.
 
@@ -115,6 +116,74 @@ No global registration or host-policy change was attempted. A supported
 unelevated discovery path or an explicitly installed read-only broker remains
 a product-design gate.
 
+### Runtime discovery without elevation
+
+Append `--discovery-probe` to the offline command for a separate run that never
+calls `runas` or HCS enumeration. It executes a fixed guest probe through the
+recorded CLI session, checks the original boot identity, and tries only validated
+UUIDs from the two Hyper-V KVP registry views, SMBIOS and the guest's HvSocket
+`Addresses\LocalAddress` registry value. Reports contain no host names or raw
+registry/WMI output. A candidate must reach the lab agent and return the exact
+CLI/name/boot identity; merely finding a UUID proves nothing.
+
+`discovery_checked` means those diagnostics completed. Each `discovery` entry
+separately reports whether the source existed, a socket connected, and the guest
+identity bound. Missing KVP values and unusable addresses remain negative results,
+even when the diagnostic command exits successfully. This mode does not adopt a
+native VM or authorize native deletion.
+
+Live on the tested host, both KVP views lacked a VM ID. SMBIOS and the guest
+HvSocket registry value supplied UUIDs, but both returned Winsock 10049
+(address not available) on a host dial; neither reached the recorded guest.
+SMBIOS also repeated across fresh Sandbox boots. These sources do not currently
+replace native discovery. Existing CLI help exposes session IDs only; no shared
+log, service registration, account or policy was enabled to obtain more data.
+
+### Per-launch command authorization
+
+Append `--secure-probe` to the offline command to require mutual TLS 1.3 on the
+native service. This is a separate run from `--discovery-probe`. The ordinary
+manager generates its client key in memory before launch and shares only the
+public client certificate. The guest generates its server key in memory and
+reports its public fingerprint together with the original guest identity and a
+new agent generation. Exact pins replace machine-wide trust stores. The secured
+service has no plaintext fallback.
+
+The elevated helper in this mode returns only bounded Sandbox-class native
+metadata. It never receives the client private key or runs a guest command.
+The ordinary manager authenticates each candidate and requires a unique full
+guest identity match before recording the native tuple. It then exercises the
+same stdin, exit, cancellation, restart and cleanup checks over TLS.
+
+Authentication controls try no client certificate, another client certificate,
+plaintext framing and the wrong server pin. A failed connection or timeout alone
+does not prove rejection: the first three also require the guest listener's
+rejection count to advance within the same agent generation, and a valid request
+must still pass afterwards. `secure`, `missing_client_refused`,
+`wrong_client_refused`, `plaintext_refused` and `wrong_server_refused` expose the
+separate gates. Agent restart creates a new server key and fingerprint; the
+manager reads it only from the same private run's identity-bound startup report.
+
+An isolated helper also pins its OS thread, impersonates Windows' anonymous
+logon token, verifies that SID, and checks reads of the lab record and access to
+the manager's process with memory-read rights. It tries a raw socket without
+ever receiving a private client key. When connected, it attempts TLS with no
+client certificate and requires a remote TLS alert; it sends no application
+command. The ordinary manager corroborates this with advancing guest rejection
+counts and a healthy authenticated request. The helper reverts before returning
+its bounded report. This creates no account and changes no
+groups or policy. An anonymous impersonation token is not a process running
+under a different primary user; actual cross-account validation remains open.
+Neither TLS nor these probes establish Sandbox's default socket DACL or prevent
+unauthorized connection attempts from consuming service capacity.
+
+The full secured probe passed live with networking disabled, including agent
+restart and authenticated cleanup. The anonymous thread could connect, but TLS
+refused it; private-record reads and process opens with memory-read rights were
+denied. Ordinary-user controls succeeded. No claim is made about Sandbox CLI or
+server management access from another primary host account; that could bypass
+an agent-only policy and must be validated separately before CI use.
+
 ## Ownership and cleanup
 
 The durable prefixed-name/UUID intent precedes launch. A matching CLI receipt
@@ -165,3 +234,7 @@ Microsoft references: [CLI](https://learn.microsoft.com/en-us/windows/security/a
 [configuration](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file),
 [architecture](https://learn.microsoft.com/en-us/windows/security/threat-protection/windows-sandbox/windows-sandbox-architecture),
 and [Hyper-V socket registration](https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/user-guide/make-integration-service).
+
+The [anonymous-token API](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-impersonateanonymoustoken)
+documents the scoped impersonation used here; it does not document which token
+Sandbox's socket provider uses for authorization.

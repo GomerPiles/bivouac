@@ -123,6 +123,8 @@ func copyAsset(source, target string, limit int64) error {
 type labHost struct {
 	binary, input, output string
 	record                labRecord
+	client                tls.Certificate
+	secure                bool
 }
 
 func (h *labHost) call(ctx context.Context, args ...string) ([]byte, error) {
@@ -250,27 +252,35 @@ type bootFacts struct {
 	Smoke  *smokeFacts `json:"smoke,omitempty"`
 }
 type labResult struct {
-	NetworkProbe           bool        `json:"network_probe"`
-	ReverseProbe           bool        `json:"reverse_probe"`
-	Bootstrap              bool        `json:"bootstrap"`
-	Ownership              bool        `json:"ownership"`
-	Agent                  bool        `json:"agent"`
-	TLS                    bool        `json:"tls"`
-	TCP                    bool        `json:"tcp"`
-	DialError              string      `json:"dial_error,omitempty"`
-	AgentError             string      `json:"agent_error,omitempty"`
-	AgentExit              int         `json:"agent_exit,omitempty"`
-	UnauthenticatedRefused bool        `json:"unauthenticated_refused"`
-	Stopped                bool        `json:"stopped"`
-	CreateMS               int64       `json:"create_ms"`
-	ReadyMS                int64       `json:"ready_ms"`
-	TeardownMS             int64       `json:"teardown_ms"`
-	Native                 bool        `json:"native"`
-	NativeLoopbackRefused  bool        `json:"native_loopback_refused"`
-	NativeExit             bool        `json:"native_exit"`
-	NativeCancellation     bool        `json:"native_cancellation"`
-	NativeRestart          bool        `json:"native_restart"`
-	Smoke                  *smokeFacts `json:"smoke,omitempty"`
+	NetworkProbe           bool               `json:"network_probe"`
+	ReverseProbe           bool               `json:"reverse_probe"`
+	Bootstrap              bool               `json:"bootstrap"`
+	Ownership              bool               `json:"ownership"`
+	Agent                  bool               `json:"agent"`
+	TLS                    bool               `json:"tls"`
+	TCP                    bool               `json:"tcp"`
+	DialError              string             `json:"dial_error,omitempty"`
+	AgentError             string             `json:"agent_error,omitempty"`
+	AgentExit              int                `json:"agent_exit,omitempty"`
+	UnauthenticatedRefused bool               `json:"unauthenticated_refused"`
+	Stopped                bool               `json:"stopped"`
+	CreateMS               int64              `json:"create_ms"`
+	ReadyMS                int64              `json:"ready_ms"`
+	TeardownMS             int64              `json:"teardown_ms"`
+	Native                 bool               `json:"native"`
+	NativeLoopbackRefused  bool               `json:"native_loopback_refused"`
+	NativeExit             bool               `json:"native_exit"`
+	NativeCancellation     bool               `json:"native_cancellation"`
+	NativeRestart          bool               `json:"native_restart"`
+	Secure                 bool               `json:"secure"`
+	MissingClientRefused   bool               `json:"missing_client_refused"`
+	WrongClientRefused     bool               `json:"wrong_client_refused"`
+	WrongServerRefused     bool               `json:"wrong_server_refused"`
+	PlaintextRefused       bool               `json:"plaintext_refused"`
+	Anonymous              *anonymousFacts    `json:"anonymous,omitempty"`
+	DiscoveryChecked       bool               `json:"discovery_checked"`
+	Discovery              []discoveryAttempt `json:"discovery,omitempty"`
+	Smoke                  *smokeFacts        `json:"smoke,omitempty"`
 }
 
 func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
@@ -284,11 +294,16 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	reverse := flags.Bool("reverse-probe", false, "test guest-initiated authenticated transport; implies network-probe")
 	hold := flags.Duration("hold", 0, "hold a proven guest for read-only external inspection (maximum 3 minutes)")
 	native := flags.Bool("native-probe", false, "request one read-only UAC discovery and test the ordinary-user HvSocket channel with networking disabled")
+	secure := flags.Bool("secure-probe", false, "use per-launch mutual TLS for the native probe; requests read-only UAC discovery")
+	discovery := flags.Bool("discovery-probe", false, "try guest-local runtime UUID sources with no UAC or native enumeration")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *base == "" || *bivouac == "" || *runner == "" {
 		return errors.New("run requires --root, --bivouac, --runner and --runner-sha256")
 	}
 	if *reverse {
 		*network = true
+	}
+	if *secure {
+		*native = true
 	}
 	if *hold < 0 || *hold > 3*time.Minute {
 		return errors.New("inspection hold must be between zero and three minutes")
@@ -296,8 +311,11 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	if *native && (*network || *reverse) {
 		return errors.New("native probe requires networking disabled")
 	}
-	if *native && windows.GetCurrentProcessToken().IsElevated() {
-		return errors.New("native probe manager must remain unelevated")
+	if *discovery && (*native || *network) {
+		return errors.New("discovery probe requires a separate offline run")
+	}
+	if (*native || *discovery) && windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("native and discovery probe managers must remain unelevated")
 	}
 	var reverseSocket *net.TCPListener
 	if *reverse {
@@ -341,7 +359,7 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	if err != nil {
 		return err
 	}
-	h := labHost{binary: binary, input: filepath.Join(root, "input"), output: filepath.Join(root, "output"), record: labRecord{Name: "bivouac-sandbox-" + id, ID: id, Phase: "planned"}}
+	h := labHost{binary: binary, input: filepath.Join(root, "input"), output: filepath.Join(root, "output"), record: labRecord{Name: "bivouac-sandbox-" + id, ID: id, Phase: "planned"}, secure: *secure}
 	for _, dir := range []string{h.input, h.output} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			return errors.New("create lab staging")
@@ -371,11 +389,12 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		Network bool   `json:"network_probe"`
 		Reverse bool   `json:"reverse_probe"`
 		Digest  string `json:"runner_sha256"`
-	}{*network, *reverse, *digest}); err != nil {
+		Secure  bool   `json:"secure_probe"`
+	}{*network, *reverse, *digest, *secure}); err != nil {
 		return err
 	}
 	var client tls.Certificate
-	if *network {
+	if *network || *secure {
 		var public []byte
 		client, public, err = certificate(true)
 		if err != nil {
@@ -384,6 +403,7 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		if err := os.WriteFile(filepath.Join(h.input, "client.pem"), public, 0o600); err != nil {
 			return errors.New("publish public client certificate")
 		}
+		h.client = client
 	}
 	config, err := xml.Marshal(newConfig(h.input, h.output, *network))
 	if err != nil {
@@ -444,6 +464,9 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		return err
 	}
 	result.Ownership = true
+	if *discovery {
+		return h.discoveryProbe(ctx, &result)
+	}
 	if *native {
 		return h.nativeProbe(ctx, self, &result)
 	}

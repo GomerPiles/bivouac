@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -70,6 +71,13 @@ func (h *labHost) nativeDial() (guestagent.Dialer, error) {
 		defer cancel()
 		return hvsock.Dial(attempt, hvsock.Addr{VMID: vm, ServiceID: service})
 	}
+	if h.secure {
+		report, err := h.secureReport()
+		if err != nil {
+			return nil, err
+		}
+		return secureDial(tcpReport{Fingerprint: report.Fingerprint}, h.client, raw), nil
+	}
 	return raw, nil
 }
 
@@ -118,14 +126,31 @@ func (h *labHost) discoverNative(ctx context.Context, self string) (nativeIdenti
 	}
 	// ShellExecute's native parameter field requires CRT serialization. This
 	// array is escaped by Windows' argv serializer; no shell is invoked.
-	args, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{"correlate-report", filepath.Join(root, "record.json")}))
+	mode, filename := "correlate-report", "native-correlation.json"
+	if h.secure {
+		mode, filename = "candidates-report", "native-candidates.json"
+	}
+	args, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine([]string{mode, filepath.Join(root, "record.json")}))
 	cwd, _ := windows.UTF16PtrFromString(dir)
 	if err := windows.ShellExecute(0, verb, file, args, cwd, windows.SW_HIDE); err != nil {
+		var code windows.Errno
+		if errors.As(err, &code) {
+			return nativeIdentity{}, fmt.Errorf("native discovery elevation unavailable (code %d)", uint32(code))
+		}
 		return nativeIdentity{}, errors.New("native discovery elevation unavailable or canceled")
 	}
 	wait, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	path := filepath.Join(dir, "native-correlation.json")
+	path := filepath.Join(dir, filename)
+	if h.secure {
+		var candidates []nativeBinding
+		for readJSON(path, &candidates) != nil {
+			if pause(wait) != nil {
+				return nativeIdentity{}, errors.New("native candidates unavailable")
+			}
+		}
+		return h.authenticateCandidates(ctx, candidates)
+	}
 	var report correlationReport
 	for readJSON(path, &report) != nil {
 		if pause(wait) != nil {
@@ -158,6 +183,11 @@ func (h *labHost) nativeProbe(ctx context.Context, self string, result *labResul
 	}
 	result.Agent = true
 	result.Smoke = &smoke
+	if h.secure {
+		if err := h.authorizationProbes(ctx, self, result); err != nil {
+			return err
+		}
+	}
 	data, err = h.nativeRun(ctx, "loopback-probe", nil)
 	if err != nil {
 		return errors.New("native loopback probe failed")
@@ -251,7 +281,9 @@ func loopbackProbe(ctx context.Context, out io.Writer) error {
 
 type agentStartup struct {
 	sessionFacts
-	Generation string `json:"generation"`
+	Generation  string     `json:"generation"`
+	Identity    *labRecord `json:"identity,omitempty"`
+	Fingerprint string     `json:"fingerprint,omitempty"`
 }
 
 func restartAgent(ctx context.Context) error {

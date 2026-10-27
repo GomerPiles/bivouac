@@ -23,6 +23,7 @@ try {
  [IO.Compression.ZipFile]::ExtractToDirectory('C:\BivouacBootstrap\runner.zip','C:\actions-runner')
  $facts.stage=3
  $mode='agent'
+ if($settings.secure_probe){$mode='agent-secure'}
  if($settings.network_probe){$mode='agent-tcp'}
  if($settings.reverse_probe){$mode='agent-reverse'}
  $action=New-ScheduledTaskAction -Execute 'C:\Program Files\Bivouac\sandbox-lab.exe' -Argument $mode

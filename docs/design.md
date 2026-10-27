@@ -817,6 +817,32 @@ network setting is changed by the helper. Host-account authorization of
 Sandbox's default HvSocket security
 descriptors is not yet established; this is not a secret-bearing CI path.
 
+`--secure-probe` adds per-launch mutual TLS 1.3 on that native service. Client
+and server private keys remain in their respective processes; only the client's
+public certificate and the guest's public server fingerprint cross mapped
+folders. The fingerprint is bound to the recorded guest boot and a new agent
+generation. The elevated helper returns candidate metadata only; the ordinary
+manager authenticates and corroborates the unique guest identity. Missing or
+different client certificates and plaintext requests must be rejected before
+command dispatch, with a generation-bound guest rejection counter and healthy
+authenticated requests as controls. Server pins must also match. Agent restart
+requires a fresh identity-bound server pin from the same private run directory.
+The original `--native-probe` remains a plaintext diagnostic, not a CI channel.
+
+`--discovery-probe` separately tests guest KVP, SMBIOS and HvSocket registry
+addresses through a fixed CLI command without elevation. Candidate UUIDs are
+untrusted hints until a native connection returns the exact recorded guest
+identity; they never authorize a foreign-instance sweep. Native host metadata
+and safe crash recovery remain distinct from this discovery experiment.
+Anonymous-thread diagnostics verify the effective SID and read access to the
+private record and the manager's process. On the tested host the anonymous
+thread can open the raw socket but receives a remote TLS rejection without a
+client key; private-record and process-memory access are denied. These probes
+do not establish the native socket DACL or access from a process with another
+primary user. Sandbox CLI/server management access from another host account
+also remains unverified; agent authentication alone cannot establish that
+management boundary.
+
 Explicit network probes run trusted code only. Direct and reverse TCP variants
 reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
 pins on both sides. Private keys remain in process memory; only public

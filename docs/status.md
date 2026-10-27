@@ -219,14 +219,32 @@ Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
   again before cleanup; the CLI session was confirmed absent afterwards. A
   separate elevated query also confirmed the recorded native ID absent.
   No shared service, registry, firewall or VM settings were modified.
+- `--secure-probe` passed the same native command, stdin, exit, cancellation,
+  restart and cleanup checks over mutual TLS 1.3 with zero active guest NICs.
+  Missing/wrong client certificates and plaintext were rejected before protocol
+  admission, with advancing guest rejection counts and healthy authenticated
+  controls. A wrong server pin was refused. Private keys remained in process
+  memory; the elevated helper returned only public native metadata.
+- A verified anonymous thread token could open the raw native socket, but
+  received a remote TLS rejection without a client certificate. The guest's
+  rejection count corroborated that refusal. Reads of the private run record
+  and opens of the manager process with memory-read rights were denied, with
+  ordinary-user positive controls. This is impersonation evidence, not a test
+  of another process's primary user or proof of the kernel's socket DACL.
+- The separate `--discovery-probe` completed without UAC. Both guest KVP views
+  lacked `VirtualMachineId`; SMBIOS and the guest HvSocket `LocalAddress`
+  exposed UUIDs, but both routes returned Winsock 10049 and neither reached
+  the recorded guest. No candidate was treated as native ownership evidence.
 - Successful lab launches were stopped by their recorded CLI ID after a fresh
   guest/boot challenge, and absence was confirmed. Cleanup failures retain
   records. No unrelated guest was stopped.
 
 Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
 RDP-session predicates, XML escaping/device defaults and real TLS handshakes
-with missing/wrong client certificates and a wrong server pin. They do not
-establish a TCP channel. Native transport and corroborated ownership now have
+with missing/wrong client certificates and a wrong server pin. The actual
+secured listener's admission gate has positive and negative stream tests;
+startup reports must match the recorded guest boot, session, generation and
+certificate pin. They do not establish a TCP channel. Native transport and corroborated ownership now have
 live evidence. Ordinary HCS discovery still requires elevation; ordinary
 HvSocket communication does not. An unregistered guest-to-host HvSocket
 callback was refused with Winsock 10061 even though the ordinary host could
@@ -235,9 +253,10 @@ attempted, and the reason for that refusal is unverified.
 The Windows host build, full non-live test suite, vet and repository-wide lint
 pass. Race checking was unavailable with the host's cgo-disabled toolchain.
 
-Open: runtime discovery without per-run UAC, host-account authorization and
-effective settings, host-enforced public-only egress, real disposable runner
-registration/completion and cancellation, crash/reboot recovery, resource
+Open: runtime discovery without per-run UAC, other-primary-account access
+(including Sandbox CLI/server management), effective settings, host-enforced
+public-only egress, real disposable runner registration/completion and
+cancellation, crash/reboot recovery, resource
 budgeting and GPU/desktop workload validation. See [sandbox.md](sandbox.md) for
 the repeatable lab and its limits.
 

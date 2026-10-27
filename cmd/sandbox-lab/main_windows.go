@@ -106,7 +106,7 @@ func (l parentListener) Accept() (io.ReadWriteCloser, error) {
 	return conn, nil
 }
 
-func agent(ctx context.Context) error {
+func agent(ctx context.Context, secure bool) error {
 	self, err := os.Executable()
 	if err != nil || !strings.EqualFold(self, guestBinary) {
 		return errors.New("sandbox agent installation refused")
@@ -115,9 +115,6 @@ func agent(ctx context.Context) error {
 	generation, err := newID()
 	if err != nil {
 		return errors.New("agent generation unavailable")
-	}
-	if err := writeReport("agent.json", agentStartup{sessionFacts: f, Generation: generation}); err != nil {
-		return err
 	}
 	if !f.valid() {
 		return errors.New("sandbox session refused")
@@ -131,6 +128,12 @@ func agent(ctx context.Context) error {
 		return errors.New("sandbox listener unavailable")
 	}
 	defer func() { _ = l.Close() }()
+	if secure {
+		return secureNativeAgent(ctx, l, f, generation)
+	}
+	if err := writeReport("agent.json", agentStartup{sessionFacts: f, Generation: generation}); err != nil {
+		return err
+	}
 	return guestagent.Serve(ctx, parentListener{l})
 }
 
@@ -368,13 +371,15 @@ func run(parent context.Context) error {
 	defer cancel()
 	args := os.Args[1:]
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "help") {
-		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--native-probe | --network-probe | --reverse-probe] [--hold <duration>]\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
+		_, err := fmt.Fprintln(os.Stdout, "sandbox-lab run --root <directory> --bivouac <exe> --runner <zip> --runner-sha256 <sha256> [--discovery-probe | --secure-probe | --native-probe | --network-probe | --reverse-probe] [--hold <duration>]\nsandbox-lab inspect <native-id> | inventory <cli-id>\nsandbox-lab probe-runtime <runtime-id> <active-record.json>")
 		return err
 	}
 	if len(args) == 1 {
 		switch args[0] {
 		case "agent":
-			return agent(parent)
+			return agent(parent, false)
+		case "agent-secure":
+			return agent(parent, true)
 		case "agent-tcp":
 			return tcpAgent(parent, false)
 		case "agent-reverse":
@@ -389,6 +394,8 @@ func run(parent context.Context) error {
 				return errors.New("guest identity refused")
 			}
 			return json.NewEncoder(os.Stdout).Encode(record)
+		case "guest-discovery":
+			return guestDiscovery(ctx)
 		case "loopback-probe":
 			return loopbackProbe(ctx, os.Stdout)
 		case "host-listen-check":
@@ -496,6 +503,25 @@ func run(parent context.Context) error {
 		}
 		defer func() { _ = out.Close() }()
 		return correlate(ctx, record, out)
+	}
+	if len(args) == 2 && args[0] == "candidates-report" {
+		var record labRecord
+		if readJSON(args[1], &record) != nil || !record.valid() || record.Phase != "started" || !validGUID(record.Boot) {
+			return errors.New("active lab record required")
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return errors.New("helper location unavailable")
+		}
+		out, err := os.OpenFile(filepath.Join(filepath.Dir(self), "native-candidates.json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return errors.New("fresh candidates report required")
+		}
+		defer func() { _ = out.Close() }()
+		return nativeCandidates(ctx, out)
+	}
+	if len(args) == 3 && args[0] == "anonymous-probe" {
+		return anonymousProbe(ctx, args[1], args[2], os.Stdout)
 	}
 	if len(args) == 3 && args[0] == "probe-runtime" {
 		var record labRecord
