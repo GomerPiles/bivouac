@@ -51,11 +51,13 @@ function Copy-BootFiles([string]$Windows,[string]$ESP,$Selection){
    if($row[2] -gt 8){throw 'boot directory depth'}
    foreach($item in @(Get-ChildItem -Force -LiteralPath $row[0])){
     $entries++;if($entries -gt 4096 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'boot tree link or bound'}
+    # Keep the mount root's spelling: FullName expands 8.3 aliases on 5.1.
+    $path=Join-Path $row[0] $item.Name
     $relative=$item.Name;if($row[1]){$relative=$row[1]+'\'+$relative}
     $target='EFI\Microsoft\Boot\'+$relative
-    if($item.PSIsContainer){$dirs+=$target;$queue.Enqueue(@($item.FullName,$relative,($row[2]+1)))}else{
+    if($item.PSIsContainer){$dirs+=$target;$queue.Enqueue(@($path,$relative,($row[2]+1)))}else{
      $bytes+=$item.Length;if($item.Length -gt 32MB -or $bytes -gt 160MB -or $plan.Count -ge 2048){throw 'boot files bound'}
-     $plan+=@{source=$item.FullName;target=$target;length=$item.Length}
+     $plan+=@{source=$path;target=$target;length=$item.Length}
     }
    }
   }
@@ -71,7 +73,7 @@ function Copy-BootFiles([string]$Windows,[string]$ESP,$Selection){
    if($language.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'EX link'}
    if(!$language.PSIsContainer){continue}
    if($language.Name -cnotmatch '^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$'){throw 'EX language'}
-   $source=Join-Path $language.FullName 'bootmgfw_EX.efi.mui';Assert-BootPath $Windows $source
+   $source=Join-Path (Join-Path $ex $language.Name) 'bootmgfw_EX.efi.mui';Assert-BootPath $Windows $source
    if(!(Test-Path -LiteralPath $source -PathType Leaf)){throw 'EX boot manager language source absent'}
    $size=(Get-Item -LiteralPath $source).Length;$bytes+=$size
    if($size -gt 4MB -or $bytes -gt 160MB){throw 'EX language bytes'}

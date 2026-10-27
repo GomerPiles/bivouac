@@ -33,6 +33,7 @@ func TestFreshOfflineAnswerStaging(t *testing.T) {
 	fragment = strings.Replace(fragment, descriptor, "$testDACL", 1)
 	for _, mode := range []string{"absent", "empty answer", "nonempty answer", "Panther link", "Scripts link", "Panther file"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			for _, dir := range []string{`Windows\Setup`, `Windows\System32\config`, "Program Files", "ProgramData"} {
 				if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
@@ -110,6 +111,7 @@ try{
 func TestFreshOfflineDirectoryParents(t *testing.T) {
 	for _, mode := range []string{"absent", "repository file", "store link"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			system := filepath.Join(root, `Windows\System32`)
 			if err := os.MkdirAll(system, 0700); err != nil {

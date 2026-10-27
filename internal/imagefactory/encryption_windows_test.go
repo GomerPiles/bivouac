@@ -96,6 +96,7 @@ func TestBitLockerGuestDiagnostics(t *testing.T) {
 	}
 	for _, mode := range []string{"encrypted", "unavailable", "failure"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			input, _ := json.Marshal(map[string]string{"mode": mode})
 			script := guestValidate[start:start+end+3] + `
 $ErrorActionPreference='Stop';$d=[Console]::In.ReadToEnd()|ConvertFrom-Json
