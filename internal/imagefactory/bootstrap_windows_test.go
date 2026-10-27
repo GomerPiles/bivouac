@@ -46,11 +46,10 @@ func localAgent(t *testing.T) guestagent.Dialer {
 	if _, err := exec.LookPath("powershell.exe"); err != nil {
 		t.Skip("powershell.exe unavailable")
 	}
-	// Keep PowerShell module-analysis and cmdletization caches in the fixture.
-	temp := t.TempDir()
-	t.Setenv("PSModuleAnalysisCachePath", filepath.Join(temp, "ModuleAnalysisCache"))
-	t.Setenv("TEMP", temp)
-	t.Setenv("TMP", temp)
+	// The default module-analysis cache stays in use, as for the direct
+	// fixtures and in a guest: a short PowerShell run never saves a fresh
+	// cache, so a private one makes every module autoload rescan all system
+	// modules (about 12 s per run on hosted runners).
 	// A PowerShell 7 host can omit Windows PowerShell's module directory,
 	// hiding functions such as Get-FileHash from the 5.1 child.
 	system, err := windows.GetSystemDirectory()
