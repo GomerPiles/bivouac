@@ -28,6 +28,7 @@ internal/rootnet     bounded rootless Ethernet, DHCP/DNS and TCP/UDP forwarding
 internal/cachelink   fixed virtual cache endpoint and cache-only descriptor broker
 internal/dnsproxy    validated DNS envelopes and fixed-resolver parent capability
 internal/winhost     Windows host checks: protected storage, private staging, system OpenSSH
+internal/driverimage Windows GPU driver discovery and immutable derived-image cache
 internal/hcs         typed Host Compute Service binding for direct Windows guests
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
 internal/vmhost      privileged VM host core: HCS guests, differencing disks, ownership journal
@@ -1508,8 +1509,48 @@ ACL and deny-write handles, not hashed per job.
   gates. Every desktop lab run also requires those topology gates and all
   probe-window checks. Windows Security observations are diagnostic only.
 - The image's time zone and execution policy are inherited from install media.
-- Admission does not yet compare the host GPU driver with the one the image
-  was built with; rebuild the image after a host driver update.
+- An omitted factory `drivers` list discovers the present physical display
+  devices' installed INF packages through SetupAPI. Explicit directories remain
+  available for controlled builds. Initial hardware validation still uses these
+  packages; the prepared Windows image is the immutable base for runtime images.
+
+### Windows GPU image generations
+
+The optional VM host `gpu_driver_cache` setting prepares a derived image before
+each new GPU guest. It does not rebuild Windows or modify the configured base.
+The administrator-protected cache lives at `<vmhost root>\gpu-images`; no driver
+share or host directory is attached to a job guest. The privileged process handles
+only trusted base images and host driver files, never guest command output.
+
+The cache pins and verifies each base against its adjacent factory manifest once
+per service lifetime, holding a deny-write/delete handle until shutdown. Each
+launch rediscovers active display packages and hashes their complete bounded
+payload (at most 8192 files and 2 GiB; runtime `.log` files excluded). The key
+includes the base hash/location, sorted package paths and contents, and the fixed
+offline-preparation script's hash. Changed same-size files invalidate the key.
+
+On a miss, a fresh owned private workspace receives a differencing VHDX and
+verified copies of the driver packages. A fixed PowerShell script, with structured
+stdin, mounts only that disk without a drive letter and copies packages into its
+Windows HostDriverStore. All destination ancestors refuse reparse points. A
+confirmed detach and a second complete host inventory precede publication by
+directory rename. A driver installation during preparation refuses publication.
+Interrupted or failed workspaces remain private and cannot become cache hits.
+
+A hit verifies the protected receipt and derived disk checksum. The guest's own
+differencing disk uses this immutable generation as its parent, recorded in the
+ordinary VM ownership journal. Older generations and their base remain in place
+for running guests; there is no automatic eviction. The cache refuses new entries
+after its bounded directory ceiling rather than deleting an active parent.
+Generation refresh is lazy, on the next GPU guest creation after a driver update.
+
+Before registration, every GPU guest runs its delivered adapter's hardware D3D12
+probe in the interactive session. DXGI software adapters are excluded and an
+actual D3D12 device must be created on hardware. This is a device-readiness gate,
+not a rendering/presentation or OpenGL/Vulkan/CUDA compatibility test. A failed
+probe refuses readiness; the ordinary lifecycle discards that guest. Driver updates
+can still break GPU-PV itself, and updates during an already-running job are not
+made safe by cached images.
 
 ## Optional containers on macOS
 

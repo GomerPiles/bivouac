@@ -163,6 +163,7 @@ func fixture(t *testing.T, network bool) (*Provider, *fakeHost, *fakeTransport) 
 	f := &fakeTransport{sent: map[string][]byte{}, replies: map[string]string{
 		"guest windows preflight": `{"ready":true,"session":1}`,
 		"guest windows prepare":   `{"ready":true,"session":1,"desktop":"Default"}`,
+		"guest windows gpu":       `{"hardware_d3d12":true}`,
 		"guest windows status":    `{"State":"listening"}`,
 		"guest windows clock":     "2026-10-21T08:38:01.0000000Z\r\n",
 	}}

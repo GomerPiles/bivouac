@@ -133,8 +133,8 @@ func (c Config) Validate() error {
 		}
 		seen[n] = true
 	}
-	if len(c.Drivers) < 1 || len(c.Drivers) > 8 {
-		return errors.New("one to eight GPU driver directories are required")
+	if len(c.Drivers) > 8 {
+		return errors.New("at most eight explicit GPU driver directories are permitted")
 	}
 	seen = map[string]bool{}
 	for _, d := range c.Drivers {

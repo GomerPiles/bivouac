@@ -200,6 +200,16 @@ together with its manager, VM host service and image.
 
 ### Agent-served runtime and ISO image factory (not deployed)
 
+Optional `gpu_driver_cache` prepares immutable derived images from a protected
+base and the current host display packages. Native discovery, offline cold
+preparation and verified warm reuse passed on an isolated copy of a prepared
+image. Tests cover same-size driver replacements, changes during preparation,
+corrupt-cache refusal and retained failures. The delivered adapter's hardware
+D3D12 device probe passed on the host; the provider refuses GPU readiness before
+registration when its guest proof is missing or false. Cached-image boot/render,
+an actual host driver replacement, and the new guest probe remain live gates.
+This cache is not deployed to production.
+
 The HCS provider, image factory and vmhost lab use bivouac's guest agent over
 HvSocket. Windows contract 2 adds a separate on-demand runner task beside the
 agent logon task; images of an earlier contract are refused. The cutover
@@ -272,6 +282,13 @@ and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. A production
 job listened 46 s after create (clone 7 s, boot 21 s, JIT registration 7 s)
 and tore down in 1.8 s.
 
+Its prepared image was refreshed after a host AMD driver upgrade. A fresh
+factory build copied the current package, passed hardware D3D11 presentation
+and pixel checks, and was installed with the matching guest identity while
+the service had no guests. The original manager/service binaries and runner
+labels were retained; CI resumed through the desktop launcher. A full job on
+the refreshed image has not yet been verified.
+
 Validated live on that runtime, with production CI Off:
 
 - Lab batch: five cold boots without a network adapter created, started and
@@ -329,7 +346,8 @@ Open:
 - Live validation of publication's nonzero BitLocker refusal, automatic-letter
   refusal, replacement-log cleanup, cleanup stage deadlines, probe ACL/error
   changes and `--retain-failed` retention and cleanup. Unit tests cover these
-  paths. Admission does not compare the host GPU driver with the image's.
+  paths. The deployed runtime still needs manual image refresh after host
+  driver changes; the optional cache above belongs to the undeployed runtime.
 - The warm spare.
 
 ## Windows: Crosvm (Linux GPU guests)

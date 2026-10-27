@@ -19,6 +19,14 @@ func testConfig() Config {
 	c.SetupAssets = []Asset{{Name: "RUNNER.ZIP", PinnedFile: PinnedFile{Source: `D:\Assets\runner.zip`, SHA256: h}}}
 	return c
 }
+
+func TestConfigAllowsAutomaticGPUDiscovery(t *testing.T) {
+	c := testConfig()
+	c.Drivers = nil
+	if err := c.Validate(); err != nil {
+		t.Fatal("omitted drivers should discover the active host packages", err)
+	}
+}
 func TestConfig(t *testing.T) {
 	c := testConfig()
 	if err := c.Validate(); err != nil {
@@ -32,7 +40,11 @@ func TestConfig(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*Config){
-		"pin": func(c *Config) { c.ISOSHA256 = "bad" }, "relative": func(c *Config) { c.ISO = `disk.vhdx` }, "source inside output": func(c *Config) { c.ISO = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Media` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.EditionID = "../edition" }, "disk small": func(c *Config) { c.DiskGB = 63 }, "disk large": func(c *Config) { c.DiskGB = 257 }, "index": func(c *Config) { c.ImageIndex = 129 }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets = append(c.SetupAssets, c.SetupAssets[0]) }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers absent": func(c *Config) { c.Drivers = nil }, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
+		"pin": func(c *Config) { c.ISOSHA256 = "bad" }, "relative": func(c *Config) { c.ISO = `disk.vhdx` }, "source inside output": func(c *Config) { c.ISO = `D:\Images\disk.vhdx` }, "root overlaps": func(c *Config) { c.ImageRoot = `D:\Media` }, "unc": func(c *Config) { c.ImageRoot = `\\server\images` }, "root alias": func(c *Config) { c.ImageRoot = `D:\Images.` }, "dot segment": func(c *Config) { c.ImageRoot = `D:\Images\..\Templates` }, "device": func(c *Config) { c.ImageRoot = `D:\CON` }, "cpu": func(c *Config) { c.CPU = 5 }, "memory": func(c *Config) { c.MemoryMB = 8193 }, "timeout": func(c *Config) { c.TimeoutSeconds = 1 }, "user": func(c *Config) { c.GuestUser = "user\n" }, "template": func(c *Config) { c.EditionID = "../edition" }, "disk small": func(c *Config) { c.DiskGB = 63 }, "disk large": func(c *Config) { c.DiskGB = 257 }, "index": func(c *Config) { c.ImageIndex = 129 }, "asset pin": func(c *Config) { c.SetupAssets[0].SHA256 = "" }, "asset duplicate": func(c *Config) { c.SetupAssets = append(c.SetupAssets, c.SetupAssets[0]) }, "asset name": func(c *Config) { c.SetupAssets[0].Name = "../agent" }, "drivers too many": func(c *Config) {
+			for range 9 {
+				c.Drivers = append(c.Drivers, c.Drivers[0])
+			}
+		}, "drivers duplicate": func(c *Config) { c.Drivers = append(c.Drivers, c.Drivers[0]) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := testConfig()

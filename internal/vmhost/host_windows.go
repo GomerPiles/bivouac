@@ -91,6 +91,10 @@ type Host struct {
 	root   *os.Root
 	owner  string
 	lock   *control.Lock
+	images interface {
+		Ensure(context.Context, string) (string, bool, error)
+		Close() error
+	}
 }
 
 var controllerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
@@ -137,6 +141,9 @@ func newHost(dir string, n native, owner string) (*Host, error) {
 
 func (h *Host) Close() error {
 	err := h.root.Close()
+	if h.images != nil {
+		err = errors.Join(err, h.images.Close())
+	}
 	if h.lock != nil {
 		err = errors.Join(err, h.lock.Release())
 	}
@@ -266,6 +273,13 @@ func (h *Host) Create(ctx context.Context, spec Spec) (_ *Guest, err error) {
 		return nil, errors.New("a compute system with this name already exists; refusing to replace it")
 	} else if !errors.Is(openErr, hcs.ErrNotFound) {
 		return nil, openErr
+	}
+	if spec.GPU && h.images != nil {
+		image, _, prepareErr := h.images.Ensure(ctx, spec.Image)
+		if prepareErr != nil {
+			return nil, fmt.Errorf("GPU image preparation failed: %w", prepareErr)
+		}
+		spec.Image = image
 	}
 	r := record{Owner: h.owner, Spec: spec, Phase: phaseIntent}
 	if spec.Network {

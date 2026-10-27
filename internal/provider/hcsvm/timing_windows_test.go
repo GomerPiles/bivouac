@@ -109,7 +109,7 @@ func TestReadinessTimingsSuccess(t *testing.T) {
 	if err != nil || !bytes.Equal(encoded, logged) {
 		t.Fatal("lab payload differs from log")
 	}
-	steps := []string{"vmhost_create", "session", "agent_dial", "network", "agent_proof", "config", "delivery_config", "delivery_helper", "delivery_runner_archive", "preflight", "console_proof", "prepare", "desktop_proof", "clock_sync", "wait_ready_total"}
+	steps := []string{"vmhost_create", "session", "agent_dial", "network", "agent_proof", "config", "delivery_config", "delivery_helper", "delivery_runner_archive", "preflight", "console_proof", "prepare", "desktop_proof", "gpu_proof", "clock_sync", "wait_ready_total"}
 	var previous int64
 	for _, step := range steps {
 		duration, ok := values[step+"_ms"]

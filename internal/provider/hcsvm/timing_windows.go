@@ -25,6 +25,7 @@ const (
 	stepDeliveryRunner timingStep = "delivery_runner_archive"
 	stepPrepare        timingStep = "prepare"
 	stepDesktopProof   timingStep = "desktop_proof"
+	stepGPUProof       timingStep = "gpu_proof"
 	stepClockSync      timingStep = "clock_sync"
 	stepCacheSetup     timingStep = "cache_setup"
 	stepJITDelivery    timingStep = "jit_delivery"
