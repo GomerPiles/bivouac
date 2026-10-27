@@ -5,8 +5,9 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"sort"
 	"strings"
+
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 )
 
 // Policy includes every local IPv4 address/subnet (including public
@@ -40,29 +41,11 @@ func Policy() (string, error) {
 }
 
 func policyFromPrefixes(local []netip.Prefix) string {
-	var prefixes []netip.Prefix
-	for _, r := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4"} {
-		prefixes = append(prefixes, netip.MustParsePrefix(r))
+	prefixes := netpolicy.Reduce(append(netpolicy.Reserved(), local...))
+	rules := make([]string, len(prefixes))
+	for i, prefix := range prefixes {
+		rules[i] = prefix.String()
 	}
-	for _, p := range local {
-		if p.Addr().Is4() {
-			prefixes = append(prefixes, p.Masked())
-		}
-	}
-	rules := make([]string, 0, len(prefixes))
-	for i, p := range prefixes {
-		covered := false
-		for j, q := range prefixes {
-			if i != j && q.Bits() <= p.Bits() && q.Contains(p.Addr()) && (q != p || j < i) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			rules = append(rules, p.String())
-		}
-	}
-	sort.Strings(rules)
 	return strings.Join(rules, ",")
 }
 

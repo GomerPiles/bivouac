@@ -1,6 +1,7 @@
 # Experimental Windows Crosvm runtime
 
 `public_ipv4.rs` is the Bivouac packet admission module.
+Its `RESERVED` list must match `netpolicy.Reserved()`, enforced by a Go test.
 `windows-runtime.patch` applies to Crosvm
 `b2c03d01cdee82e72707ec34c470805d5998ab5f` and includes loopback-only SSH
 management forwarding, the pre-Slirp packet hook, IPv6/host-loopback disabling,

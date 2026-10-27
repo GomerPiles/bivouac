@@ -369,6 +369,10 @@ Open:
 
 ## Windows: Crosvm (Linux GPU guests)
 
+The pinned Crosvm runtime predates the `192.88.99.0/24` RESERVED entry;
+enforcement is unaffected because the provider supplies it in the host-prefix
+inventory. Rebuild at the next runtime pin.
+
 Validated live:
 
 - The manager runs unprivileged once WHPX is available. A patched runtime

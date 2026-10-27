@@ -3,9 +3,38 @@
 package hostnet
 
 import (
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 )
+
+func TestHostDenialCoversReservedPrefixes(t *testing.T) {
+	blocked, _, err := HostDenial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.IsSorted(blocked) {
+		t.Fatal("host denial is not sorted")
+	}
+	var prefixes []netip.Prefix
+	for _, text := range blocked {
+		prefix, err := netip.ParsePrefix(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	for _, reserved := range netpolicy.Reserved() {
+		if !slices.ContainsFunc(prefixes, func(prefix netip.Prefix) bool {
+			return prefix.Bits() <= reserved.Bits() && prefix.Contains(reserved.Addr())
+		}) {
+			t.Errorf("host denial does not cover %s", reserved)
+		}
+	}
+}
 
 const guest = "bivouac-windows-0a1b2c3d"
 

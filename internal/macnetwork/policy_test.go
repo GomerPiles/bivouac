@@ -2,8 +2,24 @@ package macnetwork
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
+
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 )
+
+func TestPolicyWithoutLocalPrefixesEqualsReserved(t *testing.T) {
+	var reserved []string
+	for _, prefix := range netpolicy.Reserved() {
+		reserved = append(reserved, prefix.String())
+	}
+	if got, want := policyFromPrefixes(nil), strings.Join(reserved, ","); got != want {
+		t.Fatalf("policy = %q, want %q", got, want)
+	}
+	if Allows(policyFromPrefixes(nil), netip.MustParseAddr("192.88.99.1")) {
+		t.Fatal("deprecated 6to4 relay address admitted")
+	}
+}
 
 func TestPublicOnlyWithLocalPublicNetworks(t *testing.T) {
 	policy := policyFromPrefixes([]netip.Prefix{netip.MustParsePrefix("11.22.33.7/24"), netip.MustParsePrefix("12.34.56.7/32")})

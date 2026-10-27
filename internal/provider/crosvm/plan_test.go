@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GomerPiles/bivouac/internal/netpolicy"
 	"github.com/GomerPiles/bivouac/internal/provider"
 )
 
@@ -73,6 +74,36 @@ func TestLaunchRejectsRecordMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestLaunchDeliversEffectiveDenialInventory(t *testing.T) {
+	o, r := fixture(t)
+	prefixes, snapshot, err := denialInventory([]netip.Prefix{netip.MustParsePrefix("192.168.1.7/24"), netip.MustParsePrefix("8.8.8.10/24")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := r.Meta
+	meta.NetworkPolicy = ""
+	r, err = Plan(o, provider.Spec{Name: r.Name, Baseline: o.BaselineName, CPU: r.CPU, MemoryMB: r.MemoryMB, Meta: meta}, r.SSHPort, prefixes, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, environment, err := Launch(o, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered []string
+	for _, entry := range environment {
+		if value, ok := strings.CutPrefix(entry, "BIVOUAC_SLIRP_HOST_PREFIXES="); ok {
+			delivered = strings.Split(value, ",")
+		}
+	}
+	for _, prefix := range append(netpolicy.Reserved(), netip.MustParsePrefix("8.8.8.0/24")) {
+		if !slices.Contains(delivered, prefix.String()) {
+			t.Errorf("launch host-prefix inventory missing %s", prefix)
+		}
+	}
+}
+
 func TestToolsAndBaselineCannotLiveInDisposableRoot(t *testing.T) {
 	o, _ := fixture(t)
 	o.Baseline = filepath.Join(o.Root, "baseline.raw")
