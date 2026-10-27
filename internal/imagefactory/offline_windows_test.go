@@ -22,6 +22,11 @@ func TestOfflineDriverTransactions(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if mode != "destination link" {
+				if err := os.MkdirAll(filepath.Join(mount, "Windows", "System32"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
 			source := filepath.Join(snapshot, "0")
 			if err := os.MkdirAll(filepath.Join(source, "nested", "empty"), 0700); err != nil {
 				t.Fatal(err)
@@ -45,7 +50,7 @@ func TestOfflineDriverTransactions(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "existing":
-				// An App Sandbox template can already hold this driver directory.
+				// Existing driver payloads must never be reused or replaced.
 				if err := os.MkdirAll(target, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -79,14 +84,15 @@ try{Copy-OfflineDrivers $d.mount $d.snapshot $d.plan;$ok=$true}catch{$line=$_.In
 			if err := json.Unmarshal([]byte(runTestPS(t, script, data)), &result); err != nil {
 				t.Fatal(err)
 			}
-			succeeds := mode == "nested" || mode == "mounted root" || mode == "existing"
+			succeeds := mode == "nested" || mode == "mounted root"
 			if result.OK != succeeds {
 				t.Fatalf("transaction outcome, mode=%s line=%d kind=%s id=%s", mode, result.Line, result.Kind, result.ID)
 			}
 			if _, err := os.Lstat(target + ".bivouac-staging"); !os.IsNotExist(err) {
 				t.Fatal("temporary tree remains")
 			}
-			if succeeds {
+			switch {
+			case succeeds:
 				b, err := os.ReadFile(filepath.Join(target, "nested", "driver.dll"))
 				if err != nil || string(b) != string(content) {
 					t.Fatal("nested bytes missing")
@@ -94,13 +100,14 @@ try{Copy-OfflineDrivers $d.mount $d.snapshot $d.plan;$ok=$true}catch{$line=$_.In
 				if info, err := os.Stat(filepath.Join(target, "nested", "empty")); err != nil || !info.IsDir() {
 					t.Fatal("empty directory missing")
 				}
-				if _, err := os.Lstat(filepath.Join(target, "stale.dll")); !os.IsNotExist(err) {
-					t.Fatal("existing tree was merged, not replaced")
-				}
 				if _, err := os.Lstat(target + ".bivouac-replaced"); !os.IsNotExist(err) {
 					t.Fatal("replaced tree remains")
 				}
-			} else {
+			case mode == "existing":
+				if _, err := os.Stat(filepath.Join(target, "stale.dll")); err != nil {
+					t.Fatal("existing driver tree changed")
+				}
+			default:
 				if _, err := os.Lstat(target); !os.IsNotExist(err) {
 					t.Fatal("partial tree published")
 				}

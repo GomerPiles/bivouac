@@ -13,7 +13,7 @@ func TestFactorySetupAssets(t *testing.T) {
 	}
 	for _, name := range []string{"AppSandboxVDD.dll", "AppSandboxVDD.inf", "AppSandboxVDD.cat", "AppSandboxVDD.sys", "devcon.exe", "DEVCON.EXE", "appsandbox-agent.exe", "appsandbox-input.exe", "appsandbox-displays.exe", "OpenSSH.msi"} {
 		bad := testConfig()
-		bad.SetupAssets = append(bad.SetupAssets, Asset{Name: name, PinnedFile: PinnedFile{Source: `D:\Assets\` + name, SHA256: bad.SourceSHA256}})
+		bad.SetupAssets = append(bad.SetupAssets, Asset{Name: name, PinnedFile: PinnedFile{Source: `D:\Assets\` + name, SHA256: bad.ISOSHA256}})
 		if bad.Validate() == nil {
 			t.Fatal("unsupported display tool accepted")
 		}
