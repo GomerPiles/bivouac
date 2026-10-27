@@ -1,7 +1,7 @@
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $image=$null;$disk=$null;$partition=$null;$step=10;$code=0
-$facts=[ordered]@{failure_step=0;system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;sam_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false;panther_answer=$null;agent_service=$null;sshd_service=$null;executables=@{};vdd_present=$null;vdd_package_present=$null;runner_state='invalid';runner_residue=@{};runner_version='';bivouac_present=$false;bivouac_subdirectories=@();guest_state_present=$false;guest_user_exists=$null;guest_setup_step=0;guest_setup_failed=$false}
+$facts=[ordered]@{failure_step=0;system_hive_error=[uint32]::MaxValue;software_hive_error=[uint32]::MaxValue;sam_hive_error=[uint32]::MaxValue;system_setup_in_progress=[uint32]::MaxValue;oobe_in_progress=[uint32]::MaxValue;setup_phase=[uint32]::MaxValue;image_state_kind='unknown';unattend_pointer_kind='present_or_unknown';answer_directory_empty=$false;panther_answer_present=$false;panther_answer=$null;agent_present=$false;agent_sha256='';agent_task_present=$false;runner_task_present=$false;vdd_present=$null;runner_state='invalid';runner_residue=@{};runner_version='';bivouac_present=$false;bivouac_subdirectories=@();guest_state_present=$false;guest_user_exists=$null;guest_setup_step=0;guest_setup_failed=$false}
 try {
  $data=[Console]::In.ReadToEnd()|ConvertFrom-Json
  if($data.instance_id -cnotmatch '^[0-9a-f]{32}$'){throw 'identity'}
@@ -35,15 +35,23 @@ public static class FactoryInspection {
   $step=30
   $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadWrite -NoDriveLetter -PassThru
   $disk=$image|Get-Disk
-  $partition=Get-Partition -DiskNumber $disk.Number|Sort-Object Size -Descending|Select-Object -First 1
+  $partitions=@(Get-Partition -DiskNumber $disk.Number | Where-Object Guid -eq $data.windows_guid)
+  if($data.windows_guid -notmatch '^\{[0-9a-fA-F-]{36}\}$' -or $partitions.Count -ne 1){throw 'Windows partition identity'}
+  $partition=$partitions[0]
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   if($data.mode -eq 'setup'){
    $step=90;Read-SetupStep $mount $facts
   }else{
    $step=40
-   foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
+   foreach($relative in @('Windows','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Windows\System32\config\SOFTWARE')){
     $path=Join-Path $mount $relative
     if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Windows path'}
+   }
+   # Setup creates Panther; absence is clean, but never traverse a link/file.
+   $panther=Join-Path $mount 'Windows\Panther'
+   if(Test-Path -LiteralPath $panther){
+    $item=Get-Item -Force -LiteralPath $panther
+    if(!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'child Panther path'}
    }
    $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
    $software=Join-Path $mount 'Windows\System32\config\SOFTWARE'
@@ -59,17 +67,6 @@ public static class FactoryInspection {
      $current=[FactoryInspection]::Number($hive,'Select','Current')
      if($current -lt 1 -or $current -gt 999){throw 'control set'}
      $control='ControlSet'+$current.ToString('000')
-     foreach($service in @(@('AppSandboxAgent','agent_service'),@('sshd','sshd_service'))){try{
-     $key=$control+'\Services\'+$service[0]
-     $fact=@{present=[FactoryInspection]::Exists($hive,$key);image_path='';image_path_redacted=$false}
-     if($fact.present){
-      $value=[FactoryInspection]::Text($hive,$key,'ImagePath')
-      # Preserve ordinary service ImagePath data, never arbitrary arguments
-      # that could contain a credential or a signed URL.
-      Set-PublicImagePath $value $fact
-     }
-     $facts[$service[1]]=$fact
-     }catch{}}
      $facts.vdd_present=[FactoryInspection]::Exists($hive,($control+'\Enum\ROOT\APPSANDBOXVDD'))
     }catch{}
    }finally{[void][FactoryInspection]::ORCloseHive($hive)}}

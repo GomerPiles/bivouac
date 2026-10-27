@@ -17,9 +17,10 @@ max_object_mb = 2048
 
 Windows-hosted providers default `listen = "127.0.0.1:0"` and
 `guest_host = "127.0.0.1"`; other addresses are rejected. Guests reach only the
-cache handler through a loopback SSH listener bound to their existing verified
-transport. Keep host/LAN NIC denial unchanged. The native guest SSH service must
-permit loopback remote forwarding; do not expose forwarding on a VM interface.
+cache handler through a guest-loopback listener bound to their verified
+transport: bivouac-agent Duplex/engine relay for HCS, SSH forwarding for Crosvm.
+Keep host/LAN NIC denial unchanged. Crosvm's guest SSH service must permit
+loopback remote forwarding; do not expose forwarding on a VM interface.
 
 Both adapters install the shared Actions v2 Node preload and optional public
 GitHub release proxy inside disposable guests. Windows changes only the runner
@@ -28,7 +29,7 @@ changes only the clone's system trust. This avoids requesting protected
 CurrentUser root consent over SSH. Proxy certificates include a signed CRL at
 the guest's own cache endpoint so Windows retains default revocation checks.
 Nothing is installed into the host or baseline. Cache settings/capabilities
-travel on SSH stdin and are excluded from diagnostics. Workflow cache keys,
+travel on the provider's command stdin and are excluded from diagnostics. Workflow cache keys,
 metadata and upstream authorization stay on GitHub. `store_uploads` would route
 saves through the host relay; it is not yet validated on Windows hosts, so leave
 it off. Cache setup failure removes the

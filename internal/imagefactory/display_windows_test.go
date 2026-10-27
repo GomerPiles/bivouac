@@ -3,24 +3,20 @@
 package imagefactory
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/GomerPiles/bivouac/internal/winguest"
+	"github.com/GomerPiles/bivouac/internal/windesktop"
 )
 
 func TestDisplayMediaAndManifest(t *testing.T) {
 	c := testConfig()
-	r := &record{Name: "bivouac-aaaaaaa", Workspace: t.TempDir(), Manifest: Manifest{Assets: map[string]string{}, Topology: &winguest.Topology{ActiveDisplays: 1}}}
+	r := &record{Name: "bivouac-aaaaaaa", Workspace: t.TempDir(), Manifest: Manifest{Assets: map[string]string{}, Topology: &windesktop.Topology{ActiveDisplays: 1}}}
 	copyFile := func(_ context.Context, _, _, pin string, _ int64) (int64, string, error) { return 1, pin, nil }
 	run := func(_ context.Context, _ string, input any, _ bool) ([]byte, error) {
 		content := input.(map[string]string)["specialize"]
@@ -48,67 +44,6 @@ func TestDisplayMediaAndManifest(t *testing.T) {
 	}
 	if _, present := fields["topology"]; !present {
 		t.Fatal("manifest topology lost")
-	}
-}
-
-func TestFactoryDisplayTranscripts(t *testing.T) {
-	for _, test := range []struct {
-		name, lines string
-		ack, pass   bool
-	}{
-		{"success", "idd_status:not_found", true, true},
-		{"VDD present", "idd_status:ok", true, false},
-		{"error", "idd_status:error", true, false},
-		{"unknown", "idd_status:guest-private-output", true, false},
-		{"disabled", "hyperv_video:disabled\nidd_status:not_found", true, false},
-		{"no key ack", "idd_status:not_found", false, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			host, guest := net.Pipe()
-			defer func() { _ = host.Close() }()
-			done := make(chan error, 1)
-			go func() {
-				defer func() { _ = guest.Close() }()
-				_, err := io.WriteString(guest, "hello\n")
-				reader := bufio.NewReader(guest)
-				for range 3 {
-					if err == nil {
-						_, err = reader.ReadString('\n')
-					}
-				}
-				if err == nil {
-					_, err = io.WriteString(guest, "ssh_ready\n")
-				}
-				if err == nil {
-					var key string
-					key, err = reader.ReadString('\n')
-					if err == nil && key != "ssh_deploy_key public-key\n" {
-						err = errors.New("key frame")
-					}
-				}
-				if err == nil {
-					text := "gpu_copy_done:0\n" + test.lines + "\n"
-					if test.ack {
-						text += "ssh_key_deployed\n"
-					}
-					_, err = io.WriteString(guest, text)
-				}
-				if err == nil {
-					_, _ = io.Copy(io.Discard, guest)
-				}
-				done <- err
-			}()
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			defer cancel()
-			err := initializeDrivers(ctx, host, testConfig().Drivers, []byte("public-key"))
-			_ = host.Close()
-			if guestErr := <-done; guestErr != nil && !errors.Is(guestErr, io.ErrClosedPipe) {
-				t.Fatal(guestErr)
-			}
-			if (err == nil) != test.pass || (err != nil && strings.Contains(err.Error(), "guest-private-output")) {
-				t.Fatal("factory agent contract", err)
-			}
-		})
 	}
 }
 

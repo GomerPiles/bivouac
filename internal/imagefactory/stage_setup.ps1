@@ -47,23 +47,26 @@ public static class SpikeOfflineAnswer {
   $image=Mount-DiskImage -ImagePath $expectedDisk -Access ReadWrite -NoDriveLetter -PassThru
   $disk=$image | Get-Disk
   if($disk.IsReadOnly -or $disk.IsOffline){throw 'Owned child is not online read-write'}
-  $partition=Get-Partition -DiskNumber $disk.Number | Sort-Object Size -Descending | Select-Object -First 1
+  $partitions=@(Get-Partition -DiskNumber $disk.Number | Where-Object Guid -eq $data.windows_guid)
+  if($data.windows_guid -notmatch '^\{[0-9a-fA-F-]{36}\}$' -or $partitions.Count -ne 1){throw 'Windows partition identity'}
+  $partition=$partitions[0]
   $null=Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access
   $phaseCode=40
-  foreach($relative in @('Windows','Windows\Panther','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM')){
+  foreach($relative in @('Windows','Windows\Setup','Windows\System32','Windows\System32\config','Windows\System32\config\SYSTEM','Program Files','ProgramData')){
    $path=Join-Path $mount $relative
-   if(!(Test-Path -LiteralPath $path) -or ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Expected child Windows path unavailable'}
+   if(!(Test-Path -LiteralPath $path) -or ((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Expected child Windows path unavailable'}
   }
   $phaseCode=50
   $system=Join-Path $mount 'Windows\System32\config\SYSTEM'
   if((Get-Item -LiteralPath $system).Length -gt 256MB -or ![SpikeOfflineAnswer]::NoExplicitAnswer($system)){throw 'Offline explicit answer pointer must be absent'}
-  # The embedded answer directory outranks the template's cached Audit-mode
-  # file. Only an absent or empty directory is accepted; the parent stays pinned.
+  # Only an absent or empty embedded answer directory is accepted;
+  # any existing parent must be ordinary before examining its children.
   $phaseCode=60
   $answerDirectory=Join-Path $mount 'Windows\Panther\Unattend'
+  Assert-OfflinePath $mount $answerDirectory
   Assert-EmptyAnswerDirectory $answerDirectory
   $phaseCode=61
-  if(!(Test-Path -LiteralPath $answerDirectory)){New-Item -ItemType Directory -Path $answerDirectory | Out-Null}
+  Initialize-OfflineSetupDirectories $mount
   $phaseCode=62
   # Apply only the protected DACL; PowerShell Set-Acl can also touch audit/owner
   # sections inherited from the guest image, which are outside this operation.
@@ -76,10 +79,24 @@ public static class SpikeOfflineAnswer {
    $output=[IO.File]::Open($file,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
    try{$output.Write($content,0,$content.Length);$output.Flush($true)}finally{$output.Dispose();[Array]::Clear($content,0,$content.Length)}
   }
+  $phaseCode=64
+  Install-OfflineAgent $mount $data.agent $data.agent_sha256
+  $phaseCode=65
+  Copy-OfflineDrivers $mount (Join-Path $child 'drivers') ($data.driver_plan | ConvertFrom-Json)
+  $phaseCode=66
+  $encryption=Set-OfflineEncryptionPolicy $mount
+  if($encryption -ne 0){$phaseCode=66000+[int]$encryption;throw 'offline device encryption policy'}
  } finally {
   if($image){try{if($partition){$null=Remove-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $partition.PartitionNumber -AccessPath $access}}finally{$null=Dismount-DiskImage -ImagePath $expectedDisk}}
  }
  $phaseCode=70
  if((Get-DiskImage -ImagePath $expectedDisk).Attached){exit $phaseCode}
  exit 0
-} catch {if($phaseCode -eq 62 -and $aclError -gt 0 -and $aclError -le 65535){exit (10000+[int]$aclError)};exit $phaseCode}
+} catch {
+ if($phaseCode -eq 62 -and $aclError -gt 0 -and $aclError -le 65535){exit (10000+[int]$aclError)}
+ # Offline payload failures report the failing line of this fixed script
+ # (offline payload followed by staging), never error text: phase*100000+line.
+ $line=$_.InvocationInfo.ScriptLineNumber
+ if($phaseCode -in @(64,65) -and $line -gt 0 -and $line -lt 100000){exit ($phaseCode*100000+[int]$line)}
+ exit $phaseCode
+}

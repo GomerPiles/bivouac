@@ -8,11 +8,17 @@ try {
  function Assert-Ordinary([string]$Path){
   if(Test-Path -LiteralPath $Path){if((Get-Item -Force -LiteralPath $Path).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'link'}}
  }
- $base='C:\Windows\AppSandbox'
- foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\ProgramData\ssh','C:\actions-runner',"$HOME\.ssh")){Assert-Ordinary $path}
+ $base='C:\ProgramData\Bivouac\Image'
+ # Numeric Task Scheduler state: Ready=3. Refuse Running, Queued or unknown.
+ $runnerTask=Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction Stop
+ if([int]$runnerTask.State -ne 3){exit 33}
+ foreach($path in @('C:\Windows',$base,'C:\ProgramData','C:\actions-runner')){Assert-Ordinary $path}
+ if(Test-Path -LiteralPath 'C:\ProgramData\BivouacHcsSpike'){exit 32}
  if(!(Test-Path -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe' -PathType Leaf)){exit 1}
- foreach($path in @('C:\ProgramData\Bivouac\Guest','C:\ProgramData\Bivouac\Guest\config.json','C:\ProgramData\Bivouac\Guest\job.json','C:\actions-runner\.runner','C:\actions-runner\.credentials','C:\actions-runner\.credentials_rsaparams','C:\actions-runner\_work','C:\actions-runner\_diag')){if(Test-Path -LiteralPath $path){exit 1}}
- $probeBase='C:\ProgramData\BivouacHcsSpike'
+ # Legacy component directories must be absent before publication.
+ if(Test-Path -LiteralPath (Join-Path $env:SystemRoot 'AppSandbox')){exit 31}
+ foreach($path in @('C:\actions-runner\.runner','C:\actions-runner\.credentials','C:\actions-runner\.credentials_rsaparams','C:\actions-runner\_work','C:\actions-runner\_diag')){if(Test-Path -LiteralPath $path){exit 1}}
+ $probeBase='C:\ProgramData\Bivouac\Image\Probe'
  Assert-Ordinary $probeBase
  $entries=@(Get-ChildItem -Force -LiteralPath $probeBase)
  if($entries.Count -ne 2){exit 1}
@@ -44,58 +50,31 @@ try {
   $logon.DeleteValue('DefaultPassword',$false)
   $logon.DeleteValue('AutoLogonCount',$false)
  }finally{$logon.Dispose();$password=$null;[Array]::Clear($random,0,$random.Length)}
- foreach($path in @('C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\Panther\Unattend\specialize.ps1','C:\Windows\Panther\Unattend\setup-step.json','C:\Windows\Panther\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml',"$HOME\.ssh\authorized_keys",'C:\ProgramData\ssh\administrators_authorized_keys')){
+ foreach($path in @('C:\Windows\Panther\Unattend\unattend.xml','C:\Windows\Panther\Unattend\specialize.ps1','C:\Windows\Panther\Unattend\setup-step.json','C:\Windows\Panther\unattend.xml','C:\Windows\System32\Sysprep\unattend.xml')){
   $parent=Split-Path -Parent $path;Assert-Ordinary $parent;Assert-Ordinary $path
   if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -Force -LiteralPath $path}
  }
- $ssh='C:\ProgramData\ssh'
- $sshdConfig=Join-Path $ssh 'sshd_config';Assert-Ordinary $sshdConfig
- [IO.File]::WriteAllText($sshdConfig,"ListenAddress 127.0.0.1`r`nPasswordAuthentication no`r`nKbdInteractiveAuthentication no`r`nPubkeyAuthentication yes`r`nStrictModes yes`r`nSubsystem sftp sftp-server.exe`r`nMatch Group administrators`r`n AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys`r`n",[Text.UTF8Encoding]::new($false))
- $startup='
-$ErrorActionPreference=''Stop''
-$ProgressPreference=''SilentlyContinue''
-$service=Get-Service sshd
-$agent=Get-Service AppSandboxAgent
-if($service.StartType -ne ''Disabled'' -or $service.Status -ne ''Stopped'' -or $agent.StartType -ne ''Disabled'' -or $agent.Status -ne ''Stopped''){exit 1}
-foreach($name in @(''ssh_host_rsa_key'',''ssh_host_rsa_key.pub'',''ssh_host_ecdsa_key'',''ssh_host_ecdsa_key.pub'',''ssh_host_ed25519_key'',''ssh_host_ed25519_key.pub'')){
- $path=Join-Path ''C:\ProgramData\ssh'' $name
- if(Test-Path -LiteralPath $path){if((Get-Item -Force -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1};Remove-Item -Force -LiteralPath $path}
-}
-$sshService=Get-CimInstance Win32_Service -Filter "Name=''sshd''"
-$imagePath=$sshService.PathName
-if($imagePath -notmatch ''^"?([A-Za-z]:\\[^"\r\n]*?\.exe)"?(?:\s.*)?$''){exit 1}
-$binary=$Matches[1]
-& (Join-Path (Split-Path -Parent $binary) ''ssh-keygen.exe'') @(''-A'') *> $null
-if($LASTEXITCODE){exit 1}
-foreach($name in @(''ssh_host_rsa_key'',''ssh_host_ecdsa_key'',''ssh_host_ed25519_key'')){if(!(Test-Path -LiteralPath (Join-Path ''C:\ProgramData\ssh'' $name) -PathType Leaf)){exit 1}}
-Set-Service sshd -StartupType Manual
-Start-Service sshd
-Set-Service AppSandboxAgent -StartupType Manual
-Start-Service AppSandboxAgent
-'
- $startupPath=Join-Path $base 'hcs-spike-startup.ps1';Assert-Ordinary $startupPath
- [IO.File]::WriteAllText($startupPath,$startup,[Text.UTF8Encoding]::new($false))
- $taskName='bivouac-hcs-ssh-hostkeys'
- if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){exit 1}
- $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
- $action=New-ScheduledTaskAction -Execute 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Windows\AppSandbox\hcs-spike-startup.ps1'
- $trigger=New-ScheduledTaskTrigger -AtStartup
- $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
- Register-ScheduledTask -TaskName $taskName -Principal $principal -Action $action -Trigger $trigger -Settings $settings|Out-Null
- # The upstream agent can re-enable sshd, so it must also stay stopped until
- # the boot task has generated server keys and started SSH.
- Set-Service AppSandboxAgent -StartupType Disabled
- Set-Service sshd -StartupType Disabled
- foreach($name in @('ssh_host_rsa_key','ssh_host_rsa_key.pub','ssh_host_ecdsa_key','ssh_host_ecdsa_key.pub','ssh_host_ed25519_key','ssh_host_ed25519_key.pub')){
-  $path=Join-Path $ssh $name;Assert-Ordinary $path
-  if(Test-Path -LiteralPath $path -PathType Leaf){Remove-Item -Force -LiteralPath $path}
+ # No adapter delivery belongs in an image. The build agent logs separately;
+ # delete its open, delete-shared log before scheduling shutdown.
+ foreach($directory in @('C:\ProgramData\Bivouac\Guest','C:\ProgramData\Bivouac\Agent')){
+  Assert-Ordinary $directory
+  if(Test-Path -LiteralPath $directory){
+   $entries=@(Get-ChildItem -Force -LiteralPath $directory)
+   if($entries.Count -gt 32){exit 1}
+   foreach($entry in $entries){
+    if($entry.PSIsContainer -or $entry.Name -notin @('agent.log','agent.log.1','.receive.lock','jit','launched','launch-mode','launch-mode.new','detached.claim','cancelled','launch-once','listener.json','runner.exit','lab-probe.json','lab-grandchild.json','lab-grandchild.json.new','lab-agent.json','lab-agent.json.new','lab-task-request.json','lab-agent-request.json','lab-task-complete.json','lab-agent-complete.json','lab-task-request.json.new','lab-agent-request.json.new','lab-task-complete.json.new','lab-agent-complete.json.new','lab-probe.json.new')){exit 1}
+    Assert-Ordinary $entry.FullName;Remove-Item -Force -LiteralPath $entry.FullName
+   }
+   if($directory -like '*\Guest'){Remove-Item -LiteralPath $directory}
+  }
  }
+ if(!(Get-ScheduledTask -TaskName 'bivouac-guest-agent' -ErrorAction SilentlyContinue)){exit 1}
+ if(!(Get-ScheduledTask -TaskName 'bivouac-guest-runner' -ErrorAction SilentlyContinue)){exit 1}
  $marker=Join-Path $base 'hcs-spike-prepared.json';Assert-Ordinary $marker
  if(Test-Path -LiteralPath $marker){exit 1}
  $metadata=[ordered]@{name=$data.name;user=$data.user;probe_sha256=$data.probe_sha256;validation_sha256=$data.validation_sha256;autologon_sha256=$data.autologon_sha256}
  [IO.File]::WriteAllText($marker,($metadata|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
- # No further SSH process may run after removing host keys: OpenSSH can regenerate
- # missing keys when it spawns another server process. Shutdown uses this session.
+ # Keep both tasks for the next cold boot.
  & 'C:\Windows\System32\shutdown.exe' @('/s','/t','5','/d','p:0:0') *> $null
  if($LASTEXITCODE){exit 1}
  [Console]::Out.Write('sanitized-shutdown-scheduled');[Console]::Out.Flush()

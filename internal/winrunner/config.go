@@ -1,6 +1,6 @@
 // Package winrunner runs the official Actions runner inside a disposable
 // Windows guest. Its fixed guest adapter (`bivouac guest windows <mode>`) and
-// fixed control scripts are shared by every Windows-guest provider; each
+// Go modes are shared by Windows-guest providers; each
 // provider delivers them over its own authenticated transport.
 //
 // No instance value is interpolated into a script or command line: settings
@@ -78,7 +78,8 @@ func VerifyArchive(path, expected string) error {
 		return errors.New("invalid bounded runner archive")
 	}
 	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
+	n, err := io.Copy(hash, io.LimitReader(f, 512<<20+1))
+	if err != nil || n > 512<<20 || n != stat.Size() {
 		return errors.New("read runner archive")
 	}
 	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expected) {

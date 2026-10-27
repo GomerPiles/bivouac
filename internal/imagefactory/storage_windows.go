@@ -13,11 +13,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/hcs"
@@ -26,6 +24,7 @@ import (
 )
 
 type record struct {
+	StorageIntents   map[string]bool   `json:"storage_intents,omitempty"`
 	BuildID          string            `json:"build_id"`
 	Workspace        string            `json:"workspace"`
 	Name             string            `json:"name"`
@@ -64,7 +63,8 @@ func (r *record) setupFailure(facts *Inspection) error {
 
 func (r *record) disk() string { return filepath.Join(r.Workspace, "disk.vhdx") }
 func (r *record) scriptData() map[string]string {
-	return map[string]string{"root": filepath.Dir(r.Workspace), "instance_id": r.BuildID, "disk": r.disk()}
+	intents, _ := json.Marshal(r.StorageIntents)
+	return map[string]string{"root": filepath.Dir(r.Workspace), "instance_id": r.BuildID, "disk": r.disk(), "windows_guid": r.Manifest.Media.Layout.WindowsGUID, "esp_guid": r.Manifest.Media.Layout.ESPGUID, "storage_intents": string(intents)}
 }
 func (r *record) save() error {
 	return replaceJSON(filepath.Join(filepath.Dir(r.Workspace), r.BuildID+".json"), r)
@@ -156,6 +156,9 @@ func replaceJSON(path string, v any) error {
 	return os.Rename(tmp, path)
 }
 func publishManifest(path string, m Manifest) error {
+	if !m.tasksValid() {
+		return errors.New("publication requires both task definitions")
+	}
 	tmp := path + ".tmp"
 	if err := writeJSON(tmp, m); err != nil {
 		return err
@@ -173,9 +176,8 @@ func publishManifest(path string, m Manifest) error {
 	return windows.MoveFileEx(from, to, windows.MOVEFILE_WRITE_THROUGH)
 }
 func copyPinned(ctx context.Context, source, dest, expected string, limit int64) (int64, string, error) {
-	if err := winhost.CheckProtected(source); err != nil {
-		return 0, "", errors.New("image input must be administrator-protected")
-	}
+	// A deny-write/delete handle pins the input while copying; only the new
+	// protected workspace copy is used by elevated tools after hash verification.
 	in, err := openReadOnlyPinned(source)
 	if err != nil {
 		return 0, "", err
@@ -237,41 +239,6 @@ func copyContext(ctx context.Context, w io.Writer, r io.Reader, limit int64) (in
 			return total, errors.New("input read failed")
 		}
 	}
-}
-
-func ownerTemplate(c Config) (string, error) {
-	path := filepath.Join(filepath.Dir(c.Source), ".bivouac-template-owner.json")
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return missingOwner(c.ExpectedTemplate)
-	}
-	if err := winhost.CheckProtected(path); err != nil {
-		return "", errors.New("template owner record must be protected")
-	}
-	f, err := openReadOnlyPinned(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	b, err := io.ReadAll(io.LimitReader(f, 65537))
-	if err != nil || len(b) > 65536 {
-		return "", errors.New("template owner record exceeds bound")
-	}
-	var owner struct {
-		Template string
-		SHA256   string
-		Phase    string
-	}
-	if json.Unmarshal(b, &owner) != nil || len(owner.Template) == 0 || len(owner.Template) > 128 || strings.ContainsAny(owner.Template, "\\/:\x00\r\n") || !strings.EqualFold(owner.SHA256, c.SourceSHA256) || owner.Phase != "export-complete" || (c.ExpectedTemplate != "" && owner.Template != c.ExpectedTemplate) {
-		return "", errors.New("template owner record does not match configured source")
-	}
-	return owner.Template, nil
-}
-
-func missingOwner(expected string) (string, error) {
-	if expected != "" {
-		return "", errors.New("expected template requires a source owner record")
-	}
-	return "", nil
 }
 
 type HostScriptError struct{ Step int }
@@ -336,30 +303,34 @@ func runHost(ctx context.Context, script string, data any, output bool) ([]byte,
 	if err = protect(workspace, path, false); err != nil {
 		return nil, err
 	}
-	return executeHost(ctx, path, b, output)
+	return executeHostWithJob(ctx, path, b, output, hostWorkerName(workspace))
+}
+
+func hostWorkerName(workspace string) string {
+	return `Global\bivouac-image-` + hashBytes([]byte(strings.ToLower(workspace)))[:32]
 }
 
 func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byte, error) {
+	return executeHostWithJob(ctx, path, b, output, "")
+}
+
+func executeHostWithJob(ctx context.Context, path string, b []byte, output bool, jobName string) ([]byte, error) {
 	system, err := windows.GetSystemDirectory()
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
-	cmd.Stdin = bytes.NewReader(b)
-	cmd.Stderr = io.Discard
-	cmd.Stdout = io.Discard
+	argv := []string{filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path}
 	var result boundedOutput
+	writer := io.Discard
 	if output {
-		cmd.Stdout = &result
+		writer = &result
 	}
-	runErr := cmd.Run()
+	code, runErr := runHostProcess(ctx, argv, hostPowerShellEnvironment(system), b, writer, jobName)
 	var errResult error
-	if runErr != nil {
+	if runErr != nil || code != 0 {
 		step := 65535
-		var exit *exec.ExitError
-		if errors.As(runErr, &exit) && exit.ExitCode() > 0 {
-			step = exit.ExitCode()
+		if code > 0 {
+			step = int(code)
 		}
 		errResult = &HostScriptError{Step: step}
 	}
@@ -368,6 +339,18 @@ func executeHost(ctx context.Context, path string, b []byte, output bool) ([]byt
 	}
 	payload, frameErr := framedResult(result.data)
 	return payload, errors.Join(errResult, frameErr)
+}
+
+// Do not inherit PowerShell 7's incompatible module path when launching 5.1,
+// or load a user-writable module into the elevated image factory.
+func hostPowerShellEnvironment(system string) []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "PSMODULEPATH=") {
+			env = append(env, entry)
+		}
+	}
+	return append(env, "PSModulePath="+filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"))
 }
 
 type boundedOutput struct{ data []byte }
@@ -421,7 +404,7 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 		if err != nil {
 			return nil, err
 		}
-		driver := Driver{Name: filepath.Base(source), INFVersions: map[string]string{}}
+		driver := Driver{Name: filepath.Base(source), INFVersions: map[string]string{}, Files: map[string]string{}, Directories: []string{}}
 		err = fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return errors.New("cannot read GPU driver tree")
@@ -437,6 +420,9 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 			}
 			target := filepath.Join(r.Workspace, "drivers", fmt.Sprint(i), filepath.FromSlash(path))
 			if entry.IsDir() {
+				if path != "." {
+					driver.Directories = append(driver.Directories, filepath.FromSlash(path))
+				}
 				return os.MkdirAll(target, 0700)
 			}
 			if driverRuntimeLog(path) {
@@ -468,6 +454,11 @@ func copyDrivers(ctx context.Context, c Config, r *record) ([]Driver, error) {
 			if n != info.Size() {
 				return errors.New("GPU driver changed during copy")
 			}
+			_, digest, err := hashFile(ctx, target)
+			if err != nil {
+				return err
+			}
+			driver.Files[filepath.FromSlash(path)] = digest
 			if strings.EqualFold(filepath.Ext(path), ".inf") {
 				infCount++
 				if infCount > 32 {
@@ -524,4 +515,22 @@ func waitAbsent(ctx context.Context, api *hcs.API, name string) error {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
+}
+
+// Only the Windows factory encodes the driver plan and checks task facts.
+func encodeDriverPlan(drivers []Driver) ([]byte, error) {
+	type tree struct {
+		Name        string            `json:"name"`
+		Files       map[string]string `json:"files"`
+		Directories []string          `json:"directories"`
+	}
+	plan := make([]tree, 0, len(drivers))
+	for _, driver := range drivers {
+		plan = append(plan, tree{driver.Name, driver.Files, driver.Directories})
+	}
+	return json.Marshal(plan)
+}
+
+func (m Manifest) tasksValid() bool {
+	return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() && m.AutologonAccountMatches
 }

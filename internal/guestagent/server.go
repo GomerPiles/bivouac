@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package guestagent
 
@@ -8,11 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 	"os/exec"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -23,15 +21,6 @@ const (
 	// command exits, when a background child it started keeps a pipe open.
 	outputDelay = 10 * time.Second
 )
-
-// RunAgent is `bivouac guest-agent`: it serves the host on Port until ctx ends.
-func RunAgent(ctx context.Context) error {
-	l, err := listen(Port)
-	if err != nil {
-		return err
-	}
-	return Serve(ctx, l)
-}
 
 // Listener yields host connections. Implementations drop connections from
 // any peer other than the host.
@@ -83,27 +72,15 @@ func handle(ctx context.Context, conn io.ReadWriteCloser) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, req.Argv[0], req.Argv[1:]...)
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
-	cmd.Stdout = frameWriter{w: w, kind: frameStdout}
-	cmd.Stderr = frameWriter{w: w, kind: frameStderr}
-	cmd.WaitDelay = outputDelay
-	var stdin io.WriteCloser
-	if req.Stdin {
-		if stdin, err = cmd.StdinPipe(); err != nil {
-			_ = w.frame(frameFailed, []byte("stdin unavailable"))
-			return
-		}
-	}
-	if err := cmd.Start(); err != nil {
+	cmd, stdin, err := startCommand(ctx, req, frameWriter{w: w, kind: frameStdout}, frameWriter{w: w, kind: frameStderr})
+	if err != nil {
 		_ = w.frame(frameFailed, []byte("command did not start"))
 		return
 	}
+	defer func() { _ = conn.Close(); cmd.Close() }()
 	go readStdin(conn, stdin, cancel)
-	err = cmd.Wait()
-	if cmd.ProcessState == nil {
+	status, err := cmd.Wait()
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		_ = w.frame(frameFailed, []byte("command lost"))
 		return
 	}
@@ -114,7 +91,7 @@ func handle(ctx context.Context, conn io.ReadWriteCloser) {
 		return
 	}
 	var code [4]byte
-	binary.BigEndian.PutUint32(code[:], uint32(exitCode(cmd.ProcessState))) //nolint:gosec // Two's complement on purpose.
+	binary.BigEndian.PutUint32(code[:], uint32(status)) //nolint:gosec // Two's complement on purpose.
 	_ = w.frame(frameExit, code[:])
 }
 
@@ -147,11 +124,9 @@ func readStdin(conn io.Reader, stdin io.WriteCloser, cancel func()) {
 	}
 }
 
-func exitCode(state *os.ProcessState) int32 {
-	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return 128 + int32(ws.Signal()) //nolint:gosec // Signal numbers are small.
-	}
-	return int32(state.ExitCode()) //nolint:gosec // Exit codes fit in a byte.
+type commandProcess interface {
+	Wait() (int32, error)
+	Close()
 }
 
 type lockedWriter struct {
@@ -176,6 +151,16 @@ func (l *lockedWriter) frame(kind byte, p []byte) error {
 type frameWriter struct {
 	w    *lockedWriter
 	kind byte
+}
+
+// Close unblocks a Windows output pump on cancellation or its output deadline.
+// Closing the connection does not take the frame mutex: a stalled write may
+// hold it. Ordinary completion still sends its exit frame before closing.
+func (f frameWriter) Close() error {
+	if closer, ok := f.w.w.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 func (f frameWriter) Write(p []byte) (int, error) {

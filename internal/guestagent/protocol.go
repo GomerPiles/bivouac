@@ -23,6 +23,19 @@ import (
 // Port is the guest agent's vsock port.
 const Port uint32 = 7473
 
+// ServiceID is the fixed Windows HvSocket service for this protocol. Listener
+// and host dialer share it; registration/admission belongs to the VM host.
+const ServiceID = "54f2299e-45e4-4605-b3ed-03d3d5fbea6a"
+
+// WindowsPath is the protected image installation shared by the provider and
+// image factory. Delivered adapters use a separate disposable-guest path.
+const WindowsPath = `C:\Program Files\Bivouac\bivouac.exe`
+
+// WindowsContract pins the Windows agent CLI, receiver and runner adapter modes.
+// Change it whenever a host relies on different Windows command semantics;
+// Version independently describes only the shared framing protocol.
+const WindowsContract = 2
+
 // Version is the request format; the agent refuses any other and names its
 // own in the failure frame, so a host fails fast on an outdated baseline.
 const Version = 1

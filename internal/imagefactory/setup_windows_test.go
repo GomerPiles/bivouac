@@ -101,3 +101,37 @@ func TestSpecializeFailureStep(t *testing.T) {
 		t.Fatal("specialize failure marker")
 	}
 }
+
+func TestLegacyRemovalWhenAbsent(t *testing.T) {
+	_, status := setupFixture(t)
+	start := strings.Index(guestSpecialize, "function Write-SetupStep")
+	end := strings.Index(guestSpecialize[start:], "\n}\n") + start + 3
+	mocks := `
+ $data=[Console]::In.ReadToEnd()|ConvertFrom-Json;$fixturePath=$data.path
+ function Get-Service {param($Name,$ErrorAction)}
+ function Test-Path {param($LiteralPath)}
+ function Get-ChildItem {param($LiteralPath,[switch]$Directory,[switch]$Force)}
+ function Get-PnpDevice {}
+ function Get-WindowsDriver {param([switch]$Online,[switch]$All)}
+ function Get-ScheduledTask {param($TaskName,$ErrorAction)}
+ function New-ItemProperty {param($Path,$Name,$Value,$PropertyType,[switch]$Force)}
+ function Get-VideoSnapshot { @{node_count=1;nodes=@()} }
+ function Enable-VideoNodes {param($Snapshot,$Retry) $script:videoEnableResult=@{returned=1} }
+ function Get-WindowsCapability {param([switch]$Online,$Name) @{State='NotPresent'} }
+ function Remove-WindowsCapability {throw 'must not service an absent capability'}
+ `
+	specialize := guestSpecialize[:start] + fixtureStepWriter(t, guestSpecialize) + guestSpecialize[end:]
+	capStart := strings.Index(guestSetup, "$step=39;")
+	capEnd := strings.Index(guestSetup, "$step=45;")
+	if capStart < 0 || capEnd <= capStart {
+		t.Fatal("removal fragment missing")
+	}
+	file := filepath.Join(t.TempDir(), "absent-removal.ps1")
+	if e := os.WriteFile(file, []byte(mocks+specialize+guestSetup[capStart:capEnd]), 0600); e != nil {
+		t.Fatal(e)
+	}
+	input, _ := json.Marshal(map[string]string{"path": status})
+	if _, e := executeHost(t.Context(), file, input, false); e != nil {
+		t.Fatal("absent component removal failed", e)
+	}
+}

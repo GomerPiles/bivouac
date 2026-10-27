@@ -84,12 +84,6 @@ const jobCompletedHook = `& 'C:\ProgramData\Bivouac\Guest\bivouac.exe' guest win
 exit 0
 `
 
-type listenerIdentity struct {
-	PID      uint32 `json:"pid"`
-	Creation uint64 `json:"creation"`
-	Image    string `json:"image"`
-}
-
 func readGuestFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -103,11 +97,14 @@ func readGuestFile(path string, limit int64) ([]byte, error) {
 	return data, nil
 }
 func writeGuestJSON(name string, value any) error {
+	return writeGuestJSONAt(guestBase, name, value)
+}
+func writeGuestJSONAt(base, name string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(guestBase)
+	root, err := os.OpenRoot(base)
 	if err != nil {
 		return err
 	}
@@ -119,12 +116,15 @@ func writeGuestJSON(name string, value any) error {
 	return root.Rename(tmp, name)
 }
 func loadGuestConfig() (Config, error) {
+	return loadGuestConfigFile("config.json")
+}
+
+func loadGuestConfigFile(name string) (Config, error) {
 	var cfg Config
-	self, err := os.Executable()
-	if err != nil || !strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac.exe")) {
-		return cfg, errors.New("guest adapter must run from the fixed disposable-guest installation")
+	if err := checkGuestExecutable(); err != nil {
+		return cfg, err
 	}
-	data, err := readGuestFile(filepath.Join(guestBase, "config.json"), 65536)
+	data, err := readGuestFile(filepath.Join(guestBase, name), 65536)
 	if err != nil {
 		return cfg, err
 	}
@@ -138,15 +138,52 @@ func loadGuestConfig() (Config, error) {
 	return cfg, nil
 }
 
+func checkGuestExecutable() error {
+	self, err := os.Executable()
+	if err != nil || (!strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac.exe")) && !strings.EqualFold(filepath.Clean(self), filepath.Join(guestBase, "bivouac-helper.exe"))) {
+		return errors.New("guest adapter must run from the fixed disposable-guest installation")
+	}
+	return nil
+}
+
 // RunGuest is the fixed helper copied into a disposable VM. It never
-// loads the host config or touches its credential store. Interactive methods
-// are launched by guest Task Scheduler in the logged-in user's session.
+// loads the host config or touches its credential store. The agent supplies
+// the interactive session; the listener is explicitly detached from the request.
 func RunGuest(ctx context.Context, mode string, out io.Writer) error {
+	if mode == "detached" {
+		return guestDetached(ctx)
+	}
+	if strings.HasPrefix(mode, "lab-") {
+		return runLabProbe(ctx, mode, out)
+	}
+	if mode == "prepare" {
+		return guestPrepare(ctx, out)
+	}
+	if mode == "preflight" {
+		cfg, err := loadGuestConfigFile("bivouac-config.json")
+		if err != nil {
+			return err
+		}
+		return guestPreflight(ctx, cfg, out)
+	}
 	cfg, err := loadGuestConfig()
 	if err != nil {
 		return err
 	}
 	switch mode {
+	case "start":
+		return guestStart(ctx, cfg)
+	case "stop":
+		root, err := os.OpenRoot(guestBase)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = root.Close() }()
+		return stopGuest(root, func() error { return guestCancel(cfg) })
+	case "clock":
+		return guestClock(os.Stdin, out)
+	case "cache-listen":
+		return cacheListen(ctx, guestStdio{os.Stdin, out}, func(port cachePort) error { return writeGuestJSON("cache-port.json", port) })
 	case "cache-setup":
 		data, err := io.ReadAll(io.LimitReader(os.Stdin, 32<<10+1))
 		if err != nil {
@@ -168,26 +205,14 @@ func RunGuest(ctx context.Context, mode string, out io.Writer) error {
 		}
 		_, err = file.Write(jit)
 		return errors.Join(err, file.Close())
-	case "probe":
-		session, desktop, err := interactiveDesktop()
-		if err != nil {
-			return err
-		}
-		return writeGuestJSON("desktop.json", struct {
-			Ready   bool   `json:"ready"`
-			Session uint32 `json:"session"`
-			Desktop string `json:"desktop"`
-		}{true, session, desktop})
 	case "listener":
-		return guestListener(ctx, cfg)
+		return guestListener(ctx, cfg, listenerOptions{base: guestBase, desktop: func() error { _, _, err := interactiveDesktop(); return err }, cancel: func() error { return guestCancel(cfg) }})
 	case "status":
 		status, err := guestRunnerStatus(cfg)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(status)
-	case "cancel":
-		return guestCancel(cfg)
 	case "hook":
 		runID, err := strconv.ParseInt(os.Getenv("GITHUB_RUN_ID"), 10, 64)
 		if err != nil || runID < 1 {
@@ -249,34 +274,43 @@ func processIdentity(pid uint32) (listenerIdentity, bool, error) {
 	if code != stillActive {
 		return listenerIdentity{}, false, nil
 	}
+	identity, err := identityFromHandle(pid, handle)
+	return identity, err == nil, err
+}
+
+func identityFromHandle(pid uint32, handle windows.Handle) (listenerIdentity, error) {
 	var created, exited, kernel, user windows.Filetime
 	if err := windows.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
-		return listenerIdentity{}, false, err
+		return listenerIdentity{}, err
 	}
 	var image [32768]uint16
 	length := uint32(len(image))
 	if err := windows.QueryFullProcessImageName(handle, 0, &image[0], &length); err != nil {
-		return listenerIdentity{}, false, err
+		return listenerIdentity{}, err
 	}
-	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, true, nil
+	return listenerIdentity{PID: pid, Creation: uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime), Image: windows.UTF16ToString(image[:length])}, nil
 }
 func recordedListener(cfg Config) (listenerIdentity, bool, error) {
-	var identity listenerIdentity
 	data, err := readGuestFile(filepath.Join(guestBase, "listener.json"), 4096)
 	if errors.Is(err, os.ErrNotExist) {
-		return identity, false, nil
+		return listenerIdentity{}, false, nil
 	}
 	if err != nil {
-		return identity, false, err
+		return listenerIdentity{}, false, err
 	}
+	return checkListenerIdentity(cfg, data, processIdentity)
+}
+
+func checkListenerIdentity(cfg Config, data []byte, inspect func(uint32) (listenerIdentity, bool, error)) (listenerIdentity, bool, error) {
+	var identity listenerIdentity
 	if json.Unmarshal(data, &identity) != nil || identity.PID == 0 || identity.Creation == 0 || !strings.EqualFold(identity.Image, filepath.Join(cfg.RunnerDir, "bin", "Runner.Listener.exe")) {
 		return identity, false, errors.New("recorded listener identity differs")
 	}
-	current, live, err := processIdentity(identity.PID)
+	current, live, err := inspect(identity.PID)
 	if err != nil || !live {
 		return identity, live, err
 	}
-	if current.Creation != identity.Creation || !strings.EqualFold(current.Image, identity.Image) {
+	if current.PID != identity.PID || current.Creation != identity.Creation || !strings.EqualFold(current.Image, identity.Image) {
 		return identity, false, errors.New("listener PID was reused")
 	}
 	return identity, true, nil
@@ -335,18 +369,41 @@ func (w *guestLog) Write(data []byte) (int, error) {
 	_, err := w.sink.Write(data)
 	return n, err
 }
-func guestListener(ctx context.Context, cfg Config) error {
-	if _, _, err := interactiveDesktop(); err != nil {
+
+type listenerOptions struct {
+	base            string
+	desktop, cancel func() error
+}
+
+func guestListener(ctx context.Context, cfg Config, options listenerOptions) error {
+	base, desktop, cancel := options.base, options.desktop, options.cancel
+	root, err := os.OpenRoot(base)
+	if err != nil {
 		return err
 	}
-	guard, err := os.OpenFile(filepath.Join(guestBase, "launch-once"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	defer func() { _ = root.Close() }()
+	write := func(name string, value any) error { return writeGuestJSONAt(base, name, value) }
+	check := func() (bool, error) { return guestFileExists(root, "cancelled") }
+	recordCancelled := func() error {
+		return write("runner.exit", struct {
+			Code int `json:"code"`
+		}{1})
+	}
+	// This early check also keeps a cancelled task from consuming private input.
+	if err := listenerCancellation(check, recordCancelled); err != nil {
+		return err
+	}
+	if err := desktop(); err != nil {
+		return err
+	}
+	guard, err := os.OpenFile(filepath.Join(base, "launch-once"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return errors.New("listener launch is single-use")
 	}
 	if err := guard.Close(); err != nil {
 		return err
 	}
-	jit, err := readGuestFile(filepath.Join(guestBase, "jit"), 128<<10)
+	jit, err := readGuestFile(filepath.Join(base, "jit"), 128<<10)
 	if err != nil {
 		return err
 	}
@@ -354,21 +411,21 @@ func guestListener(ctx context.Context, cfg Config) error {
 	if len(jit) == 0 {
 		return errors.New("empty guest JIT configuration")
 	}
-	if err := os.Remove(filepath.Join(guestBase, "jit")); err != nil {
+	if err := os.Remove(filepath.Join(base, "jit")); err != nil {
 		return err
 	}
 	path, err := rebuiltPath()
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(guestBase, jobHookName), []byte(jobHook), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(base, jobHookName), []byte(jobHook), 0o600); err != nil {
 		return err
 	}
-	completedHook := filepath.Join(guestBase, "job-completed.ps1")
+	completedHook := filepath.Join(base, "job-completed.ps1")
 	if err := os.WriteFile(completedHook, []byte(jobCompletedHook), 0o600); err != nil {
 		completedHook = ""
 	}
-	output, err := os.OpenFile(filepath.Join(guestBase, "runner.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	output, err := os.OpenFile(filepath.Join(base, "runner.log"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -390,11 +447,11 @@ func guestListener(ctx context.Context, cfg Config) error {
 	if policy := runnerExecutionPolicy(inheritedPolicy, configuredExecutionPolicy()); policy != "" {
 		cmd.Env = append(cmd.Env, executionPolicyVariable+"="+policy)
 	}
-	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(guestBase, jobHookName))
+	cmd.Env = append(cmd.Env, "PATH="+path, "ACTIONS_RUNNER_INPUT_JITCONFIG="+string(jit), "ACTIONS_RUNNER_HOOK_JOB_STARTED="+filepath.Join(base, jobHookName))
 	if completedHook != "" {
 		cmd.Env = append(cmd.Env, "ACTIONS_RUNNER_HOOK_JOB_COMPLETED="+completedHook)
 	}
-	cacheEnv, closeCache, err := cache.GuestEnvironment(guestBase)
+	cacheEnv, closeCache, err := cache.GuestEnvironment(base)
 	if err != nil {
 		return err
 	}
@@ -403,6 +460,9 @@ func guestListener(ctx context.Context, cfg Config) error {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_CONSOLE}
+	if err := listenerCancellation(check, recordCancelled); err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return errors.New("official guest runner could not start")
 	}
@@ -418,19 +478,19 @@ func guestListener(ctx context.Context, cfg Config) error {
 		_ = cmd.Wait()
 		return errors.New("listener identity could not be recorded")
 	}
-	if err := writeGuestJSON("listener.json", identity); err != nil {
+	if err := publishListenerAndCheckCancellation(root, func() error { return write("listener.json", identity) }, cancel); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return err
+		return errors.Join(err, recordCancelled())
 	}
-	stopPerformance := perf.StartRecorder(ctx, guestBase, cfg.RunnerDir)
+	stopPerformance := perf.StartRecorder(ctx, base, cfg.RunnerDir)
 	defer stopPerformance()
 	waitErr := cmd.Wait()
 	code := 0
 	if waitErr != nil {
 		code = cmd.ProcessState.ExitCode()
 	}
-	return writeGuestJSON("runner.exit", struct {
+	return write("runner.exit", struct {
 		Code int `json:"code"`
 	}{code})
 }

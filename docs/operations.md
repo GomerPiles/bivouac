@@ -180,11 +180,12 @@ asks for an isolated network on every guest.
 The host cache supports the optional release proxy and upload storage.
 With `[cache] enabled = true`, both `listen = "127.0.0.1:0"`
 and `guest_host = "127.0.0.1"` must use literal loopback (these are the Windows
-defaults). A separate authenticated SSH client over HvSocket carries the cache;
+defaults). A separate bivouac agent Duplex command over HvSocket carries the cache;
 no guest NIC exception is needed. Setup precedes JIT, and uncertain removal of
 partial settings refuses launch. Cache transport loss falls back upstream
-without reattachment. Archive and release caching passed live on HCS guests;
-upload storage has not, so leave it off on Windows hosts. Use the isolated cache validation fixture
+without reattachment. Archive and release caching passed live on the previous
+SSH-based HCS provider; the new agent relay has test coverage only. Upload
+storage has not been validated live, so leave it off on Windows hosts. Use the isolated cache validation fixture
 below for archive/release cold and warm hits, outage fallback and uploads.
 
 For separately authorized end-to-end validation, reserve host resources and use a
@@ -198,73 +199,260 @@ and check that the second job runs on a fresh guest. Then run
 service. Delete the branch and its workflow runs, and confirm no guest switch
 adapter remains before turning production CI On.
 
+HCS startup measurements appear at Info in the daemon log as one
+`hcs readiness timings` record per WaitReady call, including failed calls.
+`*_ms` fields are host-monotonic step durations; `*_since_create_ms` fields
+are completion milestones from this provider's Create call. Create milestones
+are omitted after adoption because a monotonic origin cannot survive restart.
+Absent fields mean a step was skipped or not reached, not a zero duration.
+The stages cover `vmhost_create`, `session`, `network`, `agent_dial`, `agent_proof`,
+`config`, `delivery_config`, `delivery_helper`, optional `delivery_runner_archive`,
+`preflight`, `console_proof`, `prepare`, `desktop_proof` and `clock_sync`.
+Console/desktop proof durations cover reply validation; guest proof work is inside
+preflight or prepare. `wait_ready_total_ms` includes the whole readiness call.
+`agent_dial_retries` counts failed dial attempts, and signed `clock_skew_ms`
+is guest UTC minus host UTC after correction. `failure_step` is a fixed stage
+name; all measurement values are numbers, with no guest text or identities.
+
+`hcs launch timings` separately records cache setup (including any fallback),
+JIT delivery, listener process start and launch total. A disabled cache has a
+near-zero setup duration. `hcs listening timings` records `jit_to_listening_ms`
+once, at the first existing status poll observing listening or running, measured
+from the start of JIT delivery, after cache setup. This includes poll latency;
+process start alone does not prove listening. It is absent if listening is never
+observed or the manager restarts. No additional guest commands or polls run.
+Durations and milestones overlap: do not add milestones or totals to step
+durations. The network lab's per-run `readiness.spans_ms` and optional
+`readiness.failure_step` contain the identical readiness report, alongside its
+existing `timings_ms` VM host/batch measurements, even on readiness failure.
+Compare interleaved cold boots at equal resources and quiet host load using
+the separately authorized lab procedure below.
+
+Adoption checks current VM host ownership and running state, then reconnects to
+the guest's runtime ID over HvSocket. It requires no host-key file or per-guest
+secret. It never reads or removes the previous provider's host-key files under
+the state directory's `hcs\<provider>` folder, which a rollback still uses;
+delete them by hand once rollback to that provider is no longer needed. Status uses one agent command per existing poll; JIT and start are never
+replayed after an uncertain outcome. A protocol-version refusal is terminal.
+This provider requires a matching bivouac-agent image; old images are unsupported.
+Rollback is the previous manager binary, VM host service binary and image. The factory and vmhost lab batch below
+use the same agent protocol. The lab batch has passed on a contract-2 image;
+end-to-end jobs on this runtime have not run live.
+
+### Coordinated HCS cutover and rollback
+
+A matching image is required: the VM host reports each adjacent protected
+manifest's `windows_contract`, and doctor/activation refuse missing or different
+contracts with a fixed message. The manager does not read protected image files.
+Change the Windows contract when the agent CLI, receiver or adapter modes change;
+the shared framing Version has a separate purpose.
+
+Drain with CI Off (`bivouac off --wait`) and confirm no HCS guests or reservations
+remain before replacing anything. Stop the empty VM host service. Switch the
+bivouac manager binary, VM host service binary and newly built image together,
+then check doctor/activation before enabling CI. Do not replace a running binary
+or erase ownership journals. Rollback requires the previous trio together.
+This procedure does not authorize a cutover or a live validation run.
+
 ## Direct HCS image factory
 
-`bivouac image build` prepares an image for the `hcs` provider from a
-generalized App Sandbox template. `bivouac image inspect` runs the same copy
-and offline checks without booting, so a template can be checked first. Both
-run elevated in the foreground (one UAC prompt each), drive HCS directly and
-attach no network adapter, so production CI may keep running. Neither touches
+`bivouac image build` prepares an agent image for the `hcs` provider from a
+SHA-256-pinned Windows installation ISO. `bivouac image inspect` hashes and
+inventories that ISO, lists images and reports the selected image as JSON,
+without native mounts, disks or HCS calls. Both run elevated in the foreground.
+Build drives HCS directly and attaches no network adapter. Neither touches
 the VM host service, its journal or CI mode.
 
-Every image drops App Sandbox's display driver and uses HCS synthetic video
-with GPU-PV. This branch's provider and lab require these newly built images.
-Rollback uses the previously deployed binary with its previously built image.
+Images contain bivouac's guest agent and use HCS synthetic video with GPU-PV.
+Specialize removes legacy components and MSI server installations; FirstLogon removes the Windows OpenSSH server capability through servicing. The inbox client and ssh-agent remain intact.
+Runner ZIP, GPU driver directories and render probe remain explicit pinned inputs.
+Rollback uses the previous manager binary, VM host service binary and image together.
 
-The template is only read. The factory copies it into its own workspace,
-hashing as it copies, and never changes the template's file, directory, ACL
-or owner record. It mounts, grants and boots only files it created.
+Pinned input files (ISO, runner ZIP, render probe and factory executable) do
+not need administrator-protected ACLs. The factory hashes exactly the bytes
+it writes to its own protected copy in one pass and refuses a mismatch before
+using it. A deny-write/delete input handle pins each file during the copy.
+Driver-directory validation remains separate.
+Only the matching owned copy is mounted read-only without a drive letter.
+The factory creates its own dynamic VHDX and GPT layout (200 MiB FAT32 ESP,
+16 MiB MSR, remaining NTFS Windows; 512-byte sectors; no recovery partition).
+If formatting assigns an ESP or Windows drive letter, the factory attempts
+to remove that access path only from its proven owned partition, then fails
+the build at step 41 or 43. Removal is best effort; a removal error preserves
+the original failure step.
+An MSR that GPT initialization adds by itself is removed first and recorded
+as `automatic_msr_removed`.
+It verifies disk identity before initialization, applies the selected image
+with DISM integrity checking, then copies the applied image's normal EFI files,
+fonts and resources to the ESP. A valid embedded UEFI CA 2023
+EFI_EX\bootmgfw_EX.efi is preferred for both bootmgfw.efi and bootx64.efi,
+with bootmgfw.efi.mui mapped from each EFI_EX language's bootmgfw_EX.efi.mui.
+If the EX file is absent, the normal embedded PCA 2011 loader is used.
+A present EX file with an invalid or different signer refuses. Every normal
+boot-manager language must have its EX counterpart for the 2023 selection.
+The runtime host's HCS MicrosoftWindows Secure Boot template must trust
+Windows UEFI CA 2023 to boot an image with the 2023 generation.
+Other EFI files, Fonts (not Fonts_EX) and Resources retain their mapping.
+The observed /bootex log explicitly used normal Fonts; further EX remappings
+could not be confirmed and are not inferred. The factory promotes
+boot.pnd.stl to boot.stl and creates the empty EFI\Microsoft\Recovery directory.
+Bounded traversal refuses links.
+BCDBoot is not invoked: lab runs copied boot files but collided with the host's
+BCD00000000 hive while creating the target store.
+Instead, BCDEdit `/createstore <owned ESP BCD path>` creates an empty non-system
+store. Every later command names that file with `/store`; no host system-store
+commands or firmware objects are used. The existing offreg device pass marks
+this owned ESP hive as the guest's system store by setting Description\System
+to DWORD 1 and deleting Description\FirmwareModified. Before modification it
+accepts only exact REG_SZ KeyName=BCD00000000 and optional DWORD-1 System
+and/or FirmwareModified values. Windows specialize's BCD provider otherwise
+refuses the non-system store. BCD-Template is not an input.
+Only bootmgr and the recorded loader are created. No inheritance groups or
+inherit element are added: required values are set directly rather than
+reconstructing template settings. The loader uses the image locale, nx OptIn,
+Standard menu, recovery disabled, isolatedcontext Yes and
+allowedinmemorysettings 0x15000075. Bootmgr uses it as default and sole
+displayorder, timeout zero. BCDEdit sets no device element: when a VHD is
+attached on the host, its partition syntax encodes the host's VHD file path,
+which cannot resolve inside the guest. Offreg instead creates three REG_BINARY
+device elements containing exact 88-byte plain GPT partition devices from the
+recorded disk and ESP/Windows partition GUIDs. Existing device keys or a saved
+sibling refuse. It saves a new hive beside the store, closes the source and
+atomically replaces it on the owned ESP. All paths use workspace volume access
+paths; no temporary drive letters are selected, recorded or assigned.
+The fresh-file save follows Microsoft's [ORSaveHive contract](https://learn.microsoft.com/en-us/windows/win32/devnotes/orsavehive);
+replacement uses same-volume [MoveFileEx](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+with REPLACE_EXISTING and WRITE_THROUGH, without a cross-volume copy fallback.
+Boot helper steps are 61 copy, 62 BCDEdit, 63 device write, 64 artifacts/signatures
+and 65 complete verification. A `bcd_write` failure code is 1 open, 2 occupied
+sibling, 3 missing parent, 4 existing device key, 5 create, 6 value, 7 save,
+8 replace, 9 invalid identity, 10 unexpected failure, 11 Description schema,
+12 System write, 13 FirmwareModified deletion or 14 transaction-log cleanup;
+no hive bytes are reported. BCD.LOG* are removed only after this build's
+store replacement succeeds; an unreplaced store keeps its logs.
+Complete verification code 28 means Description differs from the exact
+two-value system-store schema (KeyName REG_SZ including its terminator,
+System DWORD 1), including any extra value/subkey.
+Both ESP loaders and the selected source require valid primary embedded
+signatures and byte-for-byte identity. Host catalogs are not consulted.
+The bounded PE certificate-table/SignedCms reader records primary issuer and
+signature count; [WinVerifyTrust](https://learn.microsoft.com/en-us/windows/win32/api/wintrust/ns-wintrust-wintrust_data)
+uses FILE choice, primary signature index zero, no UI/revocation and cache-only
+URL retrieval. Issuer codes: 0 invalid/unsigned, 1 PCA 2011, 2 UEFI CA 2023,
+3 PCA 2026, 4 other. Read-only offreg checks the resulting store's
+exact object set/types, descriptions, default, displayorder, timeout, locales,
+all loader settings and exact complete plain-device bytes. GUID substring
+matches are insufficient: nested VHD devices refuse.
+Class-4 merge directives and any other unexpected elements refuse.
+The manifest records scratch-store method, loader GUID,
+verification, generation (`uefi_ca_2023` or `pca_2011`), numeric issuer codes
+and signature counts, and BCDEdit/DISM versions.
+See Microsoft's [UEFI BCD settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi)
+and [boot option values](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set).
+Store creation, object creation and the displayorder/default/timeout commands
+follow the [BCDEdit command reference](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdedit-command-line-options).
+There is no resume or memdiag object. PR 3 must explicitly disable hibernation
+and fast startup in the image; disposable CI guests never hibernate. That guest
+policy is not implemented by this host-only change.
+The Recovery directory is a sibling of Boot, matching Microsoft's
+[EFI recovery location](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/add-a-hardware-recovery-button-to-start-windows-re);
+the copy log names its creation without spelling out the path. No recovery
+BCD or WinRE registration is created by the factory.
+At apply time there is no recovery partition and the factory does not register
+WinRE. Setup may register it on the OS volume; the manifest makes no claim
+about final installed WinRE state. Effective firmware trust must be validated on each runtime host.
 
 1. Write a JSON configuration in an administrator-protected directory. The
-   inputs must be protected too:
+   runner/probe inputs stay pinned by hash:
 
    ```json
    {
-     "source": "<template dir>\\disk.vhdx",
-     "source_sha256": "<the owner record's SHA256>",
-     "expected_template": "<template name>",
+     "iso": "D:\\ISOs\\Windows.iso",
+     "iso_sha256": "<64 hexadecimal digits>",
+     "edition_id": "Professional",
+     "disk_gb": 127,
      "guest_user": "ciuser",
      "image_root": "<protected parent>\\Images",
      "render_probe": {"source": "<path>", "sha256": "<hash>"},
-     "setup_assets": [
-       {"name": "appsandbox-agent.exe", "source": "<agent path>", "sha256": "<hash>"},
-       {"name": "appsandbox-input.exe", "source": "<input helper path>", "sha256": "<hash>"},
-       {"name": "appsandbox-displays.exe", "source": "<display helper path>", "sha256": "<hash>"}
-     ],
+     "setup_assets": [{"name": "RUNNER.ZIP", "source": "D:\\Assets\\runner.zip", "sha256": "<hash>"}],
      "drivers": ["C:\\Windows\\System32\\DriverStore\\FileRepository\\<GPU driver dir>"]
    }
    ```
 
-   - `setup_assets` must include `appsandbox-agent.exe`, `appsandbox-input.exe`
-     and `appsandbox-displays.exe`. `OpenSSH.msi` and `RUNNER.ZIP` are optional;
-     a template without a runner needs `RUNNER.ZIP`. All `AppSandboxVDD.*`
-     files and `devcon.exe` are unsupported. Specialize removes VDD devices
-     (including phantom nodes), packages and the agent's `drivers` directory,
-     enables synthetic video before Windows setup's following boot, and leaves
-     the agent disabled. For each matching node, it clears only the disabled
-     bit in existing ConfigFlags/CSConfigFlags values and tries pnputil enable,
-     falling back to Enable-PnpDevice. FirstLogon retries once for problem 22,
-     then verifies these changes before starting the agent. Specialize failures
-     use steps 80–85; 88 marks completion and
-     89 means FirstLogon could not confirm completion. Verification failures
-     distinguish video startup (35), VDD nodes (36), packages (37) and the
-     drivers directory (38). Numeric diagnostics include up to 32 matching
-     nodes (present or phantom), before/after specialize and at FirstLogon:
-     presence, problem code/DevNodeStatus, ConfigFlags, CSConfigFlags existence
-     and value, plus enable return/exit codes. These survive in the offline
-     facts, build record and error without device identifiers. FirstLogon
-     failure records its status and shuts down; the factory observes early
-     exit and inspects the owned disk rather than waiting for an absent agent.
-     The synchronous specialize command does not
-     explicitly request a reboot; confirm the template's setup-to-OOBE reboot
-     boundary and specialize-pass PnP availability during live validation.
-   - `drivers` names the host's GPU driver directories. The build copies
-     them into the image, so an image matches the host driver it was built
-     with.
+   - `RUNNER.ZIP` is the only accepted setup asset and is required. The render probe remains required. Legacy guest
+     agents, helpers, VDD/devcon files and OpenSSH installers are unsupported.
+   - Offline staging copies this factory executable to
+     `C:\Program Files\Bivouac\bivouac.exe`, protected for SYSTEM,
+     Administrators and TrustedInstaller, with Users read/execute. The manifest
+     records its hash and Windows contract. FirstLogon creates and starts the
+     `bivouac-guest-agent` logon task for the configured interactive user with
+     Highest, priority 4 (normal), three one-minute restarts and no execution
+     time limit. Its action runs the binary directly. Build files use
+     `C:\ProgramData\Bivouac\Image`.
+     It also registers `bivouac-guest-runner` with no trigger: the installed
+     binary runs `guest windows detached` on demand for the same elevated
+     interactive user, priority 4, IgnoreNew, no restart policy or time limit,
+     and no idle/network/battery conditions. Registration XML gives SYSTEM and
+     Administrators full control, registered without the principal's own entry
+     (`TASK_DONT_ADD_PRINCIPAL_ACE`). Preparation
+     and publication self-tests check both task definitions and the runner
+     task's current security descriptor. A matching contract-2 image is required.
+     Fresh media may omit `Windows\Panther`, `Windows\Setup\Scripts` and
+     `Windows\System32\HostDriverStore\FileRepository`. Staging creates each
+     missing parent as an ordinary directory with the guest parent's owner
+     and inherited DACL, refusing links and files. `Panther\Unattend` keeps
+     its protected SYSTEM/Administrators DACL; the agent and ProgramData
+     image directories keep their explicit installation policies.
+     Existing ordinary parents retain their ACLs. Only an absent/empty
+     Unattend is accepted and answer files use CreateNew; an existing agent
+     installation or driver target refuses. These child-disk directories
+     require no host cleanup records. Setup\Scripts is empty; media scripts
+     and RUNNER.ZIP stay on the setup ISO until FirstLogon.
+     Child staging step 66 also sets the current control set's offline
+     BitLocker PreventDeviceEncryption DWORD to 1 before first boot, following
+     Microsoft's [automatic encryption prevention](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/oem-bitlocker).
+     An existing DWORD 1 is accepted without rewriting; other values/types
+     refuse. A fresh saved hive inherits the original owner/DACL before
+     atomic replacement. The manifest records successful prevention.
+     Only replacement removes that SYSTEM hive's LOG1/LOG2 transaction logs;
+     already-1 and failed replacements leave them untouched. Log cleanup failure
+     is numeric code 13. Guest C: conversion/protection statuses must be zero
+     when reported (fully decrypted/protection off); nonzero refuses publication.
+     Missing/unreadable values, including 4294967295, remain diagnostic.
+   - Specialize stop/deletes the legacy agent and, after MSI uninstall, leftover sshd,
+     removes VDD nodes/packages and the entire legacy component directory,
+     uninstalls registered OpenSSH MSI products first and deletes remaining MSI program
+     directories, server state, authorization files and the host-key boot task.
+     Traversal is bounded and refuses links. FirstLogon verifies removal and
+     synthetic video, preserving incomplete specialize diagnostics. Steps 81–86
+     and 90–94 identify removals; 88 means specialize complete, 89 means its
+     status could not be verified. Video checks retain steps 35–38. FirstLogon
+     step 39 removes OpenSSH.Server through Windows servicing; it preserves the
+     inbox client and ssh-agent. A required reboot refuses publication for
+     operator review. Verification requires no sshd service/executable, server
+     state or authorization files.
+   - `drivers` names one to eight host FileRepository directories. A bounded
+     staged snapshot is installed offline under guest HostDriverStore,
+     preserving nesting and empty directories. Source and destination hashes
+     must match the exact inventory; a temporary sibling is renamed only when
+     complete, with guest-parent ownership and inherited ACLs. Existing target
+     trees refuse the build. FirstLogon restarts only `vrd.inf` devices at
+     error 43. D3D11/present/readback is the gate; GL/Vulkan/NVIDIA runtime
+     provisioning and other APIs are not covered. Rebuild after host driver changes.
    - `cpu` (default 4) and `memory_mb` (default 8192) size the build guest.
      `timeout_seconds` (default 900) bounds the guest's run, not the copy.
-   - Keep `image_root` outside App Sandbox's template and instance trees. Its
-     volume needs about 2.2 times the template's size plus 10 GiB free.
+   - `edition_id` defaults to `Professional`; `image_index` optionally overrides
+     it. Exactly one matching x64 Client image is required. N editions have
+     separate EditionIDs. The UDF installation ISO must contain exactly one
+     install.wim, unencrypted install.esd, or complete install*.swm set under
+     sources. Malformed/oversized metadata and missing segments refuse.
+   - `disk_gb` defaults to 127, bounded to 64-256 GiB. ISO size is at most
+     32 GiB; selected image TOTALBYTES plus 4 GiB must fit the virtual disk.
+   - Keep `image_root` outside the ISO and instance trees. Free space admission
+     reserves ISO bytes + three times 125% of selected image TOTALBYTES +
+     10 GiB for the owned media/base, child, flatten and build headroom.
+     Publication rechecks actual base + child bytes + 5 GiB. These are free
+     space checks, not a quota or a promise about arbitrary image growth.
 2. Inspect, then build, from an elevated shell:
 
    ```text
@@ -272,42 +460,93 @@ or owner record. It mounts, grants and boots only files it created.
    bivouac image build --config "<protected parent>\image-factory.json"
    ```
 
-   Both print the build's facts or result as JSON. A Group Policy execution
+   `inspect` prints the media inventory and `build` a bounded result, both as
+   JSON. A Group Policy execution
    policy overrides the factory's own and can stop its scripts.
-3. The offline inspection gates the build. The template must be generalized
-   to OOBE, with no answer-file pointer and an empty `Windows\Panther\Unattend`.
-   A configured runner (`.runner`, `.credentials`), anything under its `_work`,
-   or a `ProgramData\Bivouac\Guest` directory refuses it. Logs left in the
-   runner's `_diag` by template preparation are allowed and are deleted during
-   setup. The record lists only public facts: component hashes, service
-   paths, runner state and residue names, never file contents or
-   answer-file values.
+   A guest that exits before preparation completes reports HCS's exit type
+   and status. For lab diagnosis, `image build --retain-failed` keeps a
+   failed build's workspace (guest absent, disks detached) so its child disk
+   can be inspected offline. This also retains setup-private\setup.iso and
+   staged answer files containing the build-time guest password. Keep the
+   administrator-only workspace protected and clean it promptly with
+   `bivouac image cleanup --config ... --build <id>`.
+   Build script stdout contains only deliberate UTF-8 Console writes; the
+   bootstrap discards incidental pipeline/host output and suppresses progress.
+   Topology JSON is decoded strictly, without byte repair or substring recovery.
+   An invalid report reports numbers only: length, BOM kind (0 absent, 1 UTF-8,
+   2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE, 5 UTF-32BE), NUL count, UTF-8/JSON validity
+   (0/1), first/last byte values, and syntax offset or type field/kind/offset.
+   Type fields use one-based `windesktop.Topology` declaration order (0 root or
+   unknown); kinds are 0 unknown, 1 bool, 2 number, 3 string, 4 array, 5 object.
+   Empty output, encoding signatures, leading/trailing contamination and valid
+   JSON with incompatible types can thus be distinguished without guest text.
+   The first-boot render-probe wait is 180 seconds (`require_setup`), otherwise
+   50 seconds. Failed render validation can append strictly checked numeric
+   task/process/GPU/desktop-age observations; unavailable observations carry
+   explicit validity flags. Guest text and malformed diagnostic output are
+   discarded.
+3. Build inspects its freshly applied child by the recorded Windows partition
+   GUID. It requires generalized-to-OOBE setup state, no answer-file pointer,
+   an empty/absent `Windows\Panther\Unattend`, no runner, agent installation,
+   either guest task or `ProgramData\Bivouac\Guest`. An absent Panther is clean;
+   an existing Panther must be an ordinary directory. Reference-media
+   pristine hive and path checks pass; live staging/boot is separately required. Records
+   contain bounded public facts, never answer-file values or hive contents.
 4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
-   components, checks hardware rendering with the probe, removes setup files,
+   agent, checks hardware rendering with the probe, removes setup files and agent logs,
    rotates the console password into the autologon secret, shuts down
-   cleanly and flattens the result. A build takes about 3 minutes plus the
-   copy. Admission waits for the guest's memory plus 10 GiB available and
+   cleanly and flattens the result. A reference-ISO build takes about seven
+   minutes on this class of host.
+   Admission waits for the guest's memory plus 10 GiB available and
    8 GiB commit headroom, and the build cancels itself if available memory
    falls below 6 GiB or commit headroom below 2 GiB.
 5. The result is `<image_root>\<build ID>\disk.vhdx`, a single standalone
-   VHDX, with `manifest.json` written last. The manifest records the source,
-   asset and image hashes, `guest_name`, `guest_user`, the driver versions and
+   VHDX, with `manifest.json` written last. The manifest records ISO identity,
+   selected image metadata, host DISM/BCDEdit versions, boot method/loader GUID, verified boot
+   issuer generations, apply-time WinRE policy,
+   disk/partition GUIDs and guest Secure Boot/TPM presence/readiness, plus
+   asset and image hashes, `guest_name`, `guest_user`, the agent hash/Windows contract, public facts for both tasks and
+   autologon-account agreement, driver versions and
    the lab batch's probe, validation and autologon pins. Point `vmhost.json`'s
    image at the disk and set the provider's `guest_name` and `guest_user` from
    the build's output. The manifest also records topology facts; publication
    requires one
    active primary display on Hyper-V synthetic video, no VDD nodes and the
-   existing render checks. A published directory is never reused.
-6. Build records stay in `<image_root>\.builds`. A failed build terminates its
-   own guest, confirms it absent and removes its workspace. If it could not
+   existing render checks. Secure Boot must be on and a TPM present.
+   Sanitation retains both tasks, requires the runner task to be Ready,
+   and removes launch/claim/cancellation and lab residue.
+   A published directory is never reused.
+6. Build records stay in `<image_root>\.builds`. After guest preparation fails,
+   cleanup requests shutdown of its proven guest only if the failure was not
+   memory-reserve cancellation. The request is capped at 10 seconds and the
+   grace at the remaining allocation (normally at most 30 seconds), then it
+   terminates. Reserve loss or an exhausted/refused grace goes straight to
+   termination. Within two minutes, termination/absence has the first minute;
+   diagnostics end by 90 seconds, leaving at least 30 seconds for detach.
+   The build still fails. Cleanup confirms absence and removes its workspace. If it could not
    confirm that, it keeps the workspace; settle it later, elevated:
 
    ```text
    bivouac image cleanup --config "<protected parent>\image-factory.json" --build <build ID>
    ```
 
-   Cleanup refuses a build that is still running, and never removes a
-   published image.
+   Cleanup also releases recorded ISO/base attachments and access paths
+   after native absence. It refuses a surviving host-worker
+   job or a build that is still running, and never removes a published image.
+   Host-worker jobs cover the helper/DISM/BCDEdit processes, not WMI providers or
+   storage-service operations; uncertain detach retains the workspace.
+
+Before a separately authorized live build, compare `bcdedit /enum firmware`
+before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
+record only the unchanged boolean/counts, never the raw firmware enumeration.
+Require no firmware-entry change. Images are built for one Windows
+contract; images of an earlier contract are refused. Interrupted-apply cleanup, including
+retry from another session and after a host reboot, remains a live gate.
+DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
+GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.
+The SWM wildcard remains a live gate. An optical ISO volume has no ordinary Storage
+partition access-path interface; a folder mount would require another native
+mount API and lifetime record, so this round keeps the volume path.
 
 ## Direct HCS lab batch
 
@@ -321,9 +560,27 @@ these cold boots in order:
 3. A guest whose parent is a flattened copy of the image.
 4. Two production-sized guests (4 CPU, 8 GiB).
 
-Each run checks the guest agent, SSH and desktop rendering. The baseline run
-also checks that an unelevated process reaches only the HvSocket service its
-account was granted.
+Each run proves bivouac's agent and runs the image's pinned desktop validation
+through it. The baseline's unelevated child must be refused the ungranted agent
+service; the lazy-memory run grants the manager account and requires connection.
+The lab also requires a guest-loopback HvSocket refusal, fixed facts proving the
+actual task principal/Highest/Interactive/action/priority 4 and installed owner/ACL.
+It starts a harmless long-lived probe through start's runner-task dispatch,
+mode/marker and claim path. It reports job membership, immediate-job agent
+presence (unknown on an incomplete bounded list), context predicates, priorities,
+and a gate stage. Job queries are baseline-only diagnostics: failure reports
+unknown without ending the probe, and membership does not gate the run. Context
+and priority facts gate it, along with the same recorded probe and sleeping grandchild surviving both
+`schtasks /End` + `/Run` and a proven agent process kill + `/Run`. The probe
+performs these fixed task operations itself; each cycle validates the current
+agent identity and matches fresh request/completion IDs. Results require a
+different agent PID/creation identity after each cycle. Probe cleanup
+checks recorded identity on the opened process handle. No runner or credentials
+are required. These destructive-in-guest checks run only in the explicit lab;
+ordinary unit checks simulate their command/report sequence. Recovery and timing
+on real Task Scheduler jobs remain unverified until the live run passes.
+Only the agent service is exposed. `agent_reachable` records create-to-agent
+proof alongside existing connection/desktop spans and bounded numeric step markers.
 
 Every desktop run records topology in the console user's
 interactive session and requires exactly one active primary display plus a
@@ -415,7 +672,7 @@ offers to allow the test binary through the firewall, choose Cancel.
    go test -c -tags integration -o bin\lab\hcs-network-lab.test.exe .\internal\provider\hcsvm
    ```
 
-3. Launch it once through UAC. Use this branch's factory image and pins. The lab root
+3. Launch it once through UAC. Use a matching bivouac-agent image and pins from this factory. The lab root
    must not exist yet; the VM host creates it protected.
    - If the image has no runner, add `-lab.runner-archive` and
      `-lab.runner-sha256` for an official runner ZIP.

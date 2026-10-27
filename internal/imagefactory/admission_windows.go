@@ -27,13 +27,36 @@ func requiredSpace(source, child uint64, publication bool) (uint64, error) {
 	if publication {
 		return source + child + (5 << 30), nil
 	}
-	return (source*22+9)/10 + (10 << 30), nil
+	if source > 32<<30 || child == 0 {
+		return 0, errors.New("invalid ISO or image size")
+	}
+	// ISO copy + applied base with 25% filesystem headroom + equal child and flatten headroom.
+	return source + 3*((child*5+3)/4) + (10 << 30), nil
 }
 func admitSpace(root, phase string, source, child uint64, publication bool) (SpaceCheck, error) {
 	required, err := requiredSpace(source, child, publication)
 	if err != nil {
 		return SpaceCheck{}, err
 	}
+	return admitRequiredSpace(root, phase, source, child, required)
+}
+
+func requiredMediaCopySpace(iso uint64) (uint64, error) {
+	if iso == 0 || iso > 32<<30 {
+		return 0, errors.New("invalid ISO size")
+	}
+	return iso + (10 << 30), nil
+}
+
+func admitMediaCopySpace(root string, iso uint64) (SpaceCheck, error) {
+	required, err := requiredMediaCopySpace(iso)
+	if err != nil {
+		return SpaceCheck{}, err
+	}
+	return admitRequiredSpace(root, "media_copy", iso, 0, required)
+}
+
+func admitRequiredSpace(root, phase string, source, child, required uint64) (SpaceCheck, error) {
 	p, err := windows.UTF16PtrFromString(root)
 	if err != nil {
 		return SpaceCheck{}, err
@@ -74,7 +97,7 @@ func finalPath(h windows.Handle) (string, error) {
 }
 func disjointFinal(source, root string) error {
 	if within(root, source) || within(filepath.Dir(source), root) {
-		return errors.New("image root must be outside the source template directory and its ancestors")
+		return errors.New("image root must be outside the ISO directory and its ancestors")
 	}
 	return nil
 }
@@ -82,7 +105,7 @@ func disjointFinal(source, root string) error {
 // Query-only handles: final path inspection never grants access or changes an
 // ACL on the source, its parent, or the image root.
 func checkFinalInputs(c Config) error {
-	f, err := openReadOnlyPinned(c.Source)
+	f, err := openReadOnlyPinned(c.ISO)
 	if err != nil {
 		return err
 	}

@@ -167,9 +167,10 @@ func (s *Server) dispatch(ctx context.Context, sid string, req Request) Response
 func (s *Server) info() *Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	i := &Info{Controller: s.cfg.Controller, MaxInstances: s.cfg.MaxInstances, MaxCPU: s.cfg.MaxCPU, MaxMemoryMB: s.cfg.MaxMemoryMB}
-	for name := range s.cfg.Images {
+	i := &Info{Controller: s.cfg.Controller, MaxInstances: s.cfg.MaxInstances, MaxCPU: s.cfg.MaxCPU, MaxMemoryMB: s.cfg.MaxMemoryMB, ImageContracts: map[string]int{}}
+	for name, path := range s.cfg.Images {
 		i.Images = append(i.Images, name)
+		i.ImageContracts[name] = imageContract(path, s.host.native.CheckImage)
 	}
 	sort.Strings(i.Images)
 	for _, o := range s.guests {

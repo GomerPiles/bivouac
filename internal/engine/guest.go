@@ -94,7 +94,7 @@ func GuestListen(ctx context.Context) error {
 		_ = l.Close()
 		return err
 	}
-	return Listen(ctx, stdio{}, l)
+	return Listen(ctx, stdio{}, l, ContainerConnections)
 }
 
 // GuestDial is invoked through the guest agent in the disposable Linux engine VM.

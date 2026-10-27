@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
+
 	"github.com/GomerPiles/bivouac/internal/vmhost"
 	"golang.org/x/sys/windows/svc"
 )
@@ -61,7 +63,7 @@ func (s *fakeService) Stop(context.Context) error { s.stops++; return s.stopErr 
 func runtimeFixture(t *testing.T) (*Provider, *runtimeHost) {
 	t.Helper()
 	p, h, _ := fixture(t, true)
-	rh := &runtimeHost{Host: h, info: vmhost.Info{Images: []string{p.opts.Image}, MaxCPU: p.opts.CPU, MaxMemoryMB: p.opts.MemoryMB}}
+	rh := &runtimeHost{Host: h, info: vmhost.Info{Images: []string{p.opts.Image}, ImageContracts: map[string]int{p.opts.Image: guestagent.WindowsContract}, MaxCPU: p.opts.CPU, MaxMemoryMB: p.opts.MemoryMB}}
 	p.host = rh
 	return p, rh
 }
@@ -128,10 +130,14 @@ func TestActivateMissingHostNamesBothRemedies(t *testing.T) {
 }
 
 func TestRuntimeChecksImageAndLimits(t *testing.T) {
-	for _, change := range []string{"image", "cpu", "memory"} {
+	for _, change := range []string{"image", "cpu", "memory", "missing contract", "different contract"} {
 		t.Run(change, func(t *testing.T) {
 			p, h := runtimeFixture(t)
 			switch change {
+			case "missing contract":
+				h.info.ImageContracts = nil
+			case "different contract":
+				h.info.ImageContracts[p.opts.Image]++
 			case "image":
 				h.info.Images = nil
 			case "cpu":

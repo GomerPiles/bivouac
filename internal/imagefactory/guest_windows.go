@@ -3,145 +3,47 @@
 package imagefactory
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"path/filepath"
-	"strconv"
+	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/GomerPiles/bivouac/internal/hcs"
-	"github.com/GomerPiles/bivouac/internal/hvsock"
-	"github.com/GomerPiles/bivouac/internal/winguest"
-	"golang.org/x/crypto/ssh"
+	"github.com/GomerPiles/bivouac/internal/guestagent"
+	"github.com/GomerPiles/bivouac/internal/windesktop"
 )
 
-// initializeDrivers ports the spike protocol; production Initialize deliberately
-// declines these copies. Keep the connection alive through guest preparation.
-func initializeDrivers(ctx context.Context, conn net.Conn, drivers []string, key []byte) error {
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	reader := bufio.NewReaderSize(conn, 4096)
-	read := func() (string, error) {
-		d := time.Now().Add(30 * time.Second)
-		if end, ok := ctx.Deadline(); ok && end.Before(d) {
-			d = end
-		}
-		if conn.SetReadDeadline(d) != nil {
-			return "", errors.New("agent deadline unavailable")
-		}
-		b, err := reader.ReadSlice('\n')
-		if err != nil {
-			return "", errors.New("bounded guest agent line unavailable")
-		}
-		return strings.TrimSpace(string(b)), nil
+type boundedGuestOutput struct{ data []byte }
+
+func (b *boundedGuestOutput) Write(p []byte) (int, error) {
+	if len(b.data)+len(p) > 8192 {
+		return 0, errors.New("guest output exceeds bound")
 	}
-	write := func(s string) error {
-		if conn.SetWriteDeadline(time.Now().Add(10*time.Second)) != nil {
-			return errors.New("agent write deadline unavailable")
-		}
-		_, err := io.WriteString(conn, s)
-		if err != nil {
-			return errors.New("agent request failed")
-		}
-		return nil
-	}
-	gpu := func() error {
-		var b strings.Builder
-		fmt.Fprintf(&b, "gpu_query_response:%d\n", len(drivers))
-		for i, d := range drivers {
-			fmt.Fprintf(&b, "AppSandbox.Drv.%d|C:\\Windows\\System32\\HostDriverStore\\FileRepository\\%s|\n", i, filepath.Base(d))
-		}
-		return write(b.String())
-	}
-	hello, err := read()
-	if err != nil || hello != "hello" {
-		return errors.New("guest agent greeting unavailable")
-	}
-	if err = gpu(); err != nil {
-		return err
-	}
-	if err = write("1:ssh_enable\n"); err != nil {
-		return err
-	}
-	keySent, keyReady, vddAbsent, gpuReady := false, false, false, false
-	for readBytes, lines := 0, 0; readBytes < 1<<20 && lines < 4096; lines++ {
-		line, err := read()
-		if err != nil {
-			return err
-		}
-		readBytes += len(line) + 1
-		switch line {
-		case "gpu_query":
-			if err = gpu(); err != nil {
-				return err
-			}
-		case "ssh_ready", "1:ssh_ready":
-			if !keySent {
-				if err = write("ssh_deploy_key " + string(key) + "\n"); err != nil {
-					return err
-				}
-				keySent = true
-			}
-		case "ssh_key_deployed":
-			if !keySent {
-				return errors.New("unsolicited key acknowledgement")
-			}
-			keyReady = true
-		case "ssh_failed", "1:ssh_failed", "ssh_key_failed", "service_stopping", "os_shutdown":
-			return errors.New("guest agent initialization failed")
-		}
-		if strings.HasPrefix(line, "idd_status:") {
-			if line != "idd_status:not_found" {
-				return errors.New("guest agent did not confirm VDD absence")
-			}
-			vddAbsent = true
-		}
-		if line == "hyperv_video:disabled" {
-			return errors.New("guest agent disabled synthetic video")
-		}
-		if strings.HasPrefix(line, "gpu_copy_error:") || strings.HasPrefix(line, "gpu_device_failed:") {
-			return errors.New("guest GPU driver copy failed")
-		}
-		if count, ok := strings.CutPrefix(line, "gpu_copy_done:"); ok {
-			n, e := strconv.ParseUint(count, 10, 32)
-			if e != nil || n > 8192 {
-				return errors.New("invalid GPU copy count")
-			}
-			gpuReady = true
-		}
-		if keyReady && vddAbsent && gpuReady {
-			return nil
-		}
-	}
-	return errors.New("guest agent transcript exceeds bound")
+	b.data = append(b.data, p...)
+	return len(p), nil
 }
 
-func dialGuest(ctx context.Context, runtimeID, service string) (net.Conn, error) {
-	vm, err := hvsock.ParseGUID(runtimeID)
-	if err != nil {
-		return nil, err
-	}
-	svc, err := hvsock.ParseGUID(service)
-	if err != nil {
-		return nil, err
-	}
+func waitAgent(ctx context.Context, dial guestagent.Dialer) error {
 	for {
-		attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn, e := hvsock.Dial(attempt, hvsock.Addr{VMID: vm, ServiceID: svc})
+		attempt, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := guestagent.Run(attempt, dial, []string{guestagent.WindowsPath, "version"}, nil, io.Discard)
 		cancel()
-		if e == nil {
-			return conn, nil
+		if err == nil {
+			return nil
+		}
+		var version *guestagent.VersionError
+		if errors.As(err, &version) {
+			return errors.New("image agent protocol mismatch")
 		}
 		select {
 		case <-ctx.Done():
-			return nil, errors.New("guest service connection timed out")
-		case <-time.After(time.Second):
+			return errors.New("image agent unavailable")
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 }
@@ -171,56 +73,38 @@ func prepareUntilExit(ctx context.Context, wait, prepare func(context.Context) e
 	return errors.Join(err, context.Cause(work))
 }
 
-func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error {
-	identity, err := winguest.NewIdentity()
-	if err != nil {
+func prepareGuest(ctx context.Context, c Config, r *record) error {
+	dial := guestagent.DialHvsock(r.RuntimeID)
+	return prepareGuestWithDial(ctx, c, r, dial)
+}
+
+func prepareGuestWithDial(ctx context.Context, c Config, r *record, dial guestagent.Dialer) error {
+	if err := waitAgent(ctx, dial); err != nil {
 		return err
 	}
-	defer identity.Clear()
-	conn, err := dialGuest(ctx, r.RuntimeID, winguest.AgentService)
-	if err != nil {
+	if err := inspectInstallation(ctx, dial, &r.Manifest); err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
-	if err = initializeDrivers(ctx, conn, c.Drivers, identity.PublicKey); err != nil {
-		return err
-	}
-	transport, err := dialGuest(ctx, r.RuntimeID, winguest.SSHService)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = transport.Close() }()
-	client, _, err := winguest.Connect(ctx, transport, c.GuestUser, identity, func(string) error {
-		s, e := api.Open(ctx, r.Name)
-		if e != nil {
-			return errors.New("build guest identity unavailable")
-		}
-		defer s.Close()
-		p, e := s.Properties(ctx)
-		if e != nil {
-			return e
-		}
-		return prove(r, p, true)
-	})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = client.Close() }()
 	data := map[string]any{"name": r.Name, "user": c.GuestUser, "sha256": r.Manifest.ProbeSHA256, "script_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "require_setup": true, "prepared": false}
-	b, err := guestRun(ctx, client, validateEntry, data)
+	b, err := guestRun(ctx, dial, validateEntry, data)
 	if err != nil {
 		return errors.Join(errors.New("guest desktop validation failed"), err)
 	}
-	var topology winguest.Topology
-	if json.Unmarshal(b, &topology) != nil {
-		return errors.New("invalid topology report")
+	var topology windesktop.Topology
+	if err := json.Unmarshal(b, &topology); err != nil {
+		return fmt.Errorf("invalid topology report (%s)", reportShape(b, err))
 	}
+	security, err := parseGuestSecurity(b)
+	if err != nil {
+		return err
+	}
+	r.Manifest.Security = security
 	r.Manifest.Topology = &topology
 	if err := factoryDisplayReportOK(b); err != nil {
 		return err
 	}
 	// VersionInfo reads no runner credentials and does not start the listener.
-	b, err = guestRun(ctx, client, `param($data);$helper='C:\Windows\AppSandbox\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
+	b, err = guestRun(ctx, dial, `param($data);$helper='C:\ProgramData\Bivouac\Image\hcs-runner-check.ps1';if((Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash -ine $data.runner_check_sha256){exit 14};. $helper;if(!(Assert-CleanRunner 'C:\actions-runner')){exit 1};$v=(Get-Item -LiteralPath 'C:\actions-runner\bin\Runner.Listener.exe').VersionInfo.ProductVersion;if($v -match '^\d{1,4}\.\d{1,4}\.\d{1,4}$'){[Console]::Out.Write($v)}`, map[string]string{"runner_check_sha256": hashBytes([]byte(runnerCheck))})
 	if err != nil {
 		return errors.New("runner verification failed")
 	}
@@ -236,36 +120,69 @@ func prepareGuest(ctx context.Context, api *hcs.API, c Config, r *record) error 
 		r.Manifest.RunnerVersion = string(b)
 	}
 	data = map[string]any{"name": r.Name, "user": c.GuestUser, "probe_sha256": r.Manifest.ProbeSHA256, "validation_sha256": r.Manifest.ValidationSHA256, "autologon_sha256": r.Manifest.AutologonSHA256, "sanitize_sha256": hashBytes([]byte(imageSanitize))}
-	b, err = guestRun(ctx, client, sanitizeEntry, data)
+	// Repeat just before sanitation/publication: preparation facts alone cannot
+	// certify that setup or validation left the installed definitions intact.
+	if err := inspectInstallation(ctx, dial, &r.Manifest); err != nil {
+		return err
+	}
+	b, err = guestRun(ctx, dial, sanitizeEntry, data)
 	if err != nil || string(b) != "sanitized-shutdown-scheduled" {
 		return errors.New("guest sanitation and shutdown acknowledgement failed")
 	}
 	return nil
 }
 
-func guestRun(ctx context.Context, client *ssh.Client, script string, data any) ([]byte, error) {
+func inspectInstallation(ctx context.Context, dial guestagent.Dialer, m *Manifest) error {
+	var out boundedGuestOutput
+	if guestagent.Run(ctx, dial, []string{guestagent.WindowsPath, "guest-agent", "selftest", "inspect"}, nil, &out) != nil {
+		return errors.New("image installation selftest failed")
+	}
+	var f guestagent.InstallationFacts
+	if json.Unmarshal(out.data, &f) != nil {
+		return errors.New("image installation facts invalid")
+	}
+	if !f.Valid() {
+		// Installation facts are fixed booleans and priorities, with no account
+		// identifiers, so the whole set can explain which check refused.
+		b, _ := json.Marshal(f)
+		return fmt.Errorf("image installation facts invalid %s", b)
+	}
+	m.AgentTask = guestagent.TaskFacts{TaskUser: f.TaskUser, TaskHighest: f.TaskHighest, TaskInteractive: f.TaskInteractive, TaskAction: f.TaskAction, TaskPriority: f.TaskPriority}
+	m.RunnerTask = f.RunnerTask
+	m.AutologonAccountMatches = f.AutologonAccountMatches
+	return nil
+}
+
+func guestRun(ctx context.Context, dial guestagent.Dialer, script string, data any) ([]byte, error) {
 	b, err := guestInput(script, data)
 	if err != nil {
 		return nil, err
 	}
-	out, err := winguest.Run(ctx, client, "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encodedPowerShell(guestBootstrap), b, 8192)
+	var out boundedGuestOutput
+	err = guestagent.Run(ctx, dial, []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedPowerShell(guestBootstrap)}, bytes.NewReader(b), &out)
 	if err != nil {
-		var exit *ssh.ExitError
-		if errors.As(err, &exit) && exit.ExitStatus() > 0 && exit.ExitStatus() <= 255 {
-			return nil, fmt.Errorf("fixed guest operation exited at step %d", exit.ExitStatus())
+		var exit *guestagent.ExitError
+		if errors.As(err, &exit) && exit.Code > 0 && exit.Code <= 255 {
+			message := fmt.Sprintf("fixed guest operation exited at step %d", exit.Code)
+			if script == validateEntry {
+				if shape := probeFailureShape(out.data); shape != "" {
+					message += " (" + shape + ")"
+				}
+			}
+			return nil, errors.New(message)
 		}
 		return nil, errors.New("fixed guest operation failed")
 	}
-	return out, nil
+	return out.data, nil
 }
 
 func factoryDisplayReportOK(b []byte) error {
 	if !renderOK(b) {
 		return errors.New("guest desktop rendering checks did not all pass")
 	}
-	var topology winguest.Topology
-	if json.Unmarshal(b, &topology) != nil {
-		return errors.New("invalid topology report")
+	var topology windesktop.Topology
+	if err := json.Unmarshal(b, &topology); err != nil {
+		return fmt.Errorf("invalid topology report (%s)", reportShape(b, err))
 	}
 	if !topology.SyntheticOK() {
 		return errors.New("guest synthetic topology checks did not all pass")
@@ -292,4 +209,58 @@ func renderOK(b []byte) bool {
 		Problem          uint32 `json:"virtual_render_problem_code"`
 	}
 	return json.Unmarshal(b, &r) == nil && r.Ready && r.Desktop && r.Hardware && r.Presented && r.Pixels && r.Stage == 7 && r.HRESULT == 0 && r.Vendor != 0 && (r.Vendor != 0x1414 || r.Device != 0x8c) && r.Adapters > 0 && r.Adapters <= 32 && r.HardwareAdapters > 0 && r.HardwareAdapters <= r.Adapters && r.GPUValid && r.Displays <= 32 && r.Virtual > 0 && r.Virtual <= r.Displays && r.Problem == 0
+}
+
+// reportShape emits fixed labels and numbers only. In particular, never format
+// UnmarshalTypeError.Value: overflowing numbers include the guest's literal.
+// BOM: 0 absent, 1 UTF-8, 2 UTF-16LE, 3 UTF-16BE, 4 UTF-32LE, 5 UTF-32BE.
+// Field: one-based Topology declaration order, 0 root/unknown.
+// Kind: 0 unknown, 1 bool, 2 number, 3 string, 4 array, 5 object.
+func reportShape(b []byte, err error) string {
+	bom := 0
+	for i, prefix := range [][]byte{{0xef, 0xbb, 0xbf}, {0xff, 0xfe}, {0xfe, 0xff}, {0xff, 0xfe, 0, 0}, {0, 0, 0xfe, 0xff}} {
+		if bytes.HasPrefix(b, prefix) {
+			bom = i + 1
+		}
+	}
+	validUTF8, validJSON := 0, 0
+	if utf8.Valid(b) {
+		validUTF8 = 1
+	}
+	if json.Valid(b) {
+		validJSON = 1
+	}
+	shape := fmt.Sprintf("len=%d bom=%d nul=%d utf8=%d json=%d", len(b), bom, bytes.Count(b, []byte{0}), validUTF8, validJSON)
+	if len(b) > 0 {
+		shape += fmt.Sprintf(" first=0x%02x last=0x%02x", b[0], b[len(b)-1])
+	}
+	var syntax *json.SyntaxError
+	var kind *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syntax):
+		shape += fmt.Sprintf(" syntax_offset=%d", syntax.Offset)
+	case errors.As(err, &kind):
+		field, value := 0, 0
+		topology := reflect.TypeFor[windesktop.Topology]()
+		for i := range topology.NumField() {
+			f := topology.Field(i)
+			if kind.Field == f.Tag.Get("json") || kind.Field == f.Name {
+				field = i + 1
+			}
+		}
+		switch {
+		case kind.Value == "bool":
+			value = 1
+		case strings.HasPrefix(kind.Value, "number"):
+			value = 2
+		case kind.Value == "string":
+			value = 3
+		case kind.Value == "array":
+			value = 4
+		case kind.Value == "object":
+			value = 5
+		}
+		shape += fmt.Sprintf(" field=%d json_kind=%d offset=%d", field, value, kind.Offset)
+	}
+	return shape
 }

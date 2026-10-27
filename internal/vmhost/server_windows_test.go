@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/hostnet"
-	"github.com/GomerPiles/bivouac/internal/winguest"
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
@@ -52,7 +52,7 @@ func call(t *testing.T, s *Server, sid string, req any) Response {
 }
 
 func createReq(name string) Request {
-	return Request{Op: "create", Create: &CreateRequest{Name: name, Image: "win", CPU: 2, MemoryMB: 4096, GPU: true, Services: []string{winguest.AgentService, winguest.SSHService}}}
+	return Request{Op: "create", Create: &CreateRequest{Name: name, Image: "win", CPU: 2, MemoryMB: 4096, GPU: true, Services: []string{guestagent.ServiceID}}}
 }
 
 func TestUnlistedAccountsAreRefusedBeforeAnyWork(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCreateMapsImageNamesAndGrantsOnlyTheCaller(t *testing.T) {
 	if err := s.host.read(recordName("bivouac-a"), &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.Spec.Image != `C:\Images\prepared.vhdx` || len(r.Spec.Services) != 2 {
+	if r.Spec.Image != `C:\Images\prepared.vhdx` || len(r.Spec.Services) != 1 {
 		t.Fatal("image or services not taken from the VM host's config", r.Spec)
 	}
 	for _, service := range r.Spec.Services {

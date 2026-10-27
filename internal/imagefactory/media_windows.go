@@ -10,9 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/GomerPiles/bivouac/internal/guestagent"
 )
 
 func prepareMedia(ctx context.Context, c Config, r *record) error {
+	if err := r.intent("staging_access", r.save); err != nil {
+		return err
+	}
 	return prepareMediaWith(ctx, c, r, newProtectedDirectory, copyPinned, runHost)
 }
 
@@ -24,6 +29,19 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 			return err
 		}
 	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	_, digest, err := hashFile(ctx, self)
+	if err != nil {
+		return err
+	}
+	agent := filepath.Join(r.Workspace, "agent.exe")
+	if _, _, err = copyFile(ctx, self, agent, digest, 128<<20); err != nil {
+		return err
+	}
+	r.Manifest.AgentSHA256, r.Manifest.WindowsContract = digest, guestagent.WindowsContract
 	var total int64
 	for _, a := range c.SetupAssets {
 		limit := int64(64 << 20)
@@ -56,15 +74,23 @@ func prepareMediaWith(ctx context.Context, c Config, r *record, mkdir func(strin
 	data["destination"] = filepath.Join(private, "setup.iso")
 	data["unattend"] = unattended(r.Name, c.GuestUser, password)
 	data["specialize"] = guestVideo + guestSpecialize + disableFirstLogonAnimation
+	data["agent"] = agent
+	data["agent_sha256"] = digest
+	driverPlan, err := encodeDriverPlan(r.Manifest.Drivers)
+	if err != nil {
+		return err
+	}
+	data["driver_plan"] = string(driverPlan)
 	defer func() { delete(data, "unattend") }()
 	if _, err := run(ctx, makeISO, data, false); err != nil {
 		r.hostError("setup_iso", err)
 		return fmt.Errorf("protected setup ISO creation failed: %w", err)
 	}
-	if _, err := run(ctx, stageSetup, data, false); err != nil {
+	if _, err := run(ctx, offlineEncryption+offlinePayload+stageSetup, data, false); err != nil {
 		r.hostError("stage_setup", err)
 		return fmt.Errorf("offline owned-child answer staging failed: %w", err)
 	}
+	r.Manifest.PreventDeviceEncryption = true
 	return nil
 }
 
