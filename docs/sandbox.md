@@ -2,8 +2,10 @@
 
 This is a credential-free spike, not an enabled CI provider. It uses the
 Windows Sandbox installation and CLI already on the host. It never reads a
-normal bivouac home, changes CI mode, contacts the VM host service, installs a
-host service/task/driver, edits host firewall rules or registers runners.
+normal bivouac home, changes CI mode, contacts the bivouac VM host service,
+installs a host service/task/driver, edits host firewall rules or registers runners. The
+explicit `--native-probe` option requests UAC for read-only discovery only;
+its manager and guest-command transport remain unelevated.
 Keep any concurrent HCS development in its own worktree.
 
 ## Repeat the offline probe
@@ -68,6 +70,51 @@ process memory. A timeout is not counted as a successful authentication refusal
 when TCP reachability itself is absent. Both live directions currently time
 out in the tested environment; authentication works in local socket tests.
 
+## Private transport and native ownership
+
+Append `--native-probe` to the offline command to run the working host/guest
+transport probe. Start the manager from the ordinary desktop shell; it refuses
+an elevated manager. Approve the UAC prompt for the fresh copy of the same lab
+binary. That short-lived helper enumerates compute systems, queries only
+Sandbox-class candidates and runs fixed public identity checks. It installs
+nothing and changes no compute system or shared host setting. It receives no
+JIT data or secrets.
+
+The CLI session UUID is **not** the HCS compute/runtime UUID. Passing it to
+`HcsOpenComputeSystem` returned system-not-found even elevated. Discovery
+instead checks each Sandbox-class candidate's native type, state and owner,
+then uses the lab's parent-only HvSocket service to obtain the exact guest CLI
+UUID, prefixed name and boot UUID. Only a unique full match is accepted. An
+extra candidate, a recognizable owner or a nearby launch time is insufficient
+to authorize a binding. The native tuple is saved in `record.json.native`.
+
+The ordinary user can then dial that runtime UUID without further elevation,
+IP networking, firewall exceptions or global service registration on the tested
+host. The probe checks command/stdin delivery, runner/runtime smoke, nonzero
+exit, cancellation followed by a healthy request, guest-loopback refusal and
+reconnection after restarting only the owned guest's agent task. A new public
+agent generation proves the restart; both the original boot identity and
+post-restart stdin must still match. This passed live with zero active guest
+network interfaces. `native`, `agent`, `native_exit`, `native_cancellation`,
+`native_loopback_refused` and `native_restart` report these separate gates.
+Cancellation does not establish survival or cleanup of an official running job.
+
+Before cleanup, native-bound runs require the fresh CLI challenge **and** the
+native channel's matching guest identity. The CLI inventory confirms the CLI
+session absent after stop; it does not itself prove native compute-system
+absence. A separate elevated read of the recorded native ID also confirmed
+absence in the live probe. No hard-crash adoption, reboot recovery or
+ambiguous-launch cleanup is implemented. The default host-account authorization on Sandbox's HvSocket
+services is also unverified; this is not yet a channel for sensitive CI data.
+
+Discovery currently needs one UAC approval per native probe. An ordinary host
+can bind temporary wildcard/child HvSocket listeners, but the tested guest
+callback to an unregistered service was refused with Winsock 10061. That is an
+observation, not a diagnosis or proof that service registration would fix it.
+No global registration or host-policy change was attempted. A supported
+unelevated discovery path or an explicitly installed read-only broker remains
+a product-design gate.
+
 ## Ownership and cleanup
 
 The durable prefixed-name/UUID intent precedes launch. A matching CLI receipt
@@ -81,24 +128,30 @@ dispatch, and written directly because Sandbox's share service can deny rename.
 On uncertain launch, missing desktop, changed marker or failed cleanup, retain
 the directory. Do not kill Sandbox processes by name or run host-wide cleanup.
 The lab does not automatically reclaim retained instances, adopt a daemon's
-guests or recover a hard-killed launcher. Its receipt plus guest proof is a lab
-control, not native provider metadata sufficient for the manager contract.
-There is still a check/stop race against same-account replacement, and no
-authoritative effective-configuration reader or native runtime binding has
-been established. Same-account host processes are within the lab trust boundary.
+guests or recover a hard-killed launcher. Native-bound runs add the corroborated
+native/runtime tuple and a live native-channel identity check described above.
+There is still a check/stop race against same-account replacement and no
+authoritative effective-configuration reader. Same-account host processes are
+within the lab trust boundary. Native tuple evidence does not authorize a
+host-wide process kill, native delete or foreign-instance sweep.
 
-Optional read-only diagnostics are `sandbox-lab inspect <recorded-cli-id>` and
-`sandbox-lab inventory <recorded-cli-id>`. HCS access requires Windows elevation
-or Hyper-V administrative rights. The lab does not request elevation itself;
-access denied must not be interpreted as absence or as an ID mapping result.
+Optional read-only diagnostics are `sandbox-lab inspect <native-id>` and
+`sandbox-lab inventory <cli-id>`. HCS discovery requires Windows elevation or
+Hyper-V administrative rights. Access denied must not be interpreted as absence
+or as an ID mapping result. `inspect-report` saves a fresh native probe, and
+`correlate-report <active-record.json>` saves the bounded matching candidates
+beside that helper executable. `probe-runtime <runtime-id> <active-record.json>`
+checks the identity channel without native enumeration or elevation.
 `inventory-report` writes a fresh sanitized report beside the executable when
 invoked explicitly; it does not mutate any compute system.
 
 ## Gates before a provider
 
-1. Bind the CLI instance to native ownership/runtime metadata and effective
-   settings, with safe recovery for ambiguous starts, launcher loss and reboot.
-2. Establish a private, bounded, recoverable host/guest control transport.
+1. Resolve runtime discovery without per-run UAC and host-account authorization.
+   Native correlation works, but effective settings and safe recovery for
+   ambiguous starts, launcher loss and reboot remain open.
+2. Extend the working private transport to manager adoption and real runner
+   lifetimes; agent restart and command cancellation alone are insufficient.
 3. Enforce public-only egress outside the administrator-controlled guest, and
    prove host, LAN, IPv6 and peer denials with positive controls. A guest
    firewall or a failed TCP probe is insufficient.

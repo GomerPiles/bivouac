@@ -794,9 +794,28 @@ absence is confirmed afterwards. An occupied slot is refused. Missing or
 contradictory proof retains state rather than guessing. State uses flushed
 atomic replacement outside the mapped directory; public challenges use closed
 files plus explicit exec because mapped-folder handles can prevent rename.
-This is sufficient for the lab's own launch/cleanup path, not native provider
-ownership, daemon adoption or recovery after an ambiguous launch. There is no
-automatic recovery or foreign-instance sweep.
+The CLI session UUID differs from the native HCS compute/runtime UUID. The
+explicit `--native-probe` path requests one UAC approval for a read-only helper.
+It enumerates compute systems, queries only Sandbox-class candidates' identity
+and connects to the lab's parent-only HvSocket service. A candidate is accepted
+only when the framed guest identity agrees with the exact recorded CLI UUID,
+prefixed name and initial boot UUID. Native VM type/running state, expected owner
+hash and native/runtime UUIDs are required; no selection by count or timing
+authorizes a binding. Ambiguous matches refuse. The native tuple is flushed to
+the instance record before ordinary-user transport tests begin. Cleanup then
+requires both current CLI/guest proof and the pinned native channel's matching
+guest identity. There is no automatic recovery or foreign-instance sweep.
+
+The ordinary manager can dial the observed runtime UUID without elevation or
+service registration on the tested host. `--native-probe` exercises host/guest
+command, stdin, nonzero exit and cancellation, guest-loopback refusal, and
+reconnection after a guest-local agent task restart. The guest generates a
+new public startup-generation UUID to prove the restart. Discovery alone is
+elevated; only fixed public identity output enters that helper. It receives no
+GitHub data, secrets or arbitrary command requests. No VM, registry, service or
+network setting is changed by the helper. Host-account authorization of
+Sandbox's default HvSocket security
+descriptors is not yet established; this is not a secret-bearing CI path.
 
 Explicit network probes run trusted code only. Direct and reverse TCP variants
 reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
@@ -805,13 +824,14 @@ certificates/fingerprints enter bootstrap and reports. The direct variant adds
 one program/port-specific inbound rule inside the disposable guest. The reverse
 variant opens a temporary host listener, accepts only the recorded guest IP,
 and adds no host firewall rule. These are diagnostic transports, not approved
-job networking. Their authentication has loopback test coverage; live
-host/guest reachability remains unresolved on the tested host.
+job networking. Their authentication has loopback test coverage; live TCP
+reachability remains unresolved. HvSocket avoids this dependency completely.
 
-Native HCS ownership/runtime correlation, private-network and host denial,
-effective resource/security settings, reboot/crash recovery, GUI/GPU behavior,
-and real runner registration/completion remain gates. The CLI's network toggle
-alone cannot establish bivouac's public-only egress policy. Guest firewall
+Native HCS ownership/runtime correlation and ordinary-user command transport
+have disposable-guest evidence. Elevation-free runtime discovery, host-account
+authorization, effective resource/security settings, reboot/crash recovery,
+GUI/GPU behavior and real runner registration/completion remain gates. The CLI's
+network toggle alone cannot establish bivouac's public-only egress policy. Guest firewall
 rules cannot enforce that policy against an administrator job. A future
 provider must prove a host-enforced boundary and a private control channel
 before receiving JIT material; the lab intentionally provides neither a JIT

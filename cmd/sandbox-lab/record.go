@@ -9,12 +9,24 @@ import (
 )
 
 // A receipt and a fresh guest proof are both required. Inventory alone never
-// adopts a Sandbox. These are lab proofs, not native HCS ownership metadata.
+// adopts a Sandbox. Native metadata is corroborated by the guest lab identity;
+// the Sandbox owner label alone never establishes bivouac ownership.
 type labRecord struct {
-	Name  string `json:"name"`
-	ID    string `json:"sandbox_id"`
-	Phase string `json:"phase"`
-	Boot  string `json:"boot"`
+	Name   string          `json:"name"`
+	ID     string          `json:"sandbox_id"`
+	Phase  string          `json:"phase"`
+	Boot   string          `json:"boot"`
+	Native *nativeIdentity `json:"native,omitempty"`
+}
+
+type nativeIdentity struct {
+	ID        string `json:"id"`
+	RuntimeID string `json:"runtime_id"`
+	OwnerHash string `json:"owner_hash"`
+}
+
+func (n nativeIdentity) valid() bool {
+	return validGUID(n.ID) && validGUID(n.RuntimeID) && len(n.OwnerHash) == 64 && strings.Trim(n.OwnerHash, "0123456789abcdef") == ""
 }
 
 type ownershipProof struct {
@@ -34,7 +46,7 @@ func validGUID(value string) bool {
 }
 
 func (r labRecord) valid() bool {
-	return validGUID(r.ID) && r.Name == "bivouac-sandbox-"+r.ID && (r.Phase == "planned" || r.Phase == "started" || r.Phase == "stopped") && (r.Boot == "" || validGUID(r.Boot))
+	return validGUID(r.ID) && r.Name == "bivouac-sandbox-"+r.ID && (r.Phase == "planned" || r.Phase == "started" || r.Phase == "stopped") && (r.Boot == "" || validGUID(r.Boot)) && (r.Native == nil || r.Native.valid())
 }
 
 func (r labRecord) accepts(p ownershipProof, request string) bool {

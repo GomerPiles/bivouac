@@ -28,6 +28,7 @@ import (
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/winhost"
 	"github.com/GomerPiles/bivouac/internal/winrunner"
+	"golang.org/x/sys/windows"
 )
 
 //go:embed bootstrap.ps1
@@ -188,9 +189,9 @@ func (h *labHost) prove(ctx context.Context) error {
 		return errors.New("live Sandbox ownership unavailable")
 	}
 	var exit struct {
-		Code int `json:"ExitCode"`
+		Code *int `json:"ExitCode"`
 	}
-	if decodeBounded(bytes.NewReader(data), &exit) != nil || exit.Code != 0 {
+	if decodeBounded(bytes.NewReader(data), &exit) != nil || exit.Code == nil || *exit.Code != 0 {
 		return errors.New("sandbox ownership command refused")
 	}
 	var proof ownershipProof
@@ -204,6 +205,11 @@ func (h *labHost) prove(ctx context.Context) error {
 func (h *labHost) stop(ctx context.Context) error {
 	if err := h.prove(ctx); err != nil {
 		return err
+	}
+	if h.record.Native != nil {
+		if err := h.proveNative(ctx); err != nil {
+			return err
+		}
 	}
 	if _, err := h.call(ctx, "stop", "--id", h.record.ID); err != nil {
 		return errors.New("sandbox stop uncertain; retain record")
@@ -259,6 +265,11 @@ type labResult struct {
 	CreateMS               int64       `json:"create_ms"`
 	ReadyMS                int64       `json:"ready_ms"`
 	TeardownMS             int64       `json:"teardown_ms"`
+	Native                 bool        `json:"native"`
+	NativeLoopbackRefused  bool        `json:"native_loopback_refused"`
+	NativeExit             bool        `json:"native_exit"`
+	NativeCancellation     bool        `json:"native_cancellation"`
+	NativeRestart          bool        `json:"native_restart"`
 	Smoke                  *smokeFacts `json:"smoke,omitempty"`
 }
 
@@ -271,11 +282,22 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	digest := flags.String("runner-sha256", "", "pinned official ZIP digest")
 	network := flags.Bool("network-probe", false, "enable default networking for trusted probes only; never registers a runner")
 	reverse := flags.Bool("reverse-probe", false, "test guest-initiated authenticated transport; implies network-probe")
+	hold := flags.Duration("hold", 0, "hold a proven guest for read-only external inspection (maximum 3 minutes)")
+	native := flags.Bool("native-probe", false, "request one read-only UAC discovery and test the ordinary-user HvSocket channel with networking disabled")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *base == "" || *bivouac == "" || *runner == "" {
 		return errors.New("run requires --root, --bivouac, --runner and --runner-sha256")
 	}
 	if *reverse {
 		*network = true
+	}
+	if *hold < 0 || *hold > 3*time.Minute {
+		return errors.New("inspection hold must be between zero and three minutes")
+	}
+	if *native && (*network || *reverse) {
+		return errors.New("native probe requires networking disabled")
+	}
+	if *native && windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("native probe manager must remain unelevated")
 	}
 	var reverseSocket *net.TCPListener
 	if *reverse {
@@ -305,7 +327,13 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	if len(ids) != 0 {
 		return errors.New("sandbox slot occupied; existing instances are never stopped")
 	}
-	root, err := winhost.PrivateDirectory(*base)
+	// Native elevation has an independent working directory. Keep mappings,
+	// helper executable and receipt arguments absolute across that boundary.
+	absoluteBase, err := filepath.Abs(*base)
+	if err != nil {
+		return errors.New("absolute lab directory unavailable")
+	}
+	root, err := winhost.PrivateDirectory(absoluteBase)
 	if err != nil {
 		return errors.New("private lab directory unavailable")
 	}
@@ -416,6 +444,18 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		return err
 	}
 	result.Ownership = true
+	if *native {
+		return h.nativeProbe(ctx, self, &result)
+	}
+	if *hold > 0 {
+		timer := time.NewTimer(*hold)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if !*network {
 		return nil
 	}

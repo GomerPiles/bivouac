@@ -206,6 +206,19 @@ Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
   out with a guest-scoped allow rule. A reverse callback to a matching host
   interface also timed out without host firewall changes. The cause is
   unresolved; these failures do not establish private-network isolation.
+- The elevated read-only helper identifies a Sandbox native VM whose compute
+  and runtime UUID differs from the CLI session UUID. Its owner/type/state and
+  a guest identity response over the lab's HvSocket service corroborate the
+  exact CLI UUID, prefixed name and initial boot UUID. The tuple is journalled;
+  native discovery refuses missing or ambiguous identity matches.
+- Using that runtime UUID, the ordinary user reaches the private agent while
+  networking remains disabled. The complete `--native-probe` passed framed
+  host-to-guest stdin, runner/runtime smoke, nonzero exit propagation, cancellation
+  followed by a healthy new request, guest-loopback refusal, and reconnection
+  after task End/Run with a new agent generation. Both identity paths passed
+  again before cleanup; the CLI session was confirmed absent afterwards. A
+  separate elevated query also confirmed the recorded native ID absent.
+  No shared service, registry, firewall or VM settings were modified.
 - Successful lab launches were stopped by their recorded CLI ID after a fresh
   guest/boot challenge, and absence was confirmed. Cleanup failures retain
   records. No unrelated guest was stopped.
@@ -213,13 +226,17 @@ Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
 Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
 RDP-session predicates, XML escaping/device defaults and real TLS handshakes
 with missing/wrong client certificates and a wrong server pin. They do not
-establish a working host-to-Sandbox control channel. Ordinary HCS access
-returned access denied; native elevated inspection was not completed.
+establish a TCP channel. Native transport and corroborated ownership now have
+live evidence. Ordinary HCS discovery still requires elevation; ordinary
+HvSocket communication does not. An unregistered guest-to-host HvSocket
+callback was refused with Winsock 10061 even though the ordinary host could
+bind temporary wildcard/child listeners. No global service registration was
+attempted, and the reason for that refusal is unverified.
 The Windows host build, full non-live test suite, vet and repository-wide lint
 pass. Race checking was unavailable with the host's cgo-disabled toolchain.
 
-Open: native ownership/runtime correlation and effective settings, a private
-host/guest transport, host-enforced public-only egress, real disposable runner
+Open: runtime discovery without per-run UAC, host-account authorization and
+effective settings, host-enforced public-only egress, real disposable runner
 registration/completion and cancellation, crash/reboot recovery, resource
 budgeting and GPU/desktop workload validation. See [sandbox.md](sandbox.md) for
 the repeatable lab and its limits.
