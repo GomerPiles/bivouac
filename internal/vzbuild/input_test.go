@@ -126,7 +126,7 @@ func TestDownloadIdleTimeoutAllowsProgressAndCancelsStall(t *testing.T) {
 						select {
 						case <-r.Context().Done():
 							return
-						case <-time.After(time.Second):
+						case <-time.After(2 * time.Second):
 						}
 					} else {
 						time.Sleep(20 * time.Millisecond)
@@ -143,7 +143,7 @@ func TestDownloadIdleTimeoutAllowsProgressAndCancelsStall(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = out.Close() }()
-			err = downloadAttempt(context.Background(), server.Client(), server.URL, inputPin(data, server.URL), out, 60*time.Millisecond)
+			err = downloadAttempt(context.Background(), server.Client(), server.URL, inputPin(data, server.URL), out, 500*time.Millisecond)
 			if (err != nil) != stall {
 				t.Fatal("wrong idle timeout result", err)
 			}

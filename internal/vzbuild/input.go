@@ -169,11 +169,3 @@ func obtain(ctx context.Context, dir, local string, pin vzrecipe.Input, client *
 	}
 	return dst, nil
 }
-func syncDir(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Sync()
-}

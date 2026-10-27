@@ -3,6 +3,7 @@ package vm
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func TestManifestBuildProvenance(t *testing.T) {
 }
 func TestFactoryDisksRoundTripAndRefusedByRunnerProof(t *testing.T) {
 	dir := t.TempDir()
-	o := RunOptions{Dir: dir, AgentSocket: filepath.Join("/tmp", "factory.sock"), AgentPort: 1, RootlessNetwork: true, Machine: MachineOptions{SeedDisk: filepath.Join(dir, "seed.iso"), ReceiptDisk: filepath.Join(dir, "receipt.img"), DiskSync: "full"}}
+	o := RunOptions{Dir: dir, AgentSocket: filepath.Join(os.TempDir(), "factory.sock"), AgentPort: 1, RootlessNetwork: true, Machine: MachineOptions{SeedDisk: filepath.Join(dir, "seed.iso"), ReceiptDisk: filepath.Join(dir, "receipt.img"), DiskSync: "full"}}
 	got, err := ParseArgs(o.Args())
 	if err != nil || got.Machine != o.Machine {
 		t.Fatal("factory flags changed", err)
