@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,6 +36,13 @@ func (r *provisionRecorder) Input(_ context.Context, binary string, args []strin
 		return r.respond(binary, args, input)
 	}
 	return nil, nil
+}
+func (r *provisionRecorder) Run(ctx context.Context, binary string, args []string, out io.Writer) error {
+	output, err := r.Input(ctx, binary, args, nil)
+	if _, writeErr := out.Write(output); writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 func provisionFilesystemFixture(t *testing.T) (provisioner, *provisionRecorder, ProvisionRequest, []byte) {
 	t.Helper()
@@ -80,6 +88,9 @@ func provisionFilesystemFixture(t *testing.T) (provisioner, *provisionRecorder, 
 	request := ProvisionRequest{Recipe: provisionRecipes()[0].name, RunnerArchive: "/tmp/runner with spaces;$(literal).tar.gz", RunnerSHA256: hash}
 	helper := provisionHelperFixture()
 	recorder.respond = func(binary string, args []string, input []byte) ([]byte, error) {
+		if binary == "/usr/bin/cloud-init" && args[0] == "status" {
+			return []byte(`{"status":"done"}`), nil
+		}
 		if binary == "/usr/bin/id" {
 			return []byte("bivouac\n"), nil
 		}
@@ -313,5 +324,77 @@ func TestProvisionExtractionContainedLinks(t *testing.T) {
 		if err != nil || string(data) != "fixture" {
 			t.Fatal("safe archive link", err)
 		}
+	}
+}
+
+type provisionExitStatus int
+
+func (s provisionExitStatus) Error() string { return "synthetic command exit" }
+func (s provisionExitStatus) ExitCode() int { return int(s) }
+
+func TestProvisionBulkOutputAndCloudCompletion(t *testing.T) {
+	for _, kind := range []string{"bulk-output", "recoverable-done", "recoverable-running", "fatal-done", "oversize-status"} {
+		t.Run(kind, func(t *testing.T) {
+			p, r, request, helper := provisionFilesystemFixture(t)
+			original := r.respond
+			r.respond = func(binary string, args []string, input []byte) ([]byte, error) {
+				if kind == "bulk-output" && binary == "/usr/bin/env" {
+					return bytes.Repeat([]byte("synthetic package progress\n"), 100000), nil
+				}
+				if binary == "/usr/bin/cloud-init" && args[0] == "status" {
+					switch kind {
+					case "recoverable-done":
+						return []byte(`{"status":"done"}`), provisionExitStatus(2)
+					case "recoverable-running":
+						return []byte(`{"status":"running"}`), provisionExitStatus(2)
+					case "fatal-done":
+						return []byte(`{"status":"done"}`), provisionExitStatus(1)
+					case "oversize-status":
+						return bytes.Repeat([]byte(" "), 4097), nil
+					}
+				}
+				return original(binary, args, input)
+			}
+			_, err := p.provision(context.Background(), request, helper)
+			valid := kind == "bulk-output" || kind == "recoverable-done"
+			if (err == nil) != valid {
+				t.Fatal("bulk/status result differs", err)
+			}
+			if !valid {
+				var failure *provisionFailure
+				if !errors.As(err, &failure) || failure.Stage != 13 {
+					t.Fatal("unclassified sanitation failure", err)
+				}
+			}
+		})
+	}
+}
+func TestProvisionReportsOnlyNumericFailureStage(t *testing.T) {
+	var output bytes.Buffer
+	err := provisionLinux(context.Background(), strings.NewReader(`{"recipe":"synthetic-private-request"}`), &output)
+	if err == nil || err.Error() != "linux provisioning refused at stage 1" || output.String() != "{\"failed_stage\":1}\n" {
+		t.Fatal("unbounded or missing failure receipt", err)
+	}
+	p, r, request, helper := provisionFilesystemFixture(t)
+	r.respond = func(string, []string, []byte) ([]byte, error) {
+		return nil, errors.New("synthetic-private-command-output")
+	}
+	_, err = p.provision(context.Background(), request, helper)
+	if err == nil || err.Error() != "linux provisioning refused at stage 7" {
+		t.Fatal("package failure missing its fixed stage", err)
+	}
+}
+func TestProvisionNativeBulkOutput(t *testing.T) {
+	if os.Args[len(os.Args)-1] == "provision-bulk-output-fixture" {
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("synthetic package progress\n"), 100000))
+		os.Exit(0)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := provisioner{commands: nativeProvisionCommands{}}
+	if err := p.discard(context.Background(), exe, []string{"-test.run=^TestProvisionNativeBulkOutput$", "--", "provision-bulk-output-fixture"}); err != nil {
+		t.Fatal("unused stdout volume refused a successful command", err)
 	}
 }

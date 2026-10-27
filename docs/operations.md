@@ -1275,12 +1275,14 @@ remove other preparation agents/accounts and credentials before capture.
 1. Build the matching static helper on the host:
 
    ```sh
-   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o linux-arm64 ./cmd/bivouac
+   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o linux-arm64 ./cmd/bivouac
    ```
 
-2. Stage the helper and official ARM64 runner archive in the image, owned by root
-   and protected from other users' writes. Obtain the archive's published SHA-256;
-   never stage GitHub credentials, JIT input or personal keys.
+2. Stage this exact helper file and the official ARM64 runner archive in the
+   image, owned by root and protected from other users' writes. Configure the
+   identical helper file as `vz.helper` on the host; another build may hash
+   differently. Obtain the archive's published SHA-256; stage no credentials or
+   JIT input. Rebuild the baseline whenever the configured helper changes.
 3. As guest root, run the fixed command with bounded JSON stdin:
 
    ```sh
@@ -1293,7 +1295,8 @@ remove other preparation agents/accounts and credentials before capture.
    creates the non-root Docker-enabled user, prepares DHCP DNS/MTU without forced
    resolvers or a network restart, disables SSH/cloud-init provisioning, removes
    standard authorization/history, and runs shared VZ image sanitation. Unknown
-   layouts refuse preparation; a failed image must be inspected or replaced.
+   layouts refuse preparation; failures report only a numeric `failed_stage`.
+   Inspect or replace a failed preparation image.
 4. After success, remove remaining staging/provisioning artifacts and shut down
    cleanly. Import the stopped image on the host:
 

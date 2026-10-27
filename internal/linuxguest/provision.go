@@ -185,3 +185,15 @@ func provisionAccounts(data []byte) (map[string]provisionAccount, error) {
 	}
 	return result, nil
 }
+
+// cloud-init exit 2 means recoverable errors. It is accepted only after the
+// bounded machine-readable final state proves completion, never while running.
+func validateProvisionCloudStatus(data []byte, exit int) error {
+	var status struct {
+		Status string `json:"status"`
+	}
+	if len(data) > 4096 || json.Unmarshal(data, &status) != nil || status.Status != "done" || exit != 0 && exit != 2 {
+		return errors.New("cloud-init completion unconfirmed")
+	}
+	return nil
+}

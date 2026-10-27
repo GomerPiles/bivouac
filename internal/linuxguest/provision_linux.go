@@ -11,9 +11,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"runtime"
 	"sort"
@@ -27,8 +29,19 @@ import (
 
 const provisionStage = "/usr/local/libexec/bivouac-provision/bivouac-guest"
 
+// Numeric phases are the only provisioning diagnostics returned to a caller.
+// Success retains the prepared-image receipt; failure emits {failed_stage:N}.
+type provisionFailure struct {
+	Stage uint32 `json:"failed_stage"`
+}
+
+func (f *provisionFailure) Error() string {
+	return fmt.Sprintf("linux provisioning refused at stage %d", f.Stage)
+}
+
 type provisionCommands interface {
 	Input(context.Context, string, []string, []byte) ([]byte, error)
+	Run(context.Context, string, []string, io.Writer) error
 }
 
 type provisioner struct {
@@ -38,16 +51,22 @@ type provisioner struct {
 }
 
 func provisionLinux(ctx context.Context, input io.Reader, out io.Writer) (result error) {
-	// Never include paths, input, subprocess output or environment in errors.
+	stage := uint32(1)
+	// Never return paths, input, subprocess output or environment. Unlike the
+	// nested factory receipt, the provisioning process also exits unsuccessfully.
 	defer func() {
 		if result != nil {
-			result = errors.New("linux guest provisioning refused; inspect or replace the disposable preparation image")
+			failure := &provisionFailure{Stage: stage}
+			_ = errors.As(result, &failure)
+			_ = json.NewEncoder(out).Encode(failure)
+			result = failure
 		}
 	}()
 	request, err := decodeProvisionRequest(input)
 	if err != nil {
 		return err
 	}
+	stage = 2
 	var host syscall.Utsname
 	if err := syscall.Uname(&host); err != nil {
 		return err
@@ -67,7 +86,8 @@ func provisionLinux(ctx context.Context, input io.Reader, out io.Writer) (result
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	p := provisioner{root: root, commands: command.Native{}, ownerUID: 0}
+	p := provisioner{root: root, commands: nativeProvisionCommands{}, ownerUID: 0}
+	stage = 3
 	// /proc/self/exe pins the executing inode, independent of the staged filename.
 	self, err := os.Open("/proc/self/exe")
 	if err != nil {
@@ -86,9 +106,68 @@ func provisionLinux(ctx context.Context, input io.Reader, out io.Writer) (result
 	if err != nil {
 		return err
 	}
+	stage = 17
 	return json.NewEncoder(out).Encode(report)
 }
 
+// Native query output uses the shared bounded runner. Bulk package output is
+// discarded at the source and cannot turn a successful installation into failure.
+type nativeProvisionCommands struct{}
+
+func (nativeProvisionCommands) Input(ctx context.Context, binary string, args []string, input []byte) ([]byte, error) {
+	return (command.Native{}).Input(ctx, binary, args, input)
+}
+func (nativeProvisionCommands) Run(ctx context.Context, binary string, args []string, out io.Writer) error {
+	// #nosec G702 -- Fixed recipe executables and argument arrays; no shell or credential argument.
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Stdout = out
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+func (p provisioner) discard(ctx context.Context, binary string, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if err := p.commands.Run(ctx, binary, args, io.Discard); err != nil {
+		return errors.New("fixed provisioning command failed")
+	}
+	return nil
+}
+
+// A bounded prefix sink accepts the whole write, so the child can finish. Only
+// consumed query output treats overflow as invalid; bulk output uses io.Discard.
+type provisionOutput struct {
+	data     []byte
+	overflow bool
+}
+
+func (b *provisionOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := 4096 - len(b.data)
+	if len(p) > remaining {
+		b.overflow = true
+		p = p[:remaining]
+	}
+	b.data = append(b.data, p...)
+	return n, nil
+}
+func (p provisioner) cloudStatus(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	var output provisionOutput
+	err := p.commands.Run(ctx, "/usr/bin/cloud-init", []string{"status", "--wait", "--format=json"}, &output)
+	exit := 0
+	if err != nil {
+		var status interface{ ExitCode() int }
+		if !errors.As(err, &status) {
+			return errors.New("cloud-init status unavailable")
+		}
+		exit = status.ExitCode()
+	}
+	if output.overflow || ctx.Err() != nil {
+		return errors.New("cloud-init status exceeds bound or deadline")
+	}
+	return validateProvisionCloudStatus(output.data, exit)
+}
 func (p provisioner) run(ctx context.Context, binary string, args []string, input []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -164,7 +243,13 @@ func (p provisioner) read(name string, bound int64) ([]byte, error) {
 	return data, nil
 }
 
-func (p provisioner) provision(ctx context.Context, request ProvisionRequest, helper []byte) (PreparedLinuxImage, error) {
+func (p provisioner) provision(ctx context.Context, request ProvisionRequest, helper []byte) (report PreparedLinuxImage, result error) {
+	stage := uint32(4)
+	defer func() {
+		if result != nil {
+			result = &provisionFailure{Stage: stage}
+		}
+	}()
 	var empty PreparedLinuxImage
 	release, err := p.read("etc/os-release", 16384)
 	if err != nil {
@@ -181,6 +266,7 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 	if err := p.preflight(); err != nil {
 		return empty, err
 	}
+	stage = 5
 	// Hold the archive open from pinning through extraction. Only protected
 	// ordinary operator-staged files are accepted, never a symlink or device.
 	archiveName := strings.TrimPrefix(request.RunnerArchive, "/")
@@ -201,6 +287,7 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 	if err != nil {
 		return empty, err
 	}
+	stage = 6
 	// Validate known network/account layouts before package or image mutations.
 	if err := p.networkDevice(); err != nil {
 		return empty, err
@@ -212,11 +299,13 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 	if _, err := p.accounts(); err != nil {
 		return empty, err
 	}
+	stage = 7
 	for _, args := range [][]string{{"DEBIAN_FRONTEND=noninteractive", "/usr/bin/apt-get", "update"}, append([]string{"DEBIAN_FRONTEND=noninteractive", "/usr/bin/apt-get", "install", "-y"}, recipe.packages...)} {
-		if _, err := p.run(ctx, "/usr/bin/env", args, nil); err != nil {
+		if err := p.discard(ctx, "/usr/bin/env", args); err != nil {
 			return empty, err
 		}
 	}
+	stage = 8
 	accounts, err := p.accounts()
 	if err != nil {
 		return empty, err
@@ -241,6 +330,7 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 	if _, err := p.run(ctx, "/usr/sbin/usermod", []string{"--append", "--groups", "docker", "bivouac"}, nil); err != nil {
 		return empty, err
 	}
+	stage = 9
 	if _, err := p.run(ctx, "/usr/bin/systemctl", []string{"enable", "--now", "docker.service"}, nil); err != nil {
 		return empty, err
 	}
@@ -250,15 +340,18 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 			return empty, errors.New("baseline contains Docker job state")
 		}
 	}
+	stage = 10
 	if err := p.extract(archive, entries); err != nil {
 		return empty, err
 	}
-	if _, err := p.run(ctx, "/usr/bin/env", []string{"DEBIAN_FRONTEND=noninteractive", "/opt/actions-runner/bin/installdependencies.sh"}, nil); err != nil {
+	stage = 11
+	if err := p.discard(ctx, "/usr/bin/env", []string{"DEBIAN_FRONTEND=noninteractive", "/opt/actions-runner/bin/installdependencies.sh"}); err != nil {
 		return empty, err
 	}
 	if err := p.chownRunner(user.uid, user.gid); err != nil {
 		return empty, err
 	}
+	stage = 12
 	for _, file := range []struct {
 		name string
 		data []byte
@@ -278,16 +371,20 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 			return empty, err
 		}
 	}
+	stage = 13
 	if err := p.sanitize(ctx, accounts); err != nil {
 		return empty, err
 	}
+	stage = 14
 	if err := p.configureNetwork(ctx); err != nil {
 		return empty, err
 	}
-	report, err := p.imageFactory(ctx, recipe.profile, helper)
+	stage = 15
+	report, err = p.imageFactory(ctx, recipe.profile, helper)
 	if err != nil {
 		return empty, err
 	}
+	stage = 16
 	if err := p.root.Remove(strings.TrimPrefix(provisionStage, "/")); err != nil {
 		return empty, err
 	}
@@ -570,10 +667,11 @@ func (p provisioner) sanitize(ctx context.Context, accounts map[string]provision
 		}
 	}
 	if _, err := p.root.Lstat("usr/bin/cloud-init"); err == nil {
-		for _, args := range [][]string{{"status", "--wait"}, {"clean", "--logs", "--seed"}} {
-			if _, err := p.run(ctx, "/usr/bin/cloud-init", args, nil); err != nil {
-				return err
-			}
+		if err := p.cloudStatus(ctx); err != nil {
+			return err
+		}
+		if _, err := p.run(ctx, "/usr/bin/cloud-init", []string{"clean", "--logs", "--seed"}, nil); err != nil {
+			return err
 		}
 		if err := p.install("etc/cloud/cloud-init.disabled", nil, 0600); err != nil {
 			return err

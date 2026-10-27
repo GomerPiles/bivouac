@@ -162,3 +162,18 @@ func TestProvisionArchivePlanningAndRefusals(t *testing.T) {
 		t.Fatal("corrupt gzip trailer accepted")
 	}
 }
+
+func TestProvisionCloudCompletionRequiresDoneAndRecoverableExit(t *testing.T) {
+	for _, tc := range []struct {
+		data  string
+		exit  int
+		valid bool
+	}{
+		{`{"status":"done"}`, 0, true}, {`{"status":"done","extended_status":"degraded done"}`, 2, true},
+		{`{"status":"running"}`, 2, false}, {`{"status":"error"}`, 2, false}, {`{"status":"done"}`, 1, false}, {`{"status":"done"}`, 3, false}, {`{"status":"done"} {}`, 0, false}, {strings.Repeat(" ", 4097), 0, false},
+	} {
+		if err := validateProvisionCloudStatus([]byte(tc.data), tc.exit); (err == nil) != tc.valid {
+			t.Fatal("cloud-init final state/exit contract", tc.exit, err)
+		}
+	}
+}

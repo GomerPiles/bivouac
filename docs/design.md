@@ -636,8 +636,8 @@ path fits `sun_path` whatever the name.
   Linux. Linux requires explicit CPU/memory and prohibits Darwin display/share/
   slot options and companion engines; its baseline still must be supplied.
   Guest-root provisioning uses a Go recipe registry, currently Ubuntu 24.04
-  ARM64/VZ only, reused unchanged by the future baseline builder. A later omitted
-  Linux baseline will resolve once during configuration preparation to a
+  ARM64/VZ only; the future baseline builder will reuse it unchanged. An omitted
+  Linux baseline will later resolve once during configuration preparation to a
   bivouac-built recipe image; admission and instance specs consume that name.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
