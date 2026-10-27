@@ -31,14 +31,16 @@ Factory registration, sanitation and manifest admission have unit coverage.
 
 The opt-in vmhost lab gates on loopback refusal, both-task installation facts,
 probe SID/elevation/console/desktop context, normal probe/grandchild priority,
-the same probe and grandchild surviving both restart paths, and new agent
-identities. Cycles run inside the probe with matching fresh request/completion
-IDs. Job membership is baseline-only diagnostic data; failed queries report
-unknown. The lab conversation is simulated by unit tests; real scheduler and
-process-lifetime behavior remain unverified.
+a same-account SAFER normal-user token reading the agent task but refused
+reading or starting the runner task (elevated start accepted), the same probe
+and grandchild surviving both restart paths, and new agent identities. Cycles
+run inside the probe with matching fresh request/completion IDs. Job
+membership is baseline-only diagnostic data; failed queries report unknown.
+These gates passed live on a contract-2 image built from install media with
+the factory changes stacked on this branch.
 
-A fresh contract-2 image and live lab are required for task DACL/filtered-token
-refusal, premature/duplicate activation, cancellation during startup (helper console attach), console
+Still unverified live: refusal for the real UAC-filtered token (the lab uses a
+SAFER token with no more access), premature/duplicate activation, cancellation during startup (helper console attach), console
 visibility/focus, scheduler latency, environment/session selection, task End
 descendant behavior and restart-on-failure with a surviving child. Native
 networking, UTC correction, cancellation/result reporting and cache behavior on
