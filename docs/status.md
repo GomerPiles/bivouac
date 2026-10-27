@@ -10,17 +10,14 @@ production migration gates remain open.
 The HCS provider, image factory and vmhost lab use bivouac's guest agent over
 HvSocket. The Windows adapter has unit coverage for preflight, preparation,
 start/stop, clock setting, bounded delivery/extraction and the 64-connection
-cache relay. Contract-2 runner-detach changes are not deployed; rollback uses
-the previous manager, VM host service and image together.
+cache relay. None of this is deployed; production Windows CI still runs the
+previous runtime, and the cutover switches manager, VM host service and image
+together (rollback likewise).
 In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
 MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
 Recovery after an actual agent crash remains unverified.
-Reference-ISO contract-1 agent images (builds 15 and 16) published in about seven minutes with
-Secure Boot enabled, TPM present/ready, fully decrypted storage, the 2023 boot
-manager, one Hyper-V display and hardware D3D11. Their lab batch passed all
-gates except probe survival; the cause led to the separate runner-task design.
-A reference-ISO contract-2 image then published in 7.3 minutes, and one lab
-batch on it passed every gate (below). Contract-1 images are refused.
+A reference-ISO contract-2 image published in 7.3 minutes, and one lab batch
+on it passed every gate (below). Images of an earlier contract are refused.
 
 Windows contract 2 requires the agent logon task and separate on-demand runner
 task. Installation self-test checks both task definitions and the runner's
@@ -60,9 +57,9 @@ agent-served guests also remain live gates. Sibling-guest negative testing is
 outside this phase's loopback and host-account authorization scope.
 The accepted double Ctrl+C when stop and the helper both signal still needs live validation.
 
-The pinned render-probe output bridge and sanitation passed in published
-contract-1 images. Its atomic-ACL creation and primary-failure preservation
-changes have unit coverage; the contract-2 build ran the bridge successfully.
+The pinned render-probe output bridge and sanitation ran in the contract-2
+build. The bridge's atomic-ACL creation and primary-failure preservation have
+unit coverage only.
 
 ## Checks
 
@@ -235,208 +232,85 @@ round trips are opt-in and are not part of ordinary local tests.
 
 ## Windows: direct HCS (Windows guests)
 
-Reference-ISO contract-1 images completed setup, render validation, sanitation
-and publication in about seven minutes. Secure Boot, TPM presence/readiness,
-fully decrypted BitLocker state, the embedded 2023/plain-GPT boot path,
-single Hyper-V display and hardware D3D11 were validated. Firmware entries
-were unchanged. The contract-1 lab batch failed only probe survival, which
-led to the runner-detach design; a contract-2 image passed the full lab batch.
-The 180-second first-boot render budget and numeric failure facts have unit
-coverage. Failure cleanup skips grace on memory-reserve cancellation and
-reserves separate termination/diagnostic/detach deadlines; those changes are
-unit-tested only.
+Two runtimes exist. Production Windows CI runs the previous one (App
+Sandbox/SSH guest transport on a template-built image). The agent-served
+runtime in this tree (Windows contract 2) is not deployed; it switches
+together with its manager, VM host service and image.
 
-The runtime and factory agent switch is code-complete with fake-agent, offline-copy and relay tests;
-current-contract live validation is pending a matching image. Tests cover exact receive metadata,
-readiness ordering, command/output bounds, terminal protocol refusal, transient
-recovery, adoption without pins, unchanged status/diagnostics decoding, TLS cache
-requests, fallback cleanup and revocation. The historical live results below
-describe the previous App Sandbox/SSH runtime, not validation of this switch.
+### Agent-served runtime and ISO image factory (not deployed)
 
-Startup timing records and the network lab's matching per-run readiness report
-have fake-host/transport unit coverage, including partial failures, numeric-only
-spans, clock skew and first-observed listening. They have not been collected
-from live guests; interleaved baseline distributions remain an operator gate.
+Validated live in the lab, with CI Off:
 
-The pieces built so far:
+- Reference-ISO builds publish in about seven minutes: Secure Boot on, TPM
+  present and ready, fully decrypted BitLocker state, the embedded
+  2023/plain-GPT boot path, one Hyper-V display and hardware D3D11. Host
+  firmware entries were unchanged.
+- One contract-2 lab batch passed every gate (see the summary above).
 
-- The typed HCS binding.
-- The cancellable HvSocket dialer.
-- The VM host core.
-- The prepared-guest client.
+Unit coverage only: the 180-second first-boot render budget and numeric
+failure facts; failure cleanup's memory-reserve cancellation and separate
+termination/diagnostic/detach deadlines; receive metadata, readiness
+ordering, command/output bounds, terminal protocol refusal, transient
+recovery, adoption without pins, status/diagnostics decoding, TLS cache
+requests, fallback cleanup and revocation on the agent transport.
 
-They passed one lab batch while production CI kept running. That was five cold
-boots, with no network adapter, from a prepared image that still contains App
-Sandbox's guest components. Every guest:
+Startup timing records and the network lab's per-run readiness report have
+fake-host/transport unit coverage only; interleaved baseline distributions
+remain an operator gate. In one interleaved lab comparison the new image
+reached a validated desktop in 33-40 s against 24.5-27 s for a copy of the
+production image, with different validation scripts on each; the gap is
+unexplained. Short guest PowerShell runs that autoload a module rescan all
+modules when no module-analysis cache is saved, which may contribute;
+unmeasured in guests.
 
-- Was created, started and given GPU-PV.
-- Initialized the guest agent and authenticated SSH over HvSocket.
-- Rendered hardware D3D11 and passed the presentation and pixel checks.
-- Rotated its credential and presented its own SSH host key.
-- Was terminated, confirmed absent and removed.
+### Deployed runtime (previous App Sandbox/SSH transport)
 
-The same batch showed:
+Production Windows CI runs on the `hcs` provider: the same scale set, labels
+and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. A production
+job listened 46 s after create (clone 7 s, boot 21 s, JIT registration 7 s)
+and tore down in 1.8 s.
 
-- An unelevated process reached the HvSocket service its account was granted
-  and was refused access to the other one.
-- Lazily committed memory boots and renders with GPU-PV and commits only about
-  0.1 GiB at start. Its steady-state saving was not measured, because
-  production CI was active during that run.
-- A flattened single-file image (18.9 GB, written in 7 s) boots the same way.
+Validated live on that runtime, with production CI Off:
 
-| Spans (host clock) | 2 CPU, 4 GiB | 4 CPU, 8 GiB |
-| --- | --- | --- |
-| Disk, create, start, GPU | 0.4-1.0 s | 0.6 s |
-| Agent reachable | 25.4-26.3 s | 15.2-15.3 s |
-| Validated desktop | 37.4-39.0 s | 27.2-27.3 s |
-| Teardown to confirmed absence | 0.2-0.4 s | 0.3 s |
+- Lab batch: five cold boots without a network adapter created, started and
+  attached GPU-PV, reached the guest over HvSocket, rendered hardware D3D11
+  with presentation and pixel checks, and were removed after confirmed
+  absence. An unelevated process reached only the HvSocket service its
+  account was granted. Lazily committed memory booted with about 0.1 GiB
+  committed at start (steady-state saving unmeasured). A flattened
+  single-file image booted the same way.
+- Network batch 2 (`TestLabNetworkBatch`): two production-sized networked
+  cold boots reached public DNS, HTTPS, TCP and UDP DNS; the gateway's DNS
+  proxy, host listeners at the gateway, LAN source and switch IPv6
+  link-local, and public IPv6 were unreachable. The deny layer survived
+  boot, readiness and the probes, and deletion removed the switch adapter.
 
-With 4 CPUs, the image's PowerShell boot task runs its first statement at
-5.6-5.8 s guest uptime instead of 21.3-21.7 s. The earlier gap of about 18.6 s
-was therefore CPU contention during boot, not a fixed wait. In that earlier
-window, the task's SSH host-key generation takes 5.6-5.8 s instead of
-0.6-1.7 s.
-
-Desktop validation takes about 11 s. Its own console, GPU and render waits
-account for about 5 s of that; the rest is PowerShell work in the image.
-
-Built since, covered by tests only: the VM host's authorized pipe API, the
-optional service and its install and control commands, and the `hcs` provider.
-The previous provider adopted guests by label, pinned host keys, reconnected after
-transport loss and delivered files by scp. A real named-pipe
-test covers caller identification, refusal of anonymous callers and refusal
-of an unprivileged server; the service has since run live (below).
-
-Guest networking passed lab batch 2 (`TestLabNetworkBatch`) with Windows CI
-Off. It ran two networked production-sized cold boots (4 CPU, 8 GiB, GPU)
-through an in-process foreground VM host and the `hcs` provider. Every run:
-
-- Was created and started with its switch, endpoint and deny layer in 4.5-5.1 s.
-- Passed WaitReady, which applied the lease and proved the console and default
-  desktop, 28-29 s after create.
-- Reached public DNS, HTTPS, TCP and UDP DNS.
-- Timed out on the gateway's DNS proxy and on host listeners at the gateway,
-  the LAN source address and the switch adapter's IPv6 link-local address.
-  Public IPv6 was unreachable. Each listener was reachable from the host and
-  saw no other connection.
-- Was still running after two guard passes, so its layer survived boot,
-  readiness and the probes.
-- Was deleted in 1.3 s, with the switch adapter gone.
-
-| Spans (host clock) | Run 1 | Run 2 |
-| --- | --- | --- |
-| Switch and endpoint | 0.57 s | 0.71 s |
-| HCS create | 0.55 s | 0.29 s |
-| Start | 0.58 s | 0.40 s |
-| Deny layer after start | 0.97 s | 0.92 s |
-
-In both runs the switch port appeared only at start, so the layer was
-installed about 1 s after the guest began running, not before its first
-instruction. Design accepts that window because nothing untrusted reaches the
-guest before the layer is verified.
-
-An earlier attempt passed the same network checks but could not delete the
-network: hostnet waited for the stopped guest's port to vanish, which it does
-not do until its endpoint is deleted. After the fix, Recover settled that
-leftover in 0.85 s.
-
-A failed start is cleaned up (lab batch `failed-start`, no network or GPU).
-A second disk whose file does not exist made HCS refuse start with HRESULT
-0x80070002. Afterwards the creating handle's properties reported the owner
-mismatched, system type `Container` and no runtime ID, so they no longer proved
-the guest. Create closed that handle, confirmed absence and removed the
-journal and storage. Excess vCPUs are not a start
-failure: HCS refuses them at create.
-
-The VM host service runs live. It was installed elevated from a protected
-directory with one UAC prompt and no reboot. The ordinary account then
-started and stopped it with the installer's rights (about 0.3 s each), and
-the pipe answered about 20 ms after start with an empty journal. The client
-trusts the pipe by its owner because an unelevated client cannot open a
-SYSTEM service's process token. The installed service predates the explicit
-`O:BA` owner and serves with its default owner, which is also
-Administrators. A foreground `vmhost run` with the explicit owner has not run
-live. Called directly, the provider's
-`Activate` started the stopped service and saw it serve in 0.27 s, and
-`Deactivate` found no guests and stopped it in 0.25 s. Both were no-ops when
-repeated.
-
-GitHub jobs ran end to end on HCS guests, with production CI Off. An
-isolated home used REST JIT demand, its own `bivouac-` label and one 4 CPU,
-8 GiB GPU guest, and drove the installed service from a live daemon:
-
-- `bivouac on` started the stopped service and filled the pool. A guest was
-  listening 47-51 s after create (clone 5-7 s, boot 28-30 s, JIT
-  registration and listener 12-15 s).
-- Two jobs passed on two different guests. Hooks ran, checkout worked, the
-  host GPU appeared through GPU-PV, `api.github.com` answered, and the second
-  job found no trace of the first. Each finished guest was deregistered and
-  deleted in about 2 s, and a replacement was listening within a minute.
-- `bivouac off --wait` deregistered and deleted the idle guest, stopped the
-  service and exited in 5-14 s. The guest's switch adapter was gone, and every
-  runner was deregistered.
-- The first attempts found two guest problems, both fixed:
-  - The guest clock ran an hour ahead, so GitHub refused the runner's token.
-    The image reads its RTC (host local time) in its own time zone, and no
-    time-sync channel corrects it. WaitReady now sets the clock from the host.
-  - The image's default execution policy refused the runner's hook and step
-    scripts. The runner now gets a process-scope RemoteSigned policy on such
-    a guest.
-
-The previously validated HCS guests used the host cache through a dedicated authenticated HvSocket SSH
-client. The adapter sets up before JIT, removes partial settings before any
-fallback, refuses the launch when that removal is uncertain, and revokes on
-confirmed deletion, confirmed absence or provider shutdown. It passed the
-cache validation fixture live with production's Windows cache settings
-(release proxy, no upload storage), each run on a fresh guest:
-
-- `save`: two concurrent archive saves passed upstream, and the release
-  proxy served its second download from the first.
-- First `restore`: both archives (216 MiB) filled from upstream, and the
-  release downloads hit the cache the previous guest filled.
-- Second `restore`: both archives and both releases hit locally, with no
-  misses or failures.
-
-Loss fallback, `outage`, `interrupt` and upload storage have not run on HCS
-guests.
-
-The earlier, replaced copy-based image factory built an image from an App Sandbox template.
-The following measurements describe that earlier pipeline, not ISO builds.
-`image inspect` first copied the 29.5 GB template in 20 s and found it
-generalized to OOBE. The only runner residue was one log from template
-preparation in `_diag`, which that earlier setup removed. The build took 3 minutes:
-
-- 20 s copying the template;
-- 1 min 47 s from boot to a validated desktop with hardware D3D11;
-- 19 s clean shutdown;
-- 25 s flattening and hashing.
-
-The template was only read. The installed VM host service then ran the new
-binary and served the new image at production limits (1 guest, 10 CPU,
-9216 MiB). The isolated JIT home repeated the end-to-end and cache checks with
-production CI Off, on three jobs, each on a fresh guest:
-
-- Guests booted in 21.5-24.3 s (28-30 s on the spike's image) and listened
-  37-40 s after create.
-- Every job saw the AMD GPU through GPU-PV and reached `api.github.com`.
-- `save`, `restore`, `restore` passed as before. The first restore filled both
-  archives (216 MiB) upstream; the second hit both locally, and every release
-  download hit.
-- `bivouac off --wait` exited in 11 s, with the service stopped, no guest
-  adapter left and every runner deregistered.
-
-Production Windows CI now runs on the `hcs` provider: the same scale set,
-labels and size (10 CPU, 9 GiB, GPU), with Linux unchanged on crosvm. CI On
-started the VM host service. The first real Windows job ran beside a Linux
-job and succeeded: listening 46 s after create (clone 7 s, boot 21 s, JIT
-registration 7 s), teardown 1.8 s, runner deregistered.
+  The switch port appears only at start, so the deny layer lands about 1 s
+  after the guest begins running (0.92-0.97 s in both runs); design accepts
+  that window because nothing untrusted reaches the guest before the layer
+  is verified.
+- A failed start (missing second disk, HRESULT 0x80070002) is cleaned up:
+  journal and storage removed after confirmed absence. HCS refuses excess
+  vCPUs at create.
+- The VM host service installs elevated with one UAC prompt and no reboot;
+  the ordinary account starts and stops it (about 0.3 s each), and the
+  provider's `Activate`/`Deactivate` start and stop it idempotently. The
+  installed service serves with its default owner (Administrators).
+- End-to-end GitHub jobs on an isolated home and label: `bivouac on` filled
+  the pool, jobs ran with hooks, checkout, GPU-PV and `api.github.com`, the
+  second job saw no trace of the first, guests were deregistered and deleted
+  in about 2 s, and `bivouac off --wait` stopped the service with no adapter
+  or runner left. The cache validation fixture (`save`, `restore`,
+  `restore`) passed with production's Windows cache settings.
 
 Open:
 
+- Everything under "Still unverified live" in the summary, for the
+  agent-served runtime, plus a production cutover and rollback rehearsal.
+- Hibernation and fast startup are not disabled inside built guests.
 - `Deactivate` refusing to stop a VM host that holds guests (unit-tested
   only).
-- A foreground `vmhost run` with the explicit pipe owner. (The installed
-  service's binary was updated in place while stopped, with no reinstall.)
+- A foreground `vmhost run` with the explicit pipe owner.
 - Isolation controls that batch 2 did not cover:
   - A control with the deny layer removed. Without it, a refused host
     listener does not rule out the host firewall; the gateway's DNS proxy is
@@ -444,15 +318,16 @@ Open:
   - An owner-controlled private peer.
   - Guest source-address and MAC changes.
   - Host interface changes while a guest runs.
+- Cache loss fallback, `outage`, `interrupt` and upload storage on HCS guests.
 - Longer and heavier jobs over time, and recovery after a daemon or host
   restart with HCS guests.
 - Interrupted-apply cleanup, retry from another session and after host reboot,
   and split-media DISM wildcard apply. Ordinary WIM apply through the ISO
   volume-GUID path and publication are validated with the reference ISO.
 - Live validation of publication's nonzero BitLocker refusal, automatic-letter
-  refusal, replacement-log cleanup, cleanup stage deadlines and probe ACL/error
-  changes. Unit tests cover these paths. Admission does not compare the host
-  GPU driver with the image's.
+  refusal, replacement-log cleanup, cleanup stage deadlines, probe ACL/error
+  changes and `--retain-failed` retention and cleanup. Unit tests cover these
+  paths. Admission does not compare the host GPU driver with the image's.
 - The warm spare.
 
 ## Windows: Crosvm (Linux GPU guests)
@@ -492,8 +367,9 @@ breakaway and log-cap retirement are untested on Windows.
 Actions v2 archive restores and public GitHub release downloads are
 validated live on macOS, HCS Windows and Crosvm Linux guests: cold and warm
 hits. Direct fallback after cache loss is validated on macOS and Crosvm;
-HCS loss fallback remains open. Windows and Linux guests reach the cache over
-SSH on guest loopback. Not covered: container images, npm/Cargo/rustup,
+HCS loss fallback remains open. Crosvm Linux guests and the deployed HCS
+runtime reach the cache over SSH on guest loopback; the agent-served HCS
+runtime relays it over the agent (unit coverage only). Not covered: container images, npm/Cargo/rustup,
 private releases, and GHES; tools with their own trust stores need setup.
 
 Categorized store, fill and delivery diagnostics passed isolated Windows-host

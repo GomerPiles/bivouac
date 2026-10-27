@@ -236,7 +236,8 @@ delete them by hand once rollback to that provider is no longer needed. Status u
 replayed after an uncertain outcome. A protocol-version refusal is terminal.
 This provider requires a matching bivouac-agent image; old images are unsupported.
 Rollback is the previous manager binary, VM host service binary and image. The factory and vmhost lab batch below
-use the same agent protocol; this branch has not been validated live.
+use the same agent protocol. The lab batch has passed on a contract-2 image;
+end-to-end jobs on this runtime have not run live.
 
 ### Coordinated HCS cutover and rollback
 
@@ -459,7 +460,8 @@ about final installed WinRE state. Effective firmware trust must be validated on
    bivouac image build --config "<protected parent>\image-factory.json"
    ```
 
-   Both print the build's facts or result as JSON. A Group Policy execution
+   `inspect` prints the media inventory and `build` a bounded result, both as
+   JSON. A Group Policy execution
    policy overrides the factory's own and can stop its scripts.
    A guest that exits before preparation completes reports HCS's exit type
    and status. For lab diagnosis, `image build --retain-failed` keeps a
@@ -493,7 +495,8 @@ about final installed WinRE state. Effective firmware trust must be validated on
 4. A build boots the guest with GPU-PV, runs Windows setup with the pinned
    agent, checks hardware rendering with the probe, removes setup files and agent logs,
    rotates the console password into the autologon secret, shuts down
-   cleanly and flattens the result. Install-media build timings are unmeasured.
+   cleanly and flattens the result. A reference-ISO build takes about seven
+   minutes on this class of host.
    Admission waits for the guest's memory plus 10 GiB available and
    8 GiB commit headroom, and the build cancels itself if available memory
    falls below 6 GiB or commit headroom below 2 GiB.
@@ -536,13 +539,8 @@ about final installed WinRE state. Effective firmware trust must be validated on
 Before a separately authorized live build, compare `bcdedit /enum firmware`
 before and after ESP/store preparation. Compare entry counts and identifier sets in memory;
 record only the unchanged boolean/counts, never the raw firmware enumeration.
-Require no firmware-entry change. Contract-1 reference-ISO images (builds 15 and 16) have published
-in about seven minutes with Secure Boot enabled, TPM present and ready,
-fully decrypted storage, the 2023 boot manager, one Hyper-V display and
-hardware D3D11. Their lab batch passed all gates except probe survival;
-that failure led to the separate runner-task design. Contract 2 needs a
-fresh factory build and lab run; earlier images do not satisfy its task contract.
-Interrupted-apply cleanup, including
+Require no firmware-entry change. Images are built for one Windows
+contract; images of an earlier contract are refused. Interrupted-apply cleanup, including
 retry from another session and after a host reboot, remains a live gate.
 DISM `/ImageFile` and split-media `/SWMFile` still use read-only ISO volume
 GUID paths (`\\?\Volume{GUID}\...`); ordinary WIM apply passed in lab runs.
