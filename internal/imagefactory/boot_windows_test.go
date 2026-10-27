@@ -90,6 +90,7 @@ func TestBootCopySet(t *testing.T) {
 func TestBootGenerationSelection(t *testing.T) {
 	for _, mode := range []string{"absent", "2023", "wrong issuer", "byte mismatch", "mixed"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			if mode != "absent" {
 				f.options["ex"] = true
@@ -158,6 +159,7 @@ func TestBootCopyRefusals(t *testing.T) {
 			continue
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			if e := os.Remove(filepath.Join(f.workspace, "base-windows", name)); e != nil {
 				t.Fatal(e)
@@ -167,6 +169,7 @@ func TestBootCopyRefusals(t *testing.T) {
 		})
 	}
 	t.Run("link", func(t *testing.T) {
+		t.Parallel()
 		f := newStorageFixture(t, "boot")
 		target := filepath.Join(f.root, "foreign")
 		if e := os.Mkdir(target, 0700); e != nil {
@@ -178,6 +181,7 @@ func TestBootCopyRefusals(t *testing.T) {
 		requireScriptStep(t, e, 61)
 	})
 	t.Run("file_bound", func(t *testing.T) {
+		t.Parallel()
 		f := newStorageFixture(t, "boot")
 		file, e := os.OpenFile(filepath.Join(f.workspace, `base-windows\Windows\Boot\EFI\oversized`), os.O_CREATE|os.O_WRONLY, 0600)
 		if e != nil {
@@ -221,6 +225,7 @@ func expectedBCDCommands(f *storageFixture) [][]string {
 func TestBCDCommandsAndFailures(t *testing.T) {
 	for fail := 0; fail <= 16; fail++ {
 		t.Run(strconv.Itoa(fail), func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			f.options["bcd_fail"] = fail
 			b, e := f.run(baseDisk, f.data("boot"))
@@ -261,6 +266,7 @@ func TestBCDCommandsAndFailures(t *testing.T) {
 func TestBCDWriteFailureCleanup(t *testing.T) {
 	for code := 1; code <= 14; code++ {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			f.options["write"] = code
 			b, err := f.run(baseDisk, f.data("boot"))
@@ -301,6 +307,7 @@ func TestBootHasNoTemporaryLetterPlan(t *testing.T) {
 func TestBCDVerificationFailureCleanup(t *testing.T) {
 	for code := 1; code <= 28; code++ {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			f.options["verify"] = code
 			b, e := f.run(baseDisk, f.data("boot"))

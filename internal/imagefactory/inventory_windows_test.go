@@ -9,10 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestInspectMediaOnly(t *testing.T) {
 	dir := t.TempDir()
+	// Configuration paths must be canonical even when TEMP uses an 8.3 alias.
+	short, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetLongPathName(short, &long[0], windows.MAX_LONG_PATH)
+	if err != nil || n == 0 || n >= windows.MAX_LONG_PATH {
+		t.Fatal("long temp path unavailable")
+	}
+	dir = windows.UTF16ToString(long[:n])
 	b := syntheticUDF()
 	path := filepath.Join(dir, "install.iso")
 	if e := os.WriteFile(path, b, 0600); e != nil {

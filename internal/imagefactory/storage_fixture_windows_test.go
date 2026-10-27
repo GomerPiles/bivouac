@@ -17,7 +17,7 @@ import (
 // Only ordinary temporary files are used. Persisted model state lets the actual
 // cleanup helper consume what a failed layout/apply/boot invocation left behind.
 const storageFixturePS = `
- $fixture=Get-Content -LiteralPath $env:BIVOUAC_STORAGE_FIXTURE -Raw|ConvertFrom-Json
+ $fixture=Get-Content -LiteralPath $data.fixture -Raw|ConvertFrom-Json
  $state=Get-Content -LiteralPath $fixture.state -Raw|ConvertFrom-Json
  function Save-Fixture {$state|ConvertTo-Json -Depth 8 -Compress|Set-Content -LiteralPath $fixture.state;if($fixture.fail_after -and $fixture.fail_after -eq $script:lastCall){throw 'injected lost creation response'}}
  function Trace([string]$Name){$script:lastCall=$Name;[IO.File]::AppendAllText($fixture.trace,($Name+[Environment]::NewLine));if($fixture.fail -eq $Name){throw 'injected operation failure'}}
@@ -180,7 +180,6 @@ func newStorageFixture(t *testing.T, mode string) *storageFixture {
 	if later {
 		createBootFixtureFiles(t, workspace)
 	}
-	t.Setenv("BIVOUAC_STORAGE_FIXTURE", f.optionsPath)
 	writeFixtureJSON(t, f.statePath, f.state)
 	return f
 }
@@ -203,11 +202,18 @@ func (f *storageFixture) run(script string, data map[string]string) ([]byte, err
 	if script == baseDisk {
 		script = embeddedSignatures + bootHelpers + script
 	}
-	script = strings.Replace(script, "\ntry{", "\n"+storageFixturePS+"\ntry{", 1)
+	// Bind this fixture through the input frame, never process-wide environment.
+	// Each case owns its files and native mocks and may run independently.
+	const readInput = "$data=[Console]::In.ReadToEnd()|ConvertFrom-Json"
+	if strings.Count(script, readInput) != 1 {
+		f.t.Fatal("storage fixture input boundary missing")
+	}
+	script = strings.Replace(script, readInput, readInput+"\n"+storageFixturePS, 1)
 	path := filepath.Join(f.root, "run.ps1")
 	if e := os.WriteFile(path, []byte(script), 0600); e != nil {
 		f.t.Fatal(e)
 	}
+	data["fixture"] = f.optionsPath
 	b, _ := json.Marshal(data)
 	return executeHost(f.t.Context(), path, b, true)
 }
@@ -245,6 +251,7 @@ func requireScriptStep(t *testing.T, err error, want int) {
 func TestBaseLayoutSafetyRefusals(t *testing.T) {
 	for _, refuse := range []string{"device", "backing", "storage", "nonraw", "sector", "existing_partitions"} {
 		t.Run(refuse, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "layout")
 			f.options["refuse"] = refuse
 			if refuse == "existing_partitions" {
@@ -266,6 +273,7 @@ func TestBaseLayoutSafetyRefusals(t *testing.T) {
 func TestBaseExactPartitionTable(t *testing.T) {
 	for _, fault := range []string{"", "extra", "order", "guid", "type", "size"} {
 		t.Run(fault, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "layout")
 			f.options["table"] = fault
 			b, e := f.run(baseDisk, f.data("layout"))
@@ -294,6 +302,7 @@ func TestBaseRefusesAutomaticDriveLetters(t *testing.T) {
 	}{{"esp_letter", 41}, {"windows_letter", 43}} {
 		for _, removalFails := range []bool{false, true} {
 			t.Run(tc.name+"/removal_fails="+strconv.FormatBool(removalFails), func(t *testing.T) {
+				t.Parallel()
 				f := newStorageFixture(t, "layout")
 				f.options["refuse"] = tc.name
 				if removalFails {
@@ -330,6 +339,7 @@ func TestBaseRefusesAutomaticDriveLetters(t *testing.T) {
 
 func TestBaseAutomaticMSR(t *testing.T) {
 	t.Run("msr_removed", func(t *testing.T) {
+		t.Parallel()
 		f := newStorageFixture(t, "layout")
 		f.options["auto"] = "msr"
 		b, e := f.run(baseDisk, f.data("layout"))
@@ -339,6 +349,7 @@ func TestBaseAutomaticMSR(t *testing.T) {
 		}
 	})
 	t.Run("other_partition_refused", func(t *testing.T) {
+		t.Parallel()
 		f := newStorageFixture(t, "layout")
 		f.options["auto"] = "basic"
 		_, e := f.run(baseDisk, f.data("layout"))
@@ -352,6 +363,7 @@ func TestBaseLaterIdentityRefusals(t *testing.T) {
 	for _, mode := range []string{"apply", "boot", "detach"} {
 		for _, refuse := range []string{"disk_guid", "partition_guid", "windows_guid", "access"} {
 			t.Run(mode+"_"+refuse, func(t *testing.T) {
+				t.Parallel()
 				f := newStorageFixture(t, mode)
 				f.options["refuse"] = refuse
 				_, e := f.run(baseDisk, f.data(mode))
@@ -366,6 +378,7 @@ func TestBaseLaterIdentityRefusals(t *testing.T) {
 func TestBaseApplyArgumentsAndMediaChange(t *testing.T) {
 	for _, kind := range []string{"wim", "esd", "swm"} {
 		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "apply")
 			data := f.data("apply")
 			data["kind"] = kind
@@ -402,6 +415,7 @@ func TestBaseApplyArgumentsAndMediaChange(t *testing.T) {
 func TestBaseBootSignatures(t *testing.T) {
 	for _, refuse := range []string{"", "tool_exit", "missing_artifact", "unsigned", "invalid_signature", "issuer2023", "unknown_issuer", "source_unsigned"} {
 		t.Run(refuse, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			f.options["refuse"] = refuse
 			b, e := f.run(baseDisk, f.data("boot"))
@@ -443,6 +457,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}, {"layout", "set_disk", 40}, {"layout", "initialize", 40}, {"layout", "esp", 41}, {"layout", "format_esp", 41}, {"layout", "msr", 42}, {"layout", "windows", 43}, {"layout", "format_windows", 43}, {"layout", "access_windows", 46}, {"layout", "access_esp", 46}, {"apply", "tool_dism", 50}, {"boot", "tool_bcdedit", 62}, {"boot", "write_devices", 63}, {"detach", "remove_windows", 70}, {"detach", "remove_esp", 70}, {"detach", "detach_base", 70}, {"detach", "detach_iso", 70}}
 	for _, test := range cases {
 		t.Run(test.fail, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, test.mode)
 			f.options["fail"] = test.fail
 			_, e := f.run(baseDisk, f.data(test.mode))
@@ -471,6 +486,7 @@ func TestCleanupAfterEveryNativeBoundary(t *testing.T) {
 func TestCleanupAccessIntents(t *testing.T) {
 	for _, recorded := range []bool{true, false} {
 		t.Run(strconv.FormatBool(recorded), func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, "boot")
 			f.state["child_attached"], f.state["inspection_access"], f.state["staging_access"] = true, true, true
 			writeFixtureJSON(t, f.statePath, f.state)
@@ -501,6 +517,7 @@ func TestCleanupAfterAmbiguousCreationResponses(t *testing.T) {
 		step       int
 	}{{"media", "mount_iso", 20}, {"layout", "mount_base", 30}} {
 		t.Run(test.call, func(t *testing.T) {
+			t.Parallel()
 			f := newStorageFixture(t, test.mode)
 			f.options["fail_after"] = test.call
 			_, e := f.run(baseDisk, f.data(test.mode))
