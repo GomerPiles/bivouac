@@ -1020,9 +1020,8 @@ zone; the creation document has no time-sync channel. The image factory keeps
 the install image's time zone and RTC handling, so the provider's `WaitReady` sets the
 guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
-skewed clock. The clock is set through local time, so in the guest's
-fall-back hour it can land an hour off; the check then refuses the guest
-rather than accept it. Likewise, the Windows runner launcher gives the runner
+skewed clock. The guest command sets UTC directly (`clock` below), so a
+daylight-saving transition cannot shift it. Likewise, the Windows runner launcher gives the runner
 a process-scope `RemoteSigned` execution
 policy when neither the CurrentUser nor the LocalMachine scope sets one that
 allows local scripts and none is inherited, because the runner dot-sources a
@@ -1104,8 +1103,8 @@ ACL and deny-write handles, not hashed per job.
   install*.swm set; metadata comes from the uncompressed UTF-16LE WIM XML
   resource, never localized DISM text. DTDs, malformed XML, unknown flags,
   excessive sizes and incomplete/mismatched split sets refuse. Selection uses
-  EditionID `Professional` by default and x64 Client; an explicit image index
-  overrides the edition. XML INDEX must equal its 1-based position so selection
+  EditionID `Professional` by default (`edition_id`) and x64 Client; an
+  explicit `image_index` (1-128) overrides the edition. XML INDEX must equal its 1-based position so selection
   matches DISM. Display names are sanitized, bounded information.
   Pinned file inputs (ISO, runner ZIP, render probe and factory executable)
   need not be administrator-protected: copyPinned hashes exactly the bytes it
@@ -1124,8 +1123,8 @@ ACL and deny-write handles, not hashed per job.
   Description\KeyName is REG_SZ BCD00000000 and Description\System is DWORD 1,
   with no FirmwareModified value. Windows specialize's BCD provider rejects
   the non-system store initially produced by /createstore.
-- **Disk layout:** the factory creates a dynamic VHDX (default 127 GiB,
-  bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
+- **Disk layout:** the factory creates a dynamic VHDX (`disk_gb`, default
+  127 GiB, bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
   cross-checks the mounted image's physical device, Storage disk path and
   reverse device-to-owned-VHDX association. Windows generates the disk and
   partition GUIDs once; later child inspection/staging selects the recorded
@@ -1160,8 +1159,8 @@ ACL and deny-write handles, not hashed per job.
   [BCDEdit commands](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdedit-command-line-options)
   and [UEFI settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi).
   No resume object is created: disposable CI guests always cold boot and never
-  hibernate. PR 3 must explicitly disable hibernation and fast startup in the
-  guest. No memdiag object is created.
+  hibernate. Hibernation and fast startup are not yet disabled inside the
+  guest (an open item in status.md). No memdiag object is created.
   BCDEdit sets no device elements: on a host-attached VHD, its partition
   references encode a nested host VHD path that cannot resolve in the guest.
   Offreg writes the three device elements as exact 88-byte plain GPT
@@ -1200,9 +1199,15 @@ ACL and deny-write handles, not hashed per job.
   The base and ISO are detached before the differencing child is created.
   Disk/partition GUIDs remain shared by clones; they are not randomized on
   host attachment. TPM-bound BitLocker protectors are not supported.
-  Publication refuses any reported nonzero C: conversion or protection status;
-  zero means fully decrypted/protection off. Missing/unreadable diagnostics
-  remain best effort and do not block publication.
+  Publication refuses any reported C: conversion or protection status other
+  than 0 (fully decrypted/protection off) and 0xFFFFFFFF (the diagnostic's
+  "unavailable" value). Missing/unreadable diagnostics remain best effort and
+  do not block publication.
+- **Failure retention:** `image build --retain-failed` (command line only)
+  keeps a failed build's workspace with the guest absent and disks detached
+  for offline inspection. The retained workspace still holds the setup ISO
+  and staged answer files with the build-time guest password, so it stays
+  administrator-only and is removed with `image cleanup --build <id>`.
 - **Ownership and cleanup:** ISO mount, base/child attachment and access paths
   have durable intents before creation. Partitions share the
   owned base attachment's lifetime; their GUIDs are recorded in the layout.
@@ -1225,8 +1230,9 @@ ACL and deny-write handles, not hashed per job.
   `image inspect` instead hashes and inventories media without mounts, disk
   creation or HCS. Facts are public; answer-file values are never reported.
 - **Offline staging:** the factory installs its own executable at
-  `guestagent.WindowsPath`, recording SHA-256 and `guestagent.Version` in the
-  manifest. The installation grants SYSTEM, Administrators and TrustedInstaller
+  `guestagent.WindowsPath`, recording its SHA-256 and the agent's Windows
+  contract (`windows_contract`) in the manifest; the wire protocol version is
+  checked per connection, not recorded. The installation grants SYSTEM, Administrators and TrustedInstaller
   full control and Users read/execute, without inherited user write access.
   Fresh install images need not contain Panther, Setup\Scripts or
   System32\HostDriverStore\FileRepository. Staging creates those parents and
@@ -1398,8 +1404,8 @@ ACL and deny-write handles, not hashed per job.
   effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
   and TPM present (readiness is recorded). It records offline device-encryption
   prevention and numeric C: BitLocker conversion/protection diagnostics;
-  reported nonzero statuses refuse publication, while missing/unreadable
-  statuses remain diagnostic. It also records agent
+  reported statuses other than 0 and the unavailable value refuse
+  publication, while missing/unreadable statuses remain diagnostic. It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;
@@ -1801,7 +1807,7 @@ Linux installs clone-only root trust and uses its system
 bundle. Runner children inherit the Actions preload, standard proxy settings and
 curl/Git/Node trust paths without workflow edits. The release bridge lives in the
 existing guest listener process. Confirmed VM deletion revokes the grant and
-closes its SSH transport; manager/service loss closes transports and leaves
+closes its transport (SSH for Crosvm, the agent relay for HCS); manager/service loss closes transports and leaves
 normal upstream fallback in the guest. Off shuts down the cache with the manager,
 while its bounded opaque store persists across jobs/restarts. Startup stays opt-in.
 Docker/other containers with independent environments/trust stores need explicit
