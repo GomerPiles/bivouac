@@ -7,73 +7,21 @@ gates. No provider is ready for untrusted (for example fork) pull requests.
 Rootless macOS networking has disposable-guest evidence below; the complete
 production migration gates remain open.
 
-The HCS provider, image factory and vmhost lab use bivouac's guest agent over
-HvSocket. The Windows adapter has unit coverage for preflight, preparation,
-start/stop, clock setting, bounded delivery/extraction and the 64-connection
-cache relay. None of this is deployed; production Windows CI still runs the
-previous runtime, and the cutover switches manager, VM host service and image
-together (rollback likewise).
-In-process listener re-listening and bounded consecutive session refusals have unit coverage only.
-MSI-before-leftover uninstall and OpenSSH server-capability removal, preserving the inbox client and ssh-agent, have unit coverage only.
-Recovery after an actual agent crash remains unverified.
-A reference-ISO contract-2 image published in 7.3 minutes, and one lab batch
-on it passed every gate (below). Images of an earlier contract are refused.
-
-Windows contract 2 requires the agent logon task and separate on-demand runner
-task. Installation self-test checks both task definitions and the runner's
-current security descriptor at preparation and publication. Installation and
-manifest admission also require a fixed autologon-account/runner-principal/
-agent-token SID equality predicate. Runtime start checks
-structural task XML only; the trampoline checks native context without task
-queries. Tests cover schema defaults, task-query failure facts, mode-before-marker
-ordering, claims, injected context refusals, helper hard-link/junction refusal,
-stop during a locked start, and both listener/cancellation interleavings.
-The listener checks cancellation before creation and after identity publication.
-Factory registration, sanitation and manifest admission have unit coverage.
-
-The opt-in vmhost lab gates on loopback refusal, both-task installation facts,
-probe SID/elevation/console/desktop context, normal probe/grandchild priority,
-a same-account SAFER normal-user token reading the agent task but refused
-reading or starting the runner task (elevated start accepted), the same probe
-and grandchild surviving both restart paths, and new agent identities. Cycles
-run inside the probe with matching fresh request/completion IDs. Job
-membership is baseline-only diagnostic data; failed queries report unknown.
-On a contract-2 image built from install media, live batches passed every
-gate: installation facts for both tasks (stored runner descriptor without a
-principal entry, autologon agreement), loopback refusal, probe context and
-priority, the filtered-token reads and refusals, and the same probe and
-grandchild surviving agent task End/Run and agent kill/Run. A filtered start
-of the agent task, which keeps the default principal read entry, was
-accepted, confirming why the runner task omits it. The probe also reported
-the agent in its immediate job; why, given that survival, is not yet
-understood.
-
-Still unverified live: refusal for the real UAC-filtered token (the lab uses a
-SAFER token with no more access), premature/duplicate activation, cancellation during startup (helper console attach), console
-visibility/focus, scheduler latency, environment/session selection, task End
-descendant behavior and restart-on-failure with a surviving child. Native
-networking, UTC correction, cancellation/result reporting and cache behavior on
-agent-served guests also remain live gates. Sibling-guest negative testing is
-outside this phase's loopback and host-account authorization scope.
-The accepted double Ctrl+C when stop and the helper both signal still needs live validation.
-
-The pinned render-probe output bridge and sanitation ran in the contract-2
-build. The bridge's atomic-ACL creation and primary-failure preservation have
-unit coverage only.
+Windows HCS guests have two runtimes: production runs the previous one, and
+the agent-served runtime with the ISO image factory is not deployed (see
+"Windows: direct HCS").
 
 ## Checks
 
-Local Windows checks cover `gofmt`, `go vet ./...`, `golangci-lint`,
-`go build ./...`, `go test -race ./...`, cgo-disabled builds for macOS
-arm64/amd64, Windows amd64 and Linux amd64, and PowerShell 5.1/7 parsing.
-HCS/vmhost also pass vet with the `integration` tag; this does not run their
-opt-in live labs. The guest-agent, runner-task and install-media image changes
-were checked without `-race` (no cgo on that host); hosted CI runs the rest.
-Local macOS rootless checks pass `gofmt`, normal/integration `go vet`,
-`golangci-lint`, full race tests, a host build, and Windows
-amd64/Linux arm64 cross-builds. Hosted CI checks each PR revision on macOS,
-Ubuntu and Windows.
-Unit tests and cross-builds do not establish live provider behavior.
+Hosted CI checks each PR revision on macOS, Ubuntu and Windows: `gofmt`,
+`go vet ./...`, `golangci-lint`, `go build ./...` and `go test -race ./...`,
+plus macOS signed-VM and Seatbelt alias tests and the Crosvm packet-filter
+tests on Linux. Windows tests include PowerShell 5.1 script fixtures. Local
+Windows checks run the same set, with `golangci-lint` for all three OSes and
+HCS/vmhost vet with the `integration` tag, but without `-race` (no cgo on that
+host). Local macOS checks include full race tests and Windows amd64/Linux
+arm64 cross-builds. None of these run the opt-in live labs, and unit tests and
+cross-builds do not establish live provider behavior.
 
 ## macOS
 
@@ -209,29 +157,70 @@ together with its manager, VM host service and image.
 
 ### Agent-served runtime and ISO image factory (not deployed)
 
-Validated live in the lab, with CI Off:
+The HCS provider, image factory and vmhost lab use bivouac's guest agent over
+HvSocket. Windows contract 2 adds a separate on-demand runner task beside the
+agent logon task; images of an earlier contract are refused. The cutover
+switches manager, VM host service and image together, and so does rollback.
 
-- Reference-ISO builds publish in about seven minutes: Secure Boot on, TPM
-  present and ready, fully decrypted BitLocker state, the embedded
-  2023/plain-GPT boot path, one Hyper-V display and hardware D3D11. Host
-  firmware entries were unchanged.
-- One contract-2 lab batch passed every gate (see the summary above).
+Validated live in the lab with CI Off, on reference-ISO builds:
 
-Unit coverage only: the 180-second first-boot render budget and numeric
-failure facts; failure cleanup's memory-reserve cancellation and separate
-termination/diagnostic/detach deadlines; receive metadata, readiness
-ordering, command/output bounds, terminal protocol refusal, transient
-recovery, adoption without pins, status/diagnostics decoding, TLS cache
-requests, fallback cleanup and revocation on the agent transport.
+- Publication in about seven minutes with Secure Boot on, TPM present and
+  ready, fully decrypted BitLocker state, the embedded 2023/plain-GPT boot
+  path, one Hyper-V display and hardware D3D11. Host firmware entries were
+  unchanged. The pinned render-probe output bridge and sanitation ran.
+- One contract-2 vmhost lab batch passed every gate: installation facts for
+  both tasks (stored runner descriptor without a principal entry, autologon
+  agreement), loopback refusal, probe SID/elevation/console/desktop context
+  and normal priority, a same-account SAFER normal-user token reading the
+  agent task but refused reading or starting the runner task (elevated start
+  accepted), and the same probe and grandchild surviving agent task End/Run
+  and agent kill/Run. A filtered start of the agent task, which keeps the
+  default principal read entry, was accepted; that is why the runner task
+  omits the entry. The probe also reported the agent in its immediate job,
+  which survival does not explain. Job membership is diagnostic only.
 
-Startup timing records and the network lab's per-run readiness report have
-fake-host/transport unit coverage only; interleaved baseline distributions
-remain an operator gate. In one interleaved lab comparison the new image
-reached a validated desktop in 33-40 s against 24.5-27 s for a copy of the
-production image, with different validation scripts on each; the gap is
-unexplained. Short guest PowerShell runs that autoload a module rescan all
-modules when no module-analysis cache is saved, which may contribute;
-unmeasured in guests.
+Unit coverage only:
+
+- The Windows adapter's preflight, preparation, start/stop, clock setting,
+  bounded delivery/extraction and 64-connection cache relay; receive
+  metadata, readiness ordering, command/output bounds, terminal protocol
+  refusal, transient recovery, adoption without pins, status/diagnostics
+  decoding, TLS cache requests, fallback cleanup and revocation.
+- The runner task: self-tests of both task definitions and the runner's
+  stored security descriptor at preparation and publication; the
+  autologon-account/runner-principal/agent-token SID equality at
+  installation and manifest admission; structural task XML at start and the
+  trampoline's native context checks; schema defaults, task-query failure
+  facts, mode-before-marker ordering, claims, injected context refusals,
+  helper hard-link/junction refusal, stop during a locked start, and both
+  listener/cancellation interleavings.
+- In-process listener re-listening and bounded consecutive session refusals;
+  MSI-before-leftover uninstall and OpenSSH server-capability removal
+  (keeping the inbox client and ssh-agent); factory registration, sanitation
+  and manifest admission; the probe bridge's atomic-ACL creation and
+  primary-failure preservation; the 180-second first-boot render budget and
+  numeric failure facts; failure cleanup's memory-reserve cancellation and
+  separate termination/diagnostic/detach deadlines.
+- Startup timing records and the network lab's per-run readiness report
+  (fake host and transport).
+
+Unverified live:
+
+- Refusal for a real UAC-filtered token (the lab uses a SAFER token with no
+  more access), premature or duplicate activation, cancellation during
+  startup (helper console attach) and the accepted double Ctrl+C, console
+  visibility and focus, scheduler latency, environment/session selection,
+  task End descendant behavior, restart-on-failure with a surviving child,
+  and recovery after an actual agent crash.
+- Native networking, UTC correction, cancellation/result reporting, cache
+  behavior and end-to-end jobs on agent-served guests. Sibling-guest
+  negative tests are outside the loopback and host-account scope.
+- Performance. Interleaved baseline distributions remain an operator gate.
+  In one lab comparison the new image reached a validated desktop in 33-40 s
+  against 24.5-27 s for a copy of the production image, with different
+  validation scripts on each; the gap is unexplained. Short guest PowerShell
+  runs that autoload a module rescan all modules when no module-analysis
+  cache is saved, which may contribute; unmeasured in guests.
 
 ### Deployed runtime (previous App Sandbox/SSH transport)
 
@@ -275,8 +264,8 @@ Validated live on that runtime, with production CI Off:
 
 Open:
 
-- Everything under "Still unverified live" in the summary, for the
-  agent-served runtime, plus a production cutover and rollback rehearsal.
+- Everything under "Unverified live" above, then a cutover and rollback
+  rehearsal and the production cutover.
 - Hibernation and fast startup are not disabled inside built guests.
 - `Deactivate` refusing to stop a VM host that holds guests (unit-tested
   only).
@@ -375,6 +364,7 @@ invalidation and upstream change.
 
 Host and guest CPU, memory, disk, and (Windows) commit summaries appear in
 controller logs and job hooks as numeric-only reports. Validated live on
-Windows and Linux guests. On macOS real smoke jobs emitted numeric start and
+Crosvm Linux guests and on Windows guests of the deployed HCS runtime; not yet on the
+agent-served runtime. On macOS real smoke jobs emitted numeric start and
 completion CPU, memory and disk summaries; cache hit/miss readback remains
 unverified.
