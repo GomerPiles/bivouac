@@ -215,7 +215,7 @@ func TestListenConnectionLimits(t *testing.T) {
 			}
 			_ = b.Close()
 			select {
-			case <-done:
+			case <-done: //nolint:errcheck // Only shutdown matters, not its result.
 			case <-ctx.Done():
 				t.Fatal("limit test did not shut down")
 			}

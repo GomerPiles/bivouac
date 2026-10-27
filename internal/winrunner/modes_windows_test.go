@@ -211,7 +211,7 @@ func TestCacheListenPortPublicationAndOpaqueRelay(t *testing.T) {
 	_ = host.Close()
 	for _, finished := range []chan error{done, relayDone} {
 		select {
-		case <-finished:
+		case <-finished: //nolint:errcheck // Only shutdown matters, not its result.
 		case <-ctx.Done():
 			t.Fatal("cache stream shutdown did not finish")
 		}
