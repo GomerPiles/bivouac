@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/GomerPiles/bivouac/internal/rootnet"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -62,4 +64,56 @@ func processArgs(pid int) ([]string, error) {
 		rest = rest[end+1:]
 	}
 	return args, nil
+}
+
+// ProveIsolation refuses NAT and helpers without the rootless transport.
+func ProveIsolation(dir, policy string) error {
+	pid, err := HelperPID(dir)
+	if err != nil || pid == 0 {
+		return errors.New("isolated VM helper unavailable")
+	}
+	args, err := processArgs(pid)
+	if err != nil {
+		return err
+	}
+	if err := proveIsolationArgs(args, dir, policy); err != nil {
+		return err
+	}
+	_, err = NetworkChildPID(dir)
+	return err
+}
+
+// NetworkChildPID identifies only the sandboxed network child of this VM's
+// proven live helper. Callers must still prove the VM's durable ownership.
+func NetworkChildPID(dir string) (int, error) {
+	parent, err := HelperPID(dir)
+	if err != nil || parent == 0 {
+		return 0, errors.New("network owner unavailable")
+	}
+	processes, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return 0, errors.New("network process inventory unavailable")
+	}
+	found := 0
+	for _, process := range processes {
+		if int(process.Eproc.Ppid) != parent {
+			continue
+		}
+		pid := int(process.Proc.P_pid)
+		args, err := processArgs(pid)
+		if err != nil || !networkChildArgs(args) {
+			continue
+		}
+		if found != 0 {
+			return 0, errors.New("network child ambiguous")
+		}
+		if rootnet.SandboxedProcess(pid) != nil {
+			return 0, errors.New("network child sandbox unproven")
+		}
+		found = pid
+	}
+	if found == 0 {
+		return 0, errors.New("sandboxed network child unavailable")
+	}
+	return found, nil
 }

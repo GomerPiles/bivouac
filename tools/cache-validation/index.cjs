@@ -18,6 +18,15 @@ const directories = sizes.map((_, i) => path.join(root, 'archive-' + i));
 const keys = sizes.map((_, i) => ['bivouac-validation', process.platform, nonce, i].join('-'));
 const bundles = {};
 let stage = 'inputs';
+// A fixed, credential-free checkpoint lets an isolated host owner inject an
+// outage at the intended stage without retaining official-action output.
+function checkpoint(value) {
+  stage = value;
+  const temporary = path.join(root, 'stage.tmp');
+  fs.writeFileSync(temporary, JSON.stringify({stage: value}), {mode: 0o600});
+  fs.renameSync(temporary, path.join(root, 'stage.json'));
+}
+
 let storing = false;
 function check(value, message) {
   if (!value) {
@@ -62,6 +71,7 @@ async function uploads(before, field) {
 // Wait up to two minutes for the operator to stop the isolated controller.
 // Returns the last counters read while the service was still available.
 async function outage(last) {
+  checkpoint('awaiting-outage');
   console.log('Waiting for isolated cache-service outage');
   const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
@@ -172,26 +182,26 @@ async function main() {
   check(['save', 'restore', 'fallback', 'outage', 'interrupt', 'limited', 'mixed'].includes(mode) && /^[a-z0-9-]{1,64}$/.test(nonce), 'validation inputs');
   check(!fs.existsSync(root), 'fresh guest sentinel');
   fs.mkdirSync(root, {mode: 0o700});
-  stage = 'bundles';
+  checkpoint('bundles');
   await Promise.all(['save', 'restore'].map(bundle));
-  stage = 'metrics';
+  checkpoint('metrics');
   const before = await metrics();
   if (mode === 'fallback') check(!before, 'cache must be disabled for fallback validation');
   else check(before, 'cache integration missing');
   if (mode === 'limited' || mode === 'interrupt') check(storing, mode + ' validation requires store_uploads');
   if (mode === 'outage') {
-    stage = 'release-before-outage';
+    checkpoint('release-before-outage');
     await releases();
     const primed = await metrics();
     check(primed.release_proxy.hits > before.release_proxy.hits, 'release cache hit before outage');
     console.log('Release cache verified before outage: hits=' + primed.release_proxy.hits + ' misses=' + primed.release_proxy.misses);
-    stage = 'outage';
+    checkpoint('outage');
     await outage(primed);
   }
   if (mode === 'interrupt') {
     // Both saves go through the relay; the controller stops before they finish,
     // and the storage SDK's retries must reach Azure directly.
-    stage = 'interrupt';
+    checkpoint('interrupt');
     sizes.forEach((_, i) => prepare(i));
     const saves = Promise.all(sizes.map((_, i) => archive('save', i)));
     saves.catch(() => {});
@@ -211,7 +221,7 @@ async function main() {
     console.log('Relayed saves interrupted by the outage reached GitHub: archives=2 unfinished=' + (sizes.length - ended));
   }
   if (['save', 'limited', 'fallback', 'outage'].includes(mode)) {
-    stage = 'save';
+    checkpoint('save');
     sizes.forEach((_, i) => prepare(i));
     await Promise.all(sizes.map((_, i) => archive('save', i)));
     console.log('Concurrent GitHub saves passed: archives=2');
@@ -220,7 +230,7 @@ async function main() {
     else if (storing && mode === 'save') await uploads(before, 'stored');
   }
   if (['restore', 'mixed', 'limited', 'fallback', 'outage', 'interrupt'].includes(mode)) {
-    stage = 'restore';
+    checkpoint('restore');
     if (['limited', 'fallback', 'outage', 'interrupt'].includes(mode)) directories.forEach(d => fs.rmSync(d, {recursive: true}));
     const work = sizes.map((_, i) => archive('restore', i));
     if (mode === 'mixed') sizes.forEach((_, i) => {
@@ -233,9 +243,9 @@ async function main() {
     console.log('Concurrent GitHub restores and integrity passed: archives=2');
     if (storing && mode === 'mixed') await uploads(before, 'stored');
   }
-  stage = 'releases';
+  checkpoint('releases');
   await releases();
-  stage = 'counters';
+  checkpoint('counters');
   if (mode === 'outage' || mode === 'interrupt') {
     console.log('Cache outage preserved GitHub saves, restores, and release downloads');
     return;

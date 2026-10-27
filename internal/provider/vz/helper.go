@@ -9,8 +9,17 @@ import (
 // installGuestHelper uploads one macOS executable shared by telemetry, caching
 // and the optional container relay. The baseline agent is left untouched.
 func (p *Provider) installGuestHelper(ctx context.Context, name string) error {
-	return p.startupStage(name, "helper_upload", func() error {
+	p.mu.Lock()
+	ready := p.helpers[name]
+	p.mu.Unlock()
+	if ready {
+		return nil
+	}
+	err := p.startupStage(name, "helper_upload", func() error {
 		exe, err := os.Executable()
+		if local, ok := p.rt.(*local); ok {
+			exe, err = local.exe, nil
+		}
 		if err != nil {
 			return errors.New("locate guest helper source")
 		}
@@ -32,4 +41,10 @@ func (p *Provider) installGuestHelper(ctx context.Context, name string) error {
 		_, err = p.output(ctx, name, []string{"chmod", "0700", guestHelper}, nil)
 		return err
 	})
+	if err == nil {
+		p.mu.Lock()
+		p.helpers[name] = true
+		p.mu.Unlock()
+	}
+	return err
 }

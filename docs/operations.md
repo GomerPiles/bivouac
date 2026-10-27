@@ -511,7 +511,7 @@ records to its normal redacted log, with provider, guest name, `stage`,
 | `helper_upload` | Current helper upload, including source and private destination preparation |
 | `cache_setup` | Optional per-clone cache configuration and trust |
 | `jit_generation`, `jit_delivery`, `listener_wait` | Registration request, bootstrap/initial listener launch, and official listener readiness |
-| `dns_setup` | Public DNS setup in optional container-pair guests |
+| `dns_setup` | Public DNS setup is supplied by rootless DHCP; no guest DNS setup command |
 
 The manager emits `jit_generation` and `listener_wait` for every provider; the
 other stages listed above are macOS provider measurements. Stages omitted from
@@ -616,28 +616,245 @@ To return to scale sets: `bivouac off --wait`, verify no instance records or
 owned guests remain, restore `demand = "scaleset"` and the workflow's
 single scale-set label, then `bivouac on`. Never revoke the shared App.
 
+## macOS rootless network isolation: validation and later rollout
+
+Managed macOS runner guests use a rootless stack in a sandboxed child. `doctor` and
+`engine check-isolation` check host policy availability read-only. There is no
+Softnet, sudoers/SUID or privileged-service prerequisite and no host network
+configuration change. DHCP supplies the virtual router and bounded DNS service;
+macOS baseline networking/DNS must use DHCP. Guest DNS uses the host's primary
+`/etc/resolv.conf` nameservers; scoped/per-domain macOS DNS is excluded. All DNS
+types pass subject to address/hint filtering. Queries may disclose internal DNS
+metadata; choose public `dns_servers` to avoid it. Cache egress uses system
+resolution unless overridden. No usable resolver makes `doctor` fail; live lookup
+failure warns. Public-policy checks fail when all representative addresses are
+denied and warn when only some are denied.
+
+```toml
+[providers.macos.vz.network]
+dns_servers = []           # optional IPv4 literals; empty = primary host DNS
+memory_mb = 1024           # TCP buffer sizing budget in MiB, not a whole-process RSS cap
+max_flows = 4096           # public TCP/UDP and cache payload, including pending TCP
+tcp_idle_timeout = "24h"
+udp_idle_timeout = "60s"
+mtu = 16384                # 1500..65535 (non-1500 needs macOS 13+); independent of memory_mb
+[cache]
+max_connections = 256      # per-VM host endpoint and independent parent payload bound
+```
+
+All vz providers must agree on DNS overrides for the shared cache client. Both
+container-pair members receive the provider's network settings. Restart the
+controller to load settings. The per-direction TCP maximum is budget/(2*max_flows),
+clamped to 128 KiB..4 MiB (128 KiB by default); the floor can exceed a small
+budget. FIN shortens idle expiry to at most 15 minutes. DNS and CRL reserve independent capacity; raising
+limits requires sufficient controller/helper/child FD headroom. Guest sudo
+remains optional for
+release-proxy trust installation and is used explicitly for privileged attack
+probes, not for mandatory networking.
+
+Use a separate worktree, staged signed executable, `BIVOUAC_HOME`, VM store,
+state, logs and isolated `bivouac-macos-isolation-validation` label. Copy only
+GitHub App references if job validation is needed; never copy a key into config
+or fixtures. Copy/import a stopped source into that isolated store using
+copy-on-write. Never start, edit, replace or delete the production macOS VM or
+baseline; preserve it as a backup and verify its files remain unchanged.
+Read-only bootstrap shares are an independent optional choice for ordinary
+runners. Container pairs retain their existing share prohibition.
+
+Before each guest batch, inspect native VM/controller inventory and active
+controller configurations read-only. Reserve other controllers' maximum CPU
+and guest memory even when they are idle. Linux validation consumes CPU/RAM but
+no Apple macOS guest slot. Account for Apple's two-guest limit and foreign-slot
+reservations; an idle status snapshot does not release a reservation. If
+capacity cannot be established, report that before starting guests. An
+owner-authorized production Off must drain healthy jobs and confirm empty
+records first; never terminate a production job to free resources. Choose explicit
+CPU/memory and minimum-free-memory bounds for the isolated
+batch after that inventory; these are lab safeguards, not cross-controller
+admission coordination.
+
+Stage without replacing the installed binary:
+
+```sh
+CGO_ENABLED=0 go build -trimpath -o bin/bivouac.next ./cmd/bivouac
+codesign --force --sign - --entitlements tools/macos/bivouac.entitlements bin/bivouac.next
+CGO_ENABLED=0 go build -trimpath -o bin/bivouac-network-probe ./tools/macos/network-probe
+```
+
+The real-guest fixtures require a separate home, copied/imported baseline,
+signed staged executable and a completed read-only capacity audit:
+
+```sh
+# Set BIVOUAC_HOME, BIVOUAC_VZ_BASELINE and BIVOUAC_EXE to isolated resources.
+BIVOUAC_VZ_CAPACITY_CONFIRMED=1 go test -tags integration -run '^TestRealGuest$' -v ./internal/provider/vz
+```
+
+The capacity gate records the operator's audit; it does not coordinate other
+controllers. The ordinary test holds the isolated lock, records each clone,
+checks rootless arguments and adoption proof, Aqua and fresh filesystem state,
+and proves ownership-checked teardown. Its temporary host listeners use fresh assigned ports on loopback and the
+host's current IPv4 addresses, with positive host controls; they accept and
+close connections without serving data. Only those owned ports are probed. Public DNS/HTTPS must work as the runner user and guest root. Private
+peer tests need `BIVOUAC_VZ_TEST_PEER`, an explicitly owner-controlled endpoint
+with a positive host control. Never scan a LAN or select production services.
+
+`TestRootlessGuestLab` adds numeric performance and failure checks. Set
+`BIVOUAC_ROOTLESS_LAB=1` with the same isolated resources and capacity gate.
+`BIVOUAC_LAB_MTU`, `BIVOUAC_LAB_MEMORY_MB`, `BIVOUAC_LAB_MAX_FLOWS`,
+`BIVOUAC_LAB_TCP_IDLE_TIMEOUT`, `BIVOUAC_LAB_UDP_IDLE_TIMEOUT` and comma-separated
+`BIVOUAC_LAB_DNS_SERVERS` use production validation/defaults. The lab checks
+guest MTU adoption and records DHCP option 26. `BIVOUAC_LAB_LOCAL_TCP=1` measures
+256 MiB in each direction through the virtual Ethernet/cache endpoint, with
+numeric child counters before/after (allow a minute per counter observation).
+Leave `BIVOUAC_LAB_PUBLIC_ASSET` unset to skip public downloads; setting an explicit
+public GitHub release URL without query credentials enables them.
+`BIVOUAC_LAB_DNS_PROBES=1` checks A, empty AAAA, TXT and NXDOMAIN through DHCP DNS;
+leave DNS overrides unset to test host resolvers. `BIVOUAC_LAB_LIMIT_PROBES=1`
+defaults to 256 flows (override `BIVOUAC_LAB_MAX_FLOWS=1..512`), logs background
+gauges, requires eight free slots, and attempts ceiling+4 connect-only TCP
+sockets to `1.1.1.1:443`. It then checks reserved DNS and re-attempts a few
+connects at once, before idle peers close the held sockets. It passes when the
+re-attempts are refused and `flow_limit` rises with `admission_denied` and
+`dial_failed` unchanged. Fixture failures log fixed
+error classes, exit codes and bounded, redacted stderr.
+Both DNS checks use dig or host and log a skip when neither is available.
+Set `BIVOUAC_LAB_PACKET_PROBE` to the staged guest-only probe executable,
+`BIVOUAC_LAB_PUBLIC_PROBES=1` for the benign public/denial matrix and
+`BIVOUAC_ROOTLESS_LAB_ROUNDS=2` for repeated fresh clones. Set
+`BIVOUAC_LAB_CACHE_CONCURRENCY` up to `BIVOUAC_LAB_CACHE_MAX_CONNECTIONS` (default 256)
+and the general flow ceiling. For local warm hits without public downloads,
+build `go test -c -tags integration -o bin/cache-lab.test ./internal/cache` and set
+`BIVOUAC_LAB_CACHE_FIXTURE` to its absolute path; it uses a local TLS upstream.
+The saturation unit fixture separately holds admitted TLS connections and proves
+plain HTTP and HTTPS CONNECT fallback without forwarding a capability.
+`BIVOUAC_SANDBOX_PUBLIC_DNS_TEST=1 go test -run TestNetworkSandbox ./internal/rootnet`
+adds the explicit public-DNS sandbox probe; ordinary unit tests use no public
+network probe. The packet probe refuses BPF
+unless running as guest root with the virtual guest lease; it sends fixed
+MAC/IP spoof, UDP, mDNS, ICMP and IPv6 link-local frames through the disposable
+link. Numeric host counters prove the rejection path instead of relying on a
+missing guest IPv6 route. Its `--metal` mode submits and verifies a real GPU
+buffer copy in Aqua. It does not prove window rendering, focus or input.
+
+With a public asset selected, the lab measures a public download, cold/warm release caching over the virtual endpoint,
+authenticated numeric metrics and direct fallback after service shutdown. It
+rechecks live helper/child/kernel-sandbox adoption proof, kills only the network
+child of its recorded owned VM, confirms the guest stopped, deletes it and removes its record. Its next clone
+must lack the sentinel. `BIVOUAC_ROOTLESS_NAT_BENCHMARK=1` explicitly adds a
+separate trusted NAT control; that clone receives no runner credentials and
+NAT is never a fallback for a failed isolated launch. Public throughput samples
+are variable and cannot establish a rootless speed advantage.
+
+Host-only microbenchmarks are reproducible with:
+
+```sh
+GOMAXPROCS=2 go test -run '^$' -bench '^BenchmarkDownload$' -benchtime=3x ./internal/rootnet
+GOMAXPROCS=2 go test -run '^$' -bench '^BenchmarkCacheEndpointDownload$' -benchtime=2x ./internal/cache
+```
+
+The virtual attachment checks both ends of its private datagram pair have the
+requested 1 MiB send and 4 MiB receive buffers before launch. Setup/readback
+failure refuses launch; no host-wide socket setting is changed. The stack's
+data/control byte and frame admission budgets feed one nonblocking FIFO, preserving
+frame order without waiting under protocol locks. Numeric reports distinguish
+data/control drops from TCP retransmissions; a successful socket write alone
+does not prove the virtual NIC delivered a frame.
+
+Set `BIVOUAC_LAB_DESKTOP_PROBE` to `tools/macos/desktop-probe.swift` to add
+visible-window, foreground application/focus, Metal drawable pixel readback,
+seven typed characters and one button action checks. The events travel through
+AppKit's application event path; this does not test host-to-guest hardware input.
+Presentation timestamp availability is reported separately and is not compositor
+capture evidence.
+
+macOS cache admission is configurable at the host endpoint, default 256. Payload
+streams also count against the general VM flow ceiling, and the parent owns an
+independent broker bound. Excess connections refuse before TLS/HTTP, permitting
+public fallback through mandatory isolation. The container-engine VSOCK mux is
+unchanged. For a controlled local native benchmark, compile the cache test executable with
+`go test -c -tags integration -o bin/cache-endpoint.test ./internal/cache` and
+set `BIVOUAC_LAB_CACHE_FIXTURE` to its absolute path in the lab. It measures raw
+virtual TCP, bidirectional transfers with one large receiver held until its
+peers complete, and 32 MiB authenticated release hits with 1/8/16/32 native curl
+readers. `BIVOUAC_LAB_BURST_PROBES=1` holds 32 raw cache-capability sockets
+while fresh public DNS/HTTPS probes run, then verifies authenticated transfers
+and fresh public connections after the burst; the private local upstream bypass exists only in that fixture. Setup
+and guest metrics are bounded and credentials travel only through stdin.
+Docker pulls and a workload soak remain performance gates. Repeat the Actions archive/upload fixture below, full
+runner crash/adoption and window/focus/input checks before production rollout.
+
+Stacks/cache services share a parsed policy snapshot for at most 250 ms.
+Existing flows refresh once per revalidation pass; cache I/O adds no separate
+per-connection throttle. These checks retain a 250 ms observation window; routing changes are not atomic.
+Explicit gateway addresses, including those on /32 host links, are denied.
+Non-default routed prefixes are denied, while Internet defaults, ICMP-redirect
+dynamic routes and ephemeral cloned routes are excluded. Split-default VPNs can
+conservatively block public
+access; public networks represented only by a default cannot be classified as
+LAN. Host/LAN services exposed through public NAT/port-forward, reverse-proxy
+or tunnel endpoints are not identified unless the public destination appears in
+denied local routes; those public endpoints remain reachable. Inventory and
+protect such public services independently. These limits remain with the
+rootless stack.
+
+The network child must activate its restrictive Seatbelt profile before the VM
+boots. It receives no credential environment and cannot read files, exec or
+look up Mach services such as Keychain. The helper passes only its datagram,
+lifetime, numeric-report, cache-broker and separate DNS-capability FDs. The broker hands out only
+connected per-VM cache streams; it admits no paths or arbitrary dialing and
+requires no additional sandbox permissions. This uses deprecated platform sandbox APIs;
+API/profile/live-proof failure closes launch/adoption. Repeat the native child
+and guest gates after macOS upgrades. `doctor` checks host policy availability,
+not a successful child sandbox activation. No host service or privilege setup
+is needed.
+
+Guest egress is now attributed to `bivouac` (its network child and cache
+controller), rather than Apple's NAT. Endpoint-security and network-filter
+software must allow the required public DNS/HTTPS traffic for that process.
+Bivouac does not reconfigure those tools or create a host/LAN exception.
+
+For a later owner-controlled rollout, finish old NAT/Softnet/unsandboxed-rootless
+jobs with the
+installed binary and confirm empty records/registrations first. The new
+controller refuses their adoption. Validate a separate DHCP baseline and
+loopback cache config; only then schedule binary migration. This PR stages
+replacements and leaves the production VM backup, installed binary/config,
+labels and Tartelet untouched. Restore the old controller after validation
+when it is safe to resume its original routing. Do not merge before live gates
+and an owner-approved migration plan are complete.
+
 ## Optional transparent caching
 
-Caching is disabled by default. On the experimental macOS setup:
+Caching is disabled by default. Isolated macOS runners use guest-loopback HTTP
+through a fixed cache-only virtual endpoint, with TLS and per-guest capabilities.
+VSOCK remains the port-announcement/lifetime transport; it carries no cache payloads:
 
 ```toml
 [cache]
 enabled = true
-release_proxy = true  # optional GitHub release interception; default false
-store_uploads = true  # optional local copy of each Actions save; default false
-guest_host = "192.168.64.1" # host gateway reachable from the owned guest
+release_proxy = true
+store_uploads = true
+listen = "127.0.0.1:0"     # default for macOS; literal loopback required
+guest_host = "127.0.0.1"   # TLS identity, never a guest NIC route
 max_gb = 4
 max_object_mb = 512
-# listen defaults to "0.0.0.0:0" (the vmnet bridge may not exist before a
-# guest runs); TLS and per-guest capabilities are required
 ```
 
-Confirm the guest gateway on an owned clone; do not assume the same address
-on another provider. Restart the daemon to load changes, using the recorded
-PID and replacement procedure above. Each fresh guest gets its own private
-adapter, TLS trust, and expiring capability. No baseline or workflow change
-is needed. GitHub remains the authority for Actions cache scope and keys;
-metadata uses the normal upstream service.
+Remove a gateway `guest_host` or wildcard `listen` from the validation config;
+validation rejects them. Only `192.0.2.1:7443` selects the synthetic cache payload capability; it is not a
+host address or a configurable host-network exception. The sandboxed child
+receives connected stream FDs for the per-VM handler and cannot select Unix paths. A separate
+`192.0.2.1:7444` capability serves only the signed public CRL at `/ca.crl` and
+has its own 32-connection budget, so cold TLS revocation does not need a free
+payload slot. The emitted guest proxy-bypass list includes this fixed virtual
+address; it does not permit access to a real host/LAN address. Both private listeners close with the same owner/control lifetime.
+ A cache outage falls back to public downloads through the same
+mandatory guest isolation. Private adapter files and trust are installed only
+inside disposable clones; capabilities and signed URLs never enter host state,
+logs or diagnostics. Revocation, guest deletion or controller/service loss closes
+the cache capability, active streams and guest-loopback listener. An adopted runner continues with
+public fallback after controller loss; cache capabilities are not persisted or
+reattached. Upload retries use the existing direct-upstream fallback.
 
 The macOS adapter accelerates Actions v2 cache archives. With `release_proxy`,
 bootstrap installs temporary root trust in each disposable clone and gives its
@@ -778,7 +995,10 @@ store_uploads = true
   returning to normal validation with the default 2 GiB limit.
 - `outage` checks release hits, then waits up to two minutes for the isolated
   controller to stop. Saves, restores and releases must still pass directly.
-  Stop only the isolated controller, after confirming its process.
+  Stop only the isolated controller, after confirming its process. The fixture
+  publishes only a fixed stage enum in `RUNNER_TEMP/bivouac-cache-validation/stage.json`;
+  `awaiting-outage` is the injection point. It contains no credentials or job
+  identity, and is safe for a bounded ownership-checked host probe.
 - `interrupt` requires `store_uploads`. It starts both saves through the relay
   and waits for the isolated controller to stop; stop it once the controller
   logs two `cache upload relayed` lines. At least one save must still be open
@@ -849,8 +1069,9 @@ Do not restore the `tartelet` workflow labels or revoke the shared App.
 Logs: `~/Library/Logs/bivouac/bivouac.log`, per-guest `<name>.launch.log`,
 and `diagnostics/<time>-<name>/` with `instance.json`, the runner log, and
 `_diag`. The daemon log and diagnostics are redacted at the sink. The launch
-log is not: the VM helper (and Softnet) write host-side status there
-directly, unredacted and unbounded, because the helper must outlive the
+log is not: the VM helper writes fixed host-side status and numeric network counters there
+directly, unredacted, capped at 1 MiB per helper with reserved terminal status space, because
+the helper must outlive the
 daemon. The guest console is never attached.
 
 ## Interrupted jobs and recovery
@@ -929,11 +1150,10 @@ needs the linux/arm64 `bivouac` binary at `/usr/local/bin/bivouac` with
 enabled, a rootful Docker daemon at
 `/var/run/docker.sock` **or** a rootful Podman API service at
 `/run/podman/podman.sock`, and permission for guest exec to access that socket.
-Guest exec also needs root or noninteractive guest sudo to configure public DNS.
-Do not include registry credentials, configured runners, host directory shares,
-or personal keys. Disable baseline DNS automation that would overwrite the
-public resolver configuration. The macOS baseline needs the selected CLI and
-noninteractive **guest** sudo for `networksetup`; it is never modified by bivouac.
+Both baselines must use DHCP networking and DNS; each rootless link supplies
+its own virtual resolver. Do not include registry credentials, configured
+runners, host directory shares, or personal keys. The macOS baseline needs the
+selected CLI; the source baseline is never modified by bivouac.
 No guest agent, engine, client, or baseline is downloaded automatically.
 
 Build the Linux helper from the same source as the host binary using installed Go:
@@ -963,8 +1183,7 @@ No engine-specific arbitrary launch flags, socket overrides, or host mounts
 exist. Leave `bootstrap_share` empty and `cache.enabled = false`.
 Do not change container topology or engine while any instance record remains.
 
-Host Softnet privileges are an owner-managed prerequisite, separate from guest
-sudo. Bivouac does not edit sudoers, set SUID, install a privileged helper, or
+The rootless network stack needs no host privileges. Bivouac does not edit sudoers, set SUID, install a privileged helper, or
 change its policy to work around a failed probe. Run `bivouac config validate`
 and `bivouac doctor` with the isolated config; `bivouac engine check-isolation`
 checks the host-side prerequisite without credentials, daemon access, a VM,
@@ -975,13 +1194,14 @@ After prerequisites pass, validate only disposable, recorded pairs:
 
 1. Start one throwaway test job. Confirm both clone names and matching IDs/parent
    links exist in state and provider markers before issuing stop/delete operations.
-   Check both launch commands contain `--softnet` and a `--softnet-block` list
-   with `@host`, with no `--share` or `--input`.
+   Check both live helper commands prove `--rootless-network`, with no
+   `--share` or `--input`, and both markers identify `rootless-sandbox-public-ipv4`.
 2. From each guest and from a privileged container, verify public DNS/HTTPS works
    while host gateway services, host interface addresses, private LAN, peers,
    metadata/link-local addresses, and IPv6 destinations are unreachable. Use
    explicit benign test endpoints; do not scan the LAN or target production services.
-   Keep public host interfaces stable; changed-interface handling is not atomic.
+   Exercise policy refusal on existing and new flows; route changes retain the
+   non-atomic observation window described above.
 3. Verify the selected client uses only the guest Unix socket. Test version/ping,
    image pull, context build, binary `cp`, concurrent requests, and exec/attach
    upgrades. Use public images without credentials. Bind paths are inside Linux;

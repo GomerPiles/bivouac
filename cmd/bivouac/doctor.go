@@ -5,18 +5,23 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/GomerPiles/bivouac/internal/config"
+	"github.com/GomerPiles/bivouac/internal/dnsproxy"
 	"github.com/GomerPiles/bivouac/internal/github"
 	"github.com/GomerPiles/bivouac/internal/hostinfo"
 	"github.com/GomerPiles/bivouac/internal/install"
+	"github.com/GomerPiles/bivouac/internal/macnetwork"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/secret"
 	"github.com/GomerPiles/bivouac/internal/state"
 	"github.com/GomerPiles/bivouac/internal/vm"
+	"github.com/miekg/dns"
 )
 
 type check struct {
@@ -189,6 +194,16 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 	if err := vz.CheckNested(*t); err != nil {
 		add("FAIL", "machine "+name, err.Error())
 	}
+	if err := vz.CheckIsolation(ctx); err != nil {
+		add("FAIL", "network isolation "+name, err.Error())
+	} else {
+		add("PASS", "network isolation "+name, "rootless host policy available; disposable guest validation still required")
+	}
+
+	policy := macnetwork.NewCache()
+	add(macnetwork.PublicReachability(policy.Allows), "public admission "+name, "representative public address policy; no socket probe")
+	doctorDNS(ctx, name, t.Network.DNSServers, policy.Allows, dnsproxy.Servers, (dnsproxy.Resolver{Overrides: t.Network.DNSServers}).Resolve, add)
+
 	cpu, mem := t.CPU, t.MemoryGB
 	if c := t.Containers; c != nil {
 		cpu += c.CPU
@@ -200,7 +215,7 @@ func (e env) doctorVZ(ctx context.Context, name string, p config.Provider, host 
 		if err != nil {
 			add("FAIL", "containers "+name, err.Error())
 		} else {
-			add("PASS", "containers "+name, "local Linux baseline/helper and Softnet privilege probe; live VSOCK/engine behavior still requires disposable validation")
+			add("PASS", "containers "+name, "local Linux baseline/helper and rootless policy; live VSOCK/engine behavior still requires disposable validation")
 		}
 	}
 	if cpu > host.CPUs-cfg.Budget.ReserveCPU {
@@ -231,4 +246,39 @@ func report(checks []check) error {
 		return errors.New("doctor found problems")
 	}
 	return nil
+}
+
+func doctorDNS(ctx context.Context, name string, servers []string, allow func(netip.Addr) bool, discover func([]string) ([]string, error), resolve func(context.Context, []byte) ([]byte, error), add func(string, string, string)) {
+	if _, err := discover(servers); err != nil {
+		add("FAIL", "DNS resolvers "+name, "no usable primary resolver; configure network.dns_servers")
+		return
+	}
+	add("PASS", "DNS resolvers "+name, "primary resolver configuration available")
+	query := new(dns.Msg)
+	query.SetQuestion("example.com.", dns.TypeA)
+	raw, _ := query.Pack()
+	attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	response, err := resolve(attempt, raw)
+	if err == nil {
+		response, _, err = dnsproxy.Filter(response, query, allow)
+		if err == nil {
+			var answer dns.Msg
+			err = answer.Unpack(response)
+			usable := false
+			for _, rr := range answer.Answer {
+				if a, ok := rr.(*dns.A); ok && a.Hdr.Class == dns.ClassINET && a.A.To4() != nil {
+					usable = true
+				}
+			}
+			if answer.Rcode != dns.RcodeSuccess || !usable {
+				err = errors.New("DNS lookup failed")
+			}
+		}
+	}
+	if err != nil {
+		add("WARN", "DNS lookup "+name, "live lookup failed through the guest resolver path")
+	} else {
+		add("PASS", "DNS lookup "+name, "live lookup through the guest resolver path")
+	}
 }

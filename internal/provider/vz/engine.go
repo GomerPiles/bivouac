@@ -14,6 +14,7 @@ import (
 
 	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/provider"
+	"github.com/GomerPiles/bivouac/internal/rootnet"
 	"github.com/GomerPiles/bivouac/internal/state"
 )
 
@@ -54,6 +55,9 @@ func (p *Provider) pairStatus(ctx context.Context, name string) (provider.Status
 // recorded both names. Any failure retains the record for ownership-checked retry.
 func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 	if p.cfg.Containers == nil {
+		if err := p.preflightRunner(ctx); err != nil {
+			return err
+		}
 		return p.createVM(ctx, spec, "darwin", MachineOptions(p.cfg.Machine))
 	}
 	i, err := p.pairRecord(spec.Name)
@@ -88,7 +92,24 @@ func (p *Provider) Create(ctx context.Context, spec provider.Spec) error {
 
 func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error {
 	if p.cfg.Containers == nil {
-		return p.startVM(ctx, name, p.runnerLaunch(), log)
+		if err := p.ownsGuest(name); err != nil {
+			return err
+		}
+		err := p.isolation(ctx)
+		if err != nil {
+			return err
+		}
+		m, _ := p.readMeta(name)
+		m.NetworkPolicy = rootnet.PolicyID
+		data, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		if err := state.WriteAtomic(filepath.Join(p.vmDir(name), markerFile), data, 0o600); err != nil {
+			return err
+		}
+		launch := p.runnerLaunch()
+		return p.startVM(ctx, name, launch, log)
 	}
 	a, b, err := p.pairStatus(ctx, name)
 	if err != nil {
@@ -97,13 +118,13 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 	if !a.Exists || !b.Exists || !a.Owned || !b.Owned {
 		return provider.ErrNotOwned
 	}
-	softnet, err := p.isolation(ctx)
+	err = p.isolation(ctx)
 	if err != nil {
 		return err
 	}
-	policy := softnet.Block
-	// Save the effective policy for adoption; it is not allowed to change on a
-	// live job. Both markers remain until their respective VM is deleted.
+	policy := rootnet.PolicyID
+	// Save the transport identity for adoption. Destination admission remains
+	// live; both markers remain until their respective VM is deleted.
 	for _, n := range []string{name, name + "-engine"} {
 		m, _ := p.readMeta(n)
 		m.NetworkPolicy = policy
@@ -115,11 +136,11 @@ func (p *Provider) Start(ctx context.Context, name string, log io.Writer) error 
 			return err
 		}
 	}
-	// Isolated guests get Softnet, no input devices, and no shares.
-	if err = p.startVM(ctx, name+"-engine", Launch{Softnet: &softnet, Machine: p.engineMachine()}, log); err != nil {
+	// Both members get independent rootless stacks, no input devices or shares.
+	if err = p.startVM(ctx, name+"-engine", Launch{RootlessNetwork: true, Machine: p.engineMachine(), EngineGuest: true}, log); err != nil {
 		return err
 	}
-	return p.startVM(ctx, name, Launch{Softnet: &softnet, Machine: MachineOptions(p.cfg.Machine)}, log)
+	return p.startVM(ctx, name, Launch{RootlessNetwork: true, Machine: MachineOptions(p.cfg.Machine)}, log)
 }
 
 func (p *Provider) WaitReady(ctx context.Context, name string) error {
@@ -136,6 +157,9 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 		return err
 	}
 	if err := p.startupStage(name, "agent_wait", func() error { return p.waitVM(ctx, name) }); err != nil {
+		return err
+	}
+	if err := p.runnerIsolation(name); err != nil {
 		return err
 	}
 	if err := p.startupStage(name, "script_install", func() error { return p.installGuestScript(ctx, name) }); err != nil {
@@ -176,14 +200,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	for _, h := range []struct{ name, helper string }{{name, guestHelper}, {name + "-engine", engine.GuestHelper}} {
-		if err = p.startupStage(h.name, "dns_setup", func() error {
-			_, err := p.output(ctx, h.name, []string{h.helper, "engine", "dns"}, nil)
-			return err
-		}); err != nil {
-			return errors.New("configure public guest DNS")
-		}
-	}
+
 	// Verify a matching CLI exists in the runner baseline. Never install tools.
 	if _, err = p.output(ctx, name, []string{p.cfg.Containers.Engine, "--version"}, nil); err != nil {
 		return errors.New("container CLI missing from macOS baseline")
@@ -231,7 +248,16 @@ func (p *Provider) engineHealthy(ctx context.Context, name string) error {
 	}
 	policy, err := NetworkPolicy()
 	if err != nil || policy != a.Meta.NetworkPolicy || policy != b.Meta.NetworkPolicy {
-		return errors.New("host network changed; container pair must be retired")
+		return errors.New("container pair isolation identity differs")
+	}
+	proof, ok := p.rt.(interface{ ProveIsolation(string, string) error })
+	if !ok {
+		return errors.New("runtime cannot prove pair isolation")
+	}
+	for _, member := range []string{name, name + "-engine"} {
+		if err := proof.ProveIsolation(member, policy); err != nil {
+			return err
+		}
 	}
 	if relay, ok := p.proc(name + ":relay"); ok {
 		select {

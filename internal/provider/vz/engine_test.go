@@ -15,7 +15,6 @@ import (
 	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/state"
-	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
@@ -46,10 +45,7 @@ func pairProvider(t *testing.T) (*Provider, *recorder, provider.Spec) {
 		t.Fatal(err)
 	}
 	p.cfg.Containers = &config.Containers{Engine: "docker", Baseline: "linux-base", CPU: 2, MemoryGB: 2, Helper: helper, Machine: config.Machine{NestedVirtualization: true}}
-	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
-		policy, err := NetworkPolicy()
-		return vm.SoftnetOptions{Binary: "/opt/softnet", Block: policy}, err
-	}
+	p.checkIsolation = func(context.Context) error { return nil }
 	return p, r, provider.Spec{Name: name, Baseline: "base", CPU: 4, MemoryMB: 8192, Meta: provider.Metadata{ControllerID: "ctl-1", InstanceID: "pair"}}
 }
 
@@ -73,8 +69,11 @@ func TestPairLifecycleAndRestart(t *testing.T) {
 		} else if strings.Contains(a, "nested") {
 			t.Fatalf("nesting reached the macOS runner: %v", c)
 		}
-		if !strings.Contains(a, "softnet-block=") || !strings.Contains(a, "@host") || strings.Contains(a, "share=") || strings.Contains(a, "input") {
+		if !strings.Contains(a, "rootless-network") || strings.Contains(a, "share=") || strings.Contains(a, "input") {
 			t.Fatalf("unsafe launch %v", c)
+		}
+		if strings.HasSuffix(a, "-engine") != strings.Contains(a, " mtu=1500 ") {
+			t.Fatalf("only the engine member must be pinned to MTU 1500: %v", c)
 		}
 	}
 	if !engineNested {
@@ -147,9 +146,7 @@ func TestPairRejectsMissingRecordAndForeignMetadata(t *testing.T) {
 
 func TestIsolationFailureBeforeClone(t *testing.T) {
 	p, r, spec := pairProvider(t)
-	p.checkIsolation = func(context.Context) (vm.SoftnetOptions, error) {
-		return vm.SoftnetOptions{}, errors.New("privilege unavailable")
-	}
+	p.checkIsolation = func(context.Context) error { return errors.New("network unavailable") }
 	if err := p.Create(context.Background(), spec); err == nil {
 		t.Fatal("isolation failure accepted")
 	}
@@ -224,5 +221,43 @@ func TestRelayProofAndTopologyDisable(t *testing.T) {
 	owned, _, err := p.List(ctx)
 	if err != nil || len(owned) != 0 {
 		t.Fatal("orphan pair exposed to generic cleanup")
+	}
+}
+
+type failingMemberProof struct {
+	Runtime
+	refused string
+	checked []string
+}
+
+func (r *failingMemberProof) ProveIsolation(name, _ string) error {
+	r.checked = append(r.checked, name)
+	if name == r.refused {
+		return errors.New("fixture isolation unavailable")
+	}
+	return nil
+}
+func TestPairHealthRequiresBothLiveRootlessProofs(t *testing.T) {
+	for _, engine := range []bool{false, true} {
+		p, _, spec := pairProvider(t)
+		ctx := context.Background()
+		if err := p.Create(ctx, spec); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Start(ctx, spec.Name, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		member := spec.Name
+		if engine {
+			member += "-engine"
+		}
+		proof := &failingMemberProof{Runtime: p.rt, refused: member}
+		p.rt = proof
+		if err := p.engineHealthy(ctx, spec.Name); err == nil || err.Error() != "fixture isolation unavailable" {
+			t.Fatal("pair health did not require the member's live isolation proof")
+		}
+		if proof.checked[len(proof.checked)-1] != member {
+			t.Fatal("pair proof skipped the expected member")
+		}
 	}
 }

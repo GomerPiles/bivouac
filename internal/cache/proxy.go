@@ -56,7 +56,7 @@ func newReleaseProxy(root tls.Certificate) (*releaseProxy, error) {
 // Each certificate points to the granting guest's cache endpoint, including
 // its SSH listener. Schannel can check revocation without disabling TLS checks
 // or requiring a guest-to-host NIC exception. Keys live only for this tunnel.
-func (p *releaseProxy) leaf(host, endpoint string) (tls.Certificate, error) {
+func (p *releaseProxy) leaf(host, crlURL string) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -65,7 +65,7 @@ func (p *releaseProxy) leaf(host, endpoint string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	leaf := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: host}, DNSNames: []string{host}, NotBefore: p.ca.NotBefore, NotAfter: p.ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CRLDistributionPoints: []string{endpoint + "/ca.crl"}}
+	leaf := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: host}, DNSNames: []string{host}, NotBefore: p.ca.NotBefore, NotAfter: p.ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CRLDistributionPoints: []string{crlURL}}
 	der, err := x509.CreateCertificate(rand.Reader, leaf, p.ca, &key.PublicKey, p.signer)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -124,7 +124,7 @@ func (s *Service) serveProxy(w http.ResponseWriter, r *http.Request) {
 	var upstream net.Conn
 	if !releaseHost(host) {
 		// Use the same public-only DNS policy as the cache client; no host LAN access.
-		transport := s.client.Transport.(*http.Transport)
+		transport := upstreamTransport(s.client)
 		upstream, err = transport.DialContext(r.Context(), "tcp", net.JoinHostPort(host, port))
 		if err != nil {
 			http.Error(w, "upstream unavailable", http.StatusBadGateway)
@@ -168,7 +168,7 @@ func (s *Service) serveProxy(w http.ResponseWriter, r *http.Request) {
 		relay(buffered, upstream)
 		return
 	}
-	leaf, err := s.proxy.leaf(host, g.url)
+	leaf, err := s.proxy.leaf(host, g.crlURL)
 	if err != nil {
 		return
 	}

@@ -24,21 +24,25 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/GomerPiles/bivouac/internal/macnetwork"
 )
 
 // Bootstrap is delivered privately to one guest, never to state or diagnostics.
 type Bootstrap struct {
-	URL          string `json:"url"`
-	Token        string `json:"token"`
-	CA           string `json:"ca"`
-	ReleaseProxy bool   `json:"release_proxy"`
-	StoreUploads bool   `json:"store_uploads"`
+	URL           string `json:"url"`
+	RevocationURL string `json:"revocation_url,omitempty"`
+	Token         string `json:"token"`
+	CA            string `json:"ca"`
+	ReleaseProxy  bool   `json:"release_proxy"`
+	StoreUploads  bool   `json:"store_uploads"`
 }
 type grant struct {
 	summary Summary
 	name    string
 	expires time.Time
 	url     string
+	crlURL  string
 }
 type lease struct {
 	token, upstream, key, etag string
@@ -49,30 +53,32 @@ type lease struct {
 // Service owns a TLS listener, short-lived guest capabilities, and bounded storage.
 // Metadata stays on GitHub; only authorized archive bytes pass here.
 type Service struct {
-	summary     Summary
-	mu          sync.Mutex
-	store       *Store
-	client      *http.Client
-	log         *slog.Logger
-	url, ca     string
-	server      *http.Server
-	grants      map[string]grant
-	leases      map[string]lease
-	uploads     map[string]*uploadLease
-	ttl         time.Duration
-	validate    func(*url.URL) bool
-	proxy       *releaseProxy
-	connections map[net.Conn]string
-	certificate tls.Certificate
-	transports  map[string]io.Closer
-	closed      bool
-	storing     atomic.Bool
-	work        context.Context // Canceled by Close; owns fills and upload commits.
-	stopWork    context.CancelFunc
-	held        sync.WaitGroup // Work with store files open: fills, readers, relays and commits.
-	fillIdle    time.Duration  // An upstream attempt that receives nothing for this long ends.
-	crl         []byte
-	crlExpires  time.Time
+	endpointLimit int
+	macPolicy     *macnetwork.Cache
+	summary       Summary
+	mu            sync.Mutex
+	store         *Store
+	client        *http.Client
+	log           *slog.Logger
+	url, ca       string
+	server        *http.Server
+	grants        map[string]grant
+	leases        map[string]lease
+	uploads       map[string]*uploadLease
+	ttl           time.Duration
+	validate      func(*url.URL) bool
+	proxy         *releaseProxy
+	connections   map[net.Conn]string
+	certificate   tls.Certificate
+	transports    map[string]io.Closer
+	closed        bool
+	storing       atomic.Bool
+	work          context.Context // Canceled by Close; owns fills and upload commits.
+	stopWork      context.CancelFunc
+	held          sync.WaitGroup // Work with store files open: fills, readers, relays and commits.
+	fillIdle      time.Duration  // An upstream attempt that receives nothing for this long ends.
+	crl           []byte
+	crlExpires    time.Time
 }
 
 // serveTimeout bounds writing one response. A listener's WriteTimeout starts
@@ -176,7 +182,7 @@ func (s *Service) issueAt(name, endpoint string) ([]byte, error) {
 		s.mu.Unlock()
 		return nil, errors.New("cache service closed")
 	}
-	s.grants[token] = grant{name: name, expires: time.Now().Add(s.ttl), url: endpoint}
+	s.grants[token] = grant{name: name, expires: time.Now().Add(s.ttl), url: endpoint, crlURL: endpoint + "/ca.crl"}
 	s.mu.Unlock()
 	return json.Marshal(Bootstrap{URL: endpoint, Token: token, CA: s.ca, ReleaseProxy: s.proxy.enabled.Load(), StoreUploads: s.storing.Load()})
 }
@@ -579,7 +585,12 @@ func allowedURL(u *url.URL) bool {
 	return strings.HasSuffix(host, ".blob.core.windows.net") && u.RawQuery != ""
 }
 
-func publicClient() *http.Client {
+func publicClient() *http.Client { return publicClientAdmission(nil) }
+func publicClientAdmission(admit func(net.IP) bool) *http.Client {
+	return publicClientResolvers(admit, nil)
+}
+func publicClientResolvers(admit func(net.IP) bool, servers []string) *http.Client {
+	resolve := macnetwork.Resolver(servers)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableCompression = true // Cache objects are opaque upstream bytes.
@@ -589,21 +600,25 @@ func publicClient() *http.Client {
 		if err != nil {
 			return nil, errors.New("invalid upstream address")
 		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		ips, err := resolve(ctx, host)
 		if err != nil {
 			return nil, errors.New("upstream resolution failed")
 		}
-		for _, ip := range ips {
-			if !publicIP(ip.IP) {
-				return nil, errors.New("non-public upstream")
-			}
+		ip, err := upstreamIP(ips, admit)
+		if err != nil {
+			return nil, err
 		}
-		if len(ips) == 0 {
-			return nil, errors.New("upstream resolution failed")
+		conn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil && admit != nil {
+			return &checkedUpstream{Conn: conn, ip: ip, admit: admit}, nil
 		}
-		return (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		return conn, err
 	}
-	return &http.Client{Transport: transport, Timeout: 10 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+	var roundTripper http.RoundTripper = transport
+	if admit != nil {
+		roundTripper = &admissionTransport{transport: transport, admit: admit}
+	}
+	return &http.Client{Transport: roundTripper, Timeout: 10 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("redirect limit")
 		}
@@ -640,3 +655,49 @@ func (s *Store) Stats() (int, int64, int64) {
 	defer s.mu.Unlock()
 	return len(s.entries), s.used, s.reserved
 }
+
+// RestrictMacNetwork is called before attaching any macOS guests. Each upstream
+// dial rejects current host addresses/prefixes and IPv6 as well as special IPs.
+func (s *Service) RestrictMacNetwork(servers []string) {
+	s.client.CloseIdleConnections()
+	if s.macPolicy == nil {
+		s.macPolicy = macnetwork.NewCache()
+	}
+	s.client = publicClientResolvers(s.macPolicy.Public, servers)
+}
+
+// All usable answers must be admitted before choosing one, preventing a mixed
+// public/private DNS response from bypassing denial. Isolated macOS transports
+// discard public IPv6 answers and require an admitted IPv4 alternative.
+func upstreamIP(ips []net.IPAddr, admit func(net.IP) bool) (net.IP, error) {
+	var selected net.IP
+	for _, ip := range ips {
+		if !publicIP(ip.IP) {
+			return nil, errors.New("non-public upstream")
+		}
+		if admit != nil && ip.IP.To4() == nil {
+			continue
+		}
+		if admit != nil && !admit(ip.IP) {
+			return nil, errors.New("non-public upstream")
+		}
+		if selected == nil {
+			selected = ip.IP
+		}
+	}
+	if selected == nil {
+		return nil, errors.New("upstream address unavailable")
+	}
+	return selected, nil
+}
+
+// MaxEndpointConnections is the per-VM host listener bound.
+func (s *Service) MaxEndpointConnections() int {
+	if s.endpointLimit == 0 {
+		return 256
+	}
+	return s.endpointLimit
+}
+
+// SetEndpointLimit is called before attaching guests, after config validation.
+func (s *Service) SetEndpointLimit(limit int) { s.endpointLimit = limit }

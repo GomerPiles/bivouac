@@ -49,16 +49,20 @@ type Provider struct {
 	rt             Runtime
 	cache          *cache.Service
 	records        *state.Store
-	checkIsolation func(context.Context) (vm.SoftnetOptions, error)
+	checkIsolation func(context.Context) error
 	startRelay     func(context.Context, RelayPlan) (Process, error)
 	log            *slog.Logger
 
-	mu    sync.Mutex
-	procs map[string]Process // VM helper processes by VM name
+	mu      sync.Mutex
+	helpers map[string]bool
+	procs   map[string]Process // VM helper processes by VM name
 }
 
 // SetCache attaches an optional portable cache service before this provider runs.
-func (p *Provider) SetCache(service *cache.Service) { p.cache = service }
+func (p *Provider) SetCache(service *cache.Service) {
+	service.RestrictMacNetwork(p.cfg.Network.DNSServers)
+	p.cache = service
+}
 
 // New returns the provider for VMs in store (paths.Layout.VMs). rt may be
 // nil for the real VM runtime. log is the caller's redacted sink; nil disables
@@ -74,7 +78,7 @@ func New(name string, cfg config.VZ, controllerID string, store string, rt Runti
 		}
 		rt = l
 	}
-	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, procs: map[string]Process{}}, nil
+	return &Provider{name: name, cfg: cfg, controllerID: controllerID, store: vm.Store(store), rt: rt, log: log, helpers: map[string]bool{}, procs: map[string]Process{}}, nil
 }
 
 // CheckRuntime fails when this host cannot run guests: the VM store path is
@@ -87,6 +91,9 @@ func (p *Provider) CheckRuntime(ctx context.Context) error {
 		return nil
 	}
 	if err := l.check(ctx); err != nil {
+		return err
+	}
+	if err := p.preflightRunner(ctx); err != nil {
 		return err
 	}
 	return CheckNested(p.cfg)
@@ -281,10 +288,10 @@ func (p *Provider) runnerDir(name string) (string, error) {
 	return g.RunnerDir, err
 }
 
-// runnerLaunch attaches input devices, the optional bootstrap share, and
+// runnerLaunch attaches input devices and
 // the configured machine options; the guest console is never attached.
 func (p *Provider) runnerLaunch() Launch {
-	return Launch{Share: p.cfg.BootstrapShare, Input: true, Machine: MachineOptions(p.cfg.Machine)}
+	return Launch{Share: p.cfg.BootstrapShare, Input: true, RootlessNetwork: true, Network: p.cfg.Network, Machine: MachineOptions(p.cfg.Machine)}
 }
 
 // LaunchArgs is the exact argument array the VM helper receives for a
@@ -296,7 +303,10 @@ func (p *Provider) LaunchArgs(name string) ([]string, error) {
 	}
 	launch := p.runnerLaunch()
 	if p.cfg.Containers != nil {
-		launch = Launch{Softnet: &vm.SoftnetOptions{Binary: "<softnet>", Block: "<policy>"}}
+		launch = Launch{RootlessNetwork: true, Network: p.cfg.Network, Machine: MachineOptions(p.cfg.Machine)}
+	}
+	if p.cache != nil {
+		launch.CacheMaxConnections = p.cache.MaxEndpointConnections()
 	}
 	return l.helperArgs(name, launch)
 }
@@ -312,6 +322,14 @@ func (p *Provider) describe(name string, launch Launch) string {
 
 // Start implements provider.Provider.
 func (p *Provider) startVM(ctx context.Context, name string, launch Launch, launchLog io.Writer) error {
+	launch.Network = p.cfg.Network
+	if launch.EngineGuest {
+		launch.Network.MTU = 1500
+	}
+	if p.cache != nil {
+		launch.CacheMaxConnections = p.cache.MaxEndpointConnections()
+	}
+
 	if _, ok := p.owns(name); !ok {
 		return provider.ErrNotOwned
 	}
@@ -422,6 +440,9 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 	// that lingers means the guest kept the agent's pipes open.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if err := p.runnerIsolation(name); err != nil {
+		return err
+	}
 	if p.cfg.Containers != nil {
 		if err := p.engineHealthy(ctx, name); err != nil {
 			return err
@@ -460,8 +481,8 @@ func (p *Provider) StartRunner(ctx context.Context, name string, jit []byte) err
 			}
 		}
 	}
-	// Ownership is rechecked right before the config leaves the host.
-	if err := p.ownsGuest(name); err != nil {
+	// Isolation is rechecked right before the config leaves the host.
+	if err := p.runnerIsolation(name); err != nil {
 		return err
 	}
 	dir, err := p.runnerDir(name)
@@ -484,10 +505,24 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 	if _, err := p.output(ctx, name, []string{"mkdir", "-p", "-m", "0700", guestDirectory}, nil); err != nil {
 		return errors.New("prepare private guest cache directory")
 	}
-	bootstrap, err := p.cache.Issue(name)
+	if err := p.runnerIsolation(name); err != nil {
+		return err
+	}
+	stream, err := p.rt.Duplex(context.WithoutCancel(ctx), name, []string{guestHelper, "cache", "endpoint"})
+	if err != nil {
+		return errors.New("open guest cache control stream")
+	}
+	p.cache.Revoke(name)
+	listener, revocation, err := p.rt.CacheListeners(name)
+	if err != nil {
+		_ = stream.Close()
+		return err
+	}
+	bootstrap, err := p.cache.AttachEndpoint(ctx, name, stream, listener, revocation)
 	if err != nil {
 		return err
 	}
+	defer clear(bootstrap)
 	var settings cache.Bootstrap
 	if err = json.Unmarshal(bootstrap, &settings); err != nil {
 		return errors.New("invalid cache bootstrap")
@@ -551,6 +586,9 @@ func (p *Provider) StopRunner(ctx context.Context, name string) error {
 
 // RunnerStatus implements provider.Provider.
 func (p *Provider) RunnerStatus(ctx context.Context, name string) (provider.RunnerStatus, error) {
+	if err := p.runnerIsolation(name); err != nil {
+		return provider.RunnerStatus{}, err
+	}
 	if p.cfg.Containers != nil {
 		if err := p.engineHealthy(ctx, name); err != nil {
 			return provider.RunnerStatus{State: provider.RunnerAbsent}, err
@@ -729,6 +767,7 @@ func (p *Provider) forget(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.procs, name)
+	delete(p.helpers, name)
 }
 
 // List implements provider.Provider.

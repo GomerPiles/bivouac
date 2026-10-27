@@ -179,7 +179,7 @@ func TestGuestRootNameConstraints(t *testing.T) {
 		return err
 	}
 	for _, host := range []string{"github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "evil.example"} {
-		pair, err := s.proxy.leaf(host, s.url)
+		pair, err := s.proxy.leaf(host, s.url+"/ca.crl")
 		if err != nil {
 			t.Fatal(err)
 		}

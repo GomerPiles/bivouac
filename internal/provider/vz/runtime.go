@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/GomerPiles/bivouac/internal/cachelink"
+	"github.com/GomerPiles/bivouac/internal/config"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
 	"github.com/GomerPiles/bivouac/internal/provider"
 	"github.com/GomerPiles/bivouac/internal/vm"
@@ -26,6 +28,8 @@ type Runtime interface {
 	Exec(ctx context.Context, name string, argv []string, stdin io.Reader, stdout io.Writer) error
 	// Duplex attaches a binary-safe stream to argv's stdin and stdout.
 	Duplex(ctx context.Context, name string, argv []string) (net.Conn, error)
+	// CacheListener binds the fixed private per-VM capability after ownership proof.
+	CacheListeners(name string) (net.Listener, net.Listener, error)
 	// Stop powers the VM off; timeout bounds the helper's exit.
 	Stop(ctx context.Context, name string, timeout time.Duration) error
 	// Delete removes a stopped VM; fs.ErrNotExist when it is absent.
@@ -35,10 +39,15 @@ type Runtime interface {
 
 // Launch selects devices and machine options for one VM.
 type Launch struct {
-	Share   string // read-only host directory, or empty
-	Input   bool   // keyboard and pointing devices
-	Softnet *vm.SoftnetOptions
-	Machine vm.MachineOptions
+	Share               string // read-only host directory, or empty
+	Input               bool   // keyboard and pointing devices
+	RootlessNetwork     bool
+	Network             config.VZNetwork
+	CacheMaxConnections int
+	Machine             vm.MachineOptions
+	// EngineGuest keeps the Linux engine member at MTU 1500 until its DHCP
+	// MTU adoption is validated; the runner member uses the configured MTU.
+	EngineGuest bool
 }
 
 // local is the real Runtime: VM directories in bivouac's store, each VM run
@@ -77,7 +86,7 @@ func (l *local) helperArgs(name string, launch Launch) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := vm.RunOptions{Dir: l.store.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, AgentSocket: socket, Softnet: launch.Softnet, Machine: launch.Machine}
+	opts := vm.RunOptions{Dir: l.store.Dir(name), Share: launch.Share, Input: launch.Input, AgentPort: guestagent.Port, AgentSocket: socket, RootlessNetwork: launch.RootlessNetwork, Network: launch.Network, CacheMaxConnections: launch.CacheMaxConnections, Machine: launch.Machine}
 	return append([]string{"vm", "run"}, opts.Args()...), nil
 }
 
@@ -164,4 +173,22 @@ func (l *local) List(context.Context) ([]vm.Entry, error) { return l.store.List(
 // absent reports whether a runtime error means the VM does not exist.
 func absent(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, provider.ErrNotFound)
+}
+
+// ProveIsolation checks the live lock holder's launch, including its rootless network, rather than trusting mutable provider metadata for adoption.
+func (l *local) ProveIsolation(name, policy string) error {
+	return vm.ProveIsolation(l.store.Dir(name), policy)
+}
+
+func (l *local) CacheListeners(name string) (net.Listener, net.Listener, error) {
+	payload, err := l.store.ListenCache(name, cachelink.Payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	revocation, err := l.store.ListenCache(name, cachelink.Revocation)
+	if err != nil {
+		_ = payload.Close()
+		return nil, nil, err
+	}
+	return payload, revocation, nil
 }

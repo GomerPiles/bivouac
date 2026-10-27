@@ -30,8 +30,9 @@ const execWaitDelay = 5 * time.Second
 // ErrOutputLimit reports a command whose stdout or stderr exceeded its bound.
 var ErrOutputLimit = errors.New("output exceeded its bound")
 
-// output runs a host command and returns at most limit bytes of stdout.
-func output(ctx context.Context, c CLI, args []string, limit int) ([]byte, error) {
+// output runs a host command and returns at most 4 KiB of stdout.
+func output(ctx context.Context, c CLI, args []string) ([]byte, error) {
+	const limit = statusOutputLimit
 	b := &boundedBuffer{limit: limit}
 	err := c.Run(ctx, args, nil, b)
 	if b.exceeded {
@@ -92,8 +93,7 @@ type Process interface {
 	Kill() error
 }
 
-// CLI runs a host binary: the VM helper, the container relay, softnet's
-// probes, and ps.
+// CLI runs a host binary: the VM helper, container relay, and ps.
 type CLI struct {
 	Binary string
 	// Env entries are appended to the environment.

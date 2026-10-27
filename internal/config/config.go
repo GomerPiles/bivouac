@@ -40,13 +40,14 @@ type Config struct {
 
 // Cache configures the optional guest download accelerator. No credentials.
 type Cache struct {
-	Enabled      bool   `toml:"enabled"`
-	ReleaseProxy bool   `toml:"release_proxy"`
-	StoreUploads bool   `toml:"store_uploads"`
-	Listen       string `toml:"listen"`
-	GuestHost    string `toml:"guest_host"`
-	MaxGB        int64  `toml:"max_gb"`
-	MaxObjectMB  int64  `toml:"max_object_mb"`
+	MaxConnections int    `toml:"max_connections"`
+	Enabled        bool   `toml:"enabled"`
+	ReleaseProxy   bool   `toml:"release_proxy"`
+	StoreUploads   bool   `toml:"store_uploads"`
+	Listen         string `toml:"listen"`
+	GuestHost      string `toml:"guest_host"`
+	MaxGB          int64  `toml:"max_gb"`
+	MaxObjectMB    int64  `toml:"max_object_mb"`
 }
 
 // GitHub names the App and where runners register.
@@ -149,6 +150,7 @@ type Crosvm struct {
 // bivouac's VM store, run by bivouac's own VM helper. What the image
 // provides (such as the runner directory) is in the baseline's manifest.
 type VZ struct {
+	Network VZNetwork `toml:"network"`
 	// Containers optionally adds an isolated Linux engine clone to each job.
 	Containers *Containers `toml:"containers"`
 	// Baseline is the local VM each job is cloned from. Never started.
@@ -266,22 +268,24 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	isWindowsHostCache := false
+	isIsolatedCache := false
 	for _, p := range c.Providers {
-		if p.Type == "crosvm" || p.Type == "hcs" {
-			isWindowsHostCache = true
+		if p.Type == "crosvm" || p.Type == "hcs" || p.Type == "vz" {
+			isIsolatedCache = true
 		}
 	}
 	if c.Cache.Listen == "" {
-		// The vmnet bridge may not exist until a guest runs, so the default
-		// binds every interface; TLS and per-guest capabilities gate access.
+		// Guests use dedicated transports; the service never needs a LAN bind.
 		c.Cache.Listen = "0.0.0.0:0"
-		if isWindowsHostCache {
+		if isIsolatedCache {
 			c.Cache.Listen = "127.0.0.1:0"
 		}
 	}
-	if isWindowsHostCache && c.Cache.GuestHost == "" {
+	if isIsolatedCache && c.Cache.GuestHost == "" {
 		c.Cache.GuestHost = "127.0.0.1"
+	}
+	if c.Cache.MaxConnections == 0 {
+		c.Cache.MaxConnections = 256
 	}
 	if c.Cache.MaxGB == 0 {
 		c.Cache.MaxGB = 20
@@ -315,6 +319,7 @@ func (c *Config) applyDefaults() {
 	}
 	for name, p := range c.Providers {
 		if p.Type == "vz" && p.VZ != nil {
+			p.VZ.Network = p.VZ.Network.WithDefaults()
 			if p.VZ.HostVMLimit == 0 {
 				p.VZ.HostVMLimit = 2
 			}
@@ -334,9 +339,12 @@ func (c *Config) Validate() error {
 	if c.Cache.StoreUploads && !c.Cache.Enabled {
 		errs = append(errs, errors.New("cache.store_uploads requires cache.enabled"))
 	}
+	if c.Cache.MaxConnections < 0 || c.Cache.MaxConnections > 65536 {
+		errs = append(errs, errors.New("cache.max_connections must be 1..65536"))
+	}
 	if c.Cache.Enabled {
 		if ip := net.ParseIP(c.Cache.GuestHost); ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
-			errs = append(errs, errors.New("cache.guest_host must be the host IP reachable from guests"))
+			errs = append(errs, errors.New("cache.guest_host must be a literal service identity IP"))
 		}
 		if _, _, err := net.SplitHostPort(c.Cache.Listen); err != nil {
 			errs = append(errs, errors.New("cache.listen must be host:port"))
@@ -489,6 +497,9 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("provider %q: [providers.%s.vz] is required", name, name))
 				continue
 			}
+			if c.Cache.Enabled && !c.Cache.loopback() {
+				errs = append(errs, fmt.Errorf("provider %q: isolated cache requires literal loopback listen and guest_host", name))
+			}
 			if p.VZ.Baseline == "" {
 				errs = append(errs, fmt.Errorf("provider %q: vz.baseline is required", name))
 			}
@@ -500,6 +511,9 @@ func (c *Config) Validate() error {
 			}
 			if p.VZ.CPU < 0 || p.VZ.CPU > 1024 || p.VZ.MemoryGB < 0 || p.VZ.MemoryGB > 1024 {
 				errs = append(errs, fmt.Errorf("provider %q: vz cpu and memory_gb must be 0 (keep the baseline's) or 1..1024", name))
+			}
+			if err := p.VZ.Network.Validate(); err != nil {
+				errs = append(errs, fmt.Errorf("provider %q: %w", name, err))
 			}
 			if err := p.VZ.Machine.validate(); err != nil {
 				errs = append(errs, fmt.Errorf("provider %q: vz %w", name, err))
@@ -574,6 +588,9 @@ func (c *Config) validateAcrossProviders(names []string) []error {
 			first = name
 			continue
 		}
+		if !sameDNSServers(c.Providers[first].VZ.Network.DNSServers, t.Network.DNSServers) {
+			errs = append(errs, errors.New("vz providers must use the same network.dns_servers for shared cache egress"))
+		}
 		if f := c.Providers[first].VZ; f.HostVMLimit != t.HostVMLimit || f.ForeignSlots != t.ForeignSlots {
 			errs = append(errs, fmt.Errorf("providers %q and %q: vz host_vm_limit and foreign_slots describe the host and must match", first, name))
 		}
@@ -629,12 +646,24 @@ labels = ["self-hosted", "macOS", "ARM64", "bivouac-experimental"]  # jit demand
 max_instances = 1
 idle_pool = 1               # jit demand only; kept warm while on
 
+# macOS runners use a rootless public-only network with DHCP/DNS.
+# No host privilege setup or NAT fallback is required.
 [providers.macos.vz]
 baseline = "ci-macos"
 cpu = 6
 memory_gb = 8
 host_vm_limit = 2
 foreign_slots = 1            # leave one macOS guest slot for Tartelet during validation
+
+# [providers.macos.vz.network]
+# dns_servers = []           # primary resolvers from /etc/resolv.conf; IPv4 overrides
+# memory_mb = 1024           # TCP buffer sizing target, not a process RSS cap
+# max_flows = 4096
+# tcp_idle_timeout = "24h"
+# udp_idle_timeout = "60s"
+# mtu = 16384                # 1500..65535 (non-1500 needs macOS 13+); independent of memory_mb
+# [cache]
+# max_connections = 256      # per-VM endpoint
 
 # Optional typed machine options; omitted values keep the baseline's.
 # [providers.macos.vz.machine]

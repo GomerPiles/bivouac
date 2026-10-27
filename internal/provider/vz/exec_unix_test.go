@@ -40,12 +40,12 @@ func TestCLIOutputIsBounded(t *testing.T) {
 	cli := fixtureCLI(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if out, err := output(ctx, cli, []string{"probe", "small"}, statusOutputLimit); err != nil || string(out) != "ok\n" {
+	if out, err := output(ctx, cli, []string{"probe", "small"}); err != nil || string(out) != "ok\n" {
 		t.Fatalf("small output: %q %v", out, err)
 	}
 	for _, mode := range []string{"flood", "stderr-flood"} {
 		start := time.Now()
-		_, err := output(ctx, cli, []string{"probe", mode}, statusOutputLimit)
+		_, err := output(ctx, cli, []string{"probe", mode})
 		if !errors.Is(err, ErrOutputLimit) {
 			t.Fatalf("%s: %v, want ErrOutputLimit", mode, err)
 		}
@@ -58,7 +58,7 @@ func TestCLIOutputIsBounded(t *testing.T) {
 func TestCLIErrorTextIsBoundedAndRedacted(t *testing.T) {
 	cli := fixtureCLI(t)
 	ctx := context.Background()
-	_, err := output(ctx, cli, []string{"probe", "fail"}, statusOutputLimit)
+	_, err := output(ctx, cli, []string{"probe", "fail"})
 	var te *Error
 	if !errors.As(err, &te) {
 		t.Fatalf("error type %T", err)

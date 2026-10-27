@@ -43,6 +43,11 @@ jobs:
           BIVOUAC_WINDOWS_CREDENTIAL_TEST: ${{ runner.os == 'Windows' && '1' || '0' }}
           CGO_ENABLED: '1'
         run: go test -race ./...
+      - name: Seatbelt host aliases (hosted macOS only)
+        if: runner.os == 'macOS'
+        env:
+          BIVOUAC_CI_SANDBOX_ALIASES: '1'
+        run: go test -run '^TestNetworkSandboxAliases$' -v ./internal/rootnet
       - name: VM configurations (signed test binary)
         if: runner.os == 'macOS'
         env:

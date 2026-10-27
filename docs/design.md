@@ -22,6 +22,10 @@ internal/secret      credential store (Keychain; native Windows Credential Manag
 internal/diag        diagnostics collection with redaction, bounded guest archive extraction
 internal/command     argument-array subprocesses with bounded output and classified OpenSSH failures
 internal/netpolicy   IPv4 egress denials shared by Windows-hosted providers
+internal/macnetwork  public-only macOS host/interface/route socket admission
+internal/rootnet     bounded rootless Ethernet, DHCP/DNS and TCP/UDP forwarding
+internal/cachelink   fixed virtual cache endpoint and cache-only descriptor broker
+internal/dnsproxy    validated DNS envelopes and fixed-resolver parent capability
 internal/winhost     Windows host checks: protected storage, private staging, system OpenSSH
 internal/hcs         typed Host Compute Service binding for direct Windows guests
 internal/hvsock      cancellable, deadline-aware Hyper-V socket dialer
@@ -334,7 +338,7 @@ for existing cancellation, preserves its exit code and joins sampling at exit.
 The existing shell hook still records job identity; the helper's job marker only
 starts numeric sampling. Partial helper installation is removed before falling
 back to the official listener. Optional telemetry errors cannot fail a job.
-An unavailable shared helper also disables optional cache setup; a cache failure
+An unavailable helper disables optional cache setup; a cache failure
 removes only cache assets, preserving the helper used by telemetry or the relay.
 Container readiness installs the macOS helper once before relay startup and
 never overwrites it at runner start; its Linux companion receives its own Linux
@@ -452,6 +456,153 @@ joins workers but never deactivates: guests remain for adoption.
 
 ### macOS (`vz` provider)
 
+Managed runners use a rootless gVisor stack in a dedicated Seatbelt child of
+one VM helper. A private datagram socket pair attaches through
+`VZFileHandleNetworkDeviceAttachment`; netstack terminates TCP/UDP and opens
+admitted host sockets. No host interface, vmnet, privileged service or network
+configuration change is needed. Link/child failure ends the VM; there is no NAT
+fallback. A separately selected trusted lab NAT control never receives runner
+credentials. Dependencies are pinned in `go.mod`/`go.sum`; networking stays pure Go.
+
+Before consuming guest frames, the child activates deny-by-default Seatbelt:
+only outbound IPv4 TCP/UDP and routing-table sysctl reads are allowed, followed
+by an explicit `localhost:*` outbound denial for currently configured local
+addresses, rather than all of 127/8 (socket admission independently denies 127/8). File access, exec, inbound listeners
+and Mach services (including Keychain) are denied. The deprecated native APIs
+are a compatibility prerequisite: missing APIs, policy-read, sandbox activation
+or proof failures close launch/adoption. The child remains trusted admission code.
+
+The credential-free child receives attachment, owner-lifetime and numeric-report
+FDs, a preconnected cache broker, and a separate DNS capability socket. The cache
+broker accepts only a closed service enum and returns connected stream FDs for
+fixed per-VM payload/CRL handlers; it accepts no destination, path or command.
+DNS correlation IDs allow bounded concurrent requests and cancellation without
+serializing cache setup. Cancelled workers retain their parent slot until exit. Parent workers have deadlines and independent bounds;
+DNS and cache failure do not disable each other. No VM handle, App key, cache TLS
+credential or filesystem right is delegated. Existing and transferred FD I/O
+requires no broader sandbox rule. Readiness precedes VM boot; owner-pipe EOF
+stops the child, and adoption proves the owned helper, child relationship and
+kernel Mach denial. Controller loss leaves the helper/guest alive for adoption.
+
+Each VM, including each container-pair member, has its own link and settings.
+`192.0.2.1`/`192.0.2.2` are virtual gateway/lease identities, never host aliases.
+The clone MAC and source IPv4 are fixed. DHCP/ARP provide only this guest's lease,
+router, DNS and MTU; ARP claims only the gateway, with the guest neighbor pinned
+for duplicate-address detection. IPv6, VLANs, unknown L2, fragments and outbound
+ICMP are dropped. IPv6 requires scoped route/address admission, NDP/RA and
+sandbox rights together; ICMP requires a separately admitted echo translator.
+
+`internal/macnetwork` admission excludes special/private IPv4, host interface
+prefixes, explicit gateways and non-default routed prefixes. Internet defaults,
+ICMP-redirect dynamic routes and ephemeral cloned routes are excluded.
+Split-default VPNs can conservatively deny public access. Unknown policy denies
+access. Snapshots last at most 250 ms; refresh failure replaces success with
+denial, and existing public flows close when denied. This is a non-atomic
+observation window. Public services leading back to host/LAN through NAT, reverse
+proxies or tunnels remain reachable unless their destination appears in denied
+routes. Networks represented only by Internet defaults cannot be classified as LAN.
+
+Virtual UDP/TCP DNS uses a fixed-function capability: the child validates and
+rebuilds one QUERY/IN question, with empty Answer/Authority and at most one OPT.
+Transfers, other opcodes, TSIG/SIG(0), extra records and trailing data are refused;
+unsupported EDNS versions receive BADVERS.
+OPT retains only bounded UDP size and DO; ECS, cookies and unknown options go.
+The parent repeats validation and selects only its configured resolvers: primary
+nameservers from `/etc/resolv.conf`, refreshed per operation, or operator IPv4
+`dns_servers` overrides. Parent sockets may use IPv4/IPv6 loopback or LAN DNS.
+There is no public-resolver fallback. Scoped/per-domain macOS resolvers and
+`/etc/resolver/*` are not consulted. The cache uses `net.DefaultResolver` system
+routing unless the same override is configured; vz providers must agree on
+overrides because the cache client is shared.
+
+All DNS types pass through except IPv6 advertisements: AAAA queries get empty
+NOERROR; AAAA records and HTTPS/SVCB address hints are removed. A hint named in
+`mandatory` makes its record unusable and it is dropped. A denied Answer A makes
+the whole response NXDOMAIN; denied Authority/Additional A glue is dropped.
+CNAME chains and TTLs otherwise survive. Changed RRsets lose covering RRSIGs and
+AD is cleared. Unmodified upstream wire bytes are retained, avoiding unsafe
+repacking of opaque RDATA. Upstream IDs/questions are validated, RCODEs retained,
+temporary SERVFAIL/REFUSED responses try the next resolver, and TCP responses
+are bounded to 65535 bytes. Guest UDP honors EDNS up to 4096 (512 without it); truncation sets TC and retains only question/OPT. Direct guest port
+53 traffic still follows ordinary socket admission.
+
+Guests can drive bounded concurrent queries at primary resolvers without rate
+limiting, and see internal TXT/PTR/other DNS metadata.
+Opaque RDATA is not inspected; destination socket admission is the isolation
+boundary. Operators avoiding this disclosure choose public `dns_servers`.
+Baselines must use DHCP networking/DNS. Cache egress requires all resolved
+addresses to be admitted before selecting an IPv4 destination.
+
+One configurable general ceiling (default 4096) counts public TCP/UDP, pending
+TCP handshakes and cache payload streams. Reserved DNS capacity (32..256, derived
+from the ceiling) and 32 CRL operations remain independent of payload pressure.
+TCP idle expiry defaults to 24 h and UDP to 60 s; DNS/NTP UDP closes after one
+reply. TCP EOF propagates half-close in both directions; errors, cancellation,
+idle expiry and policy revocation close the flow. After FIN, inactivity expiry is
+`min(tcp_idle_timeout, 15m)`. Guest UDP reads are MTU-bounded; upstream reads hold
+full 65507-byte datagrams for netstack fragmentation toward the guest. Native UDP
+readers wait for readiness before borrowing buffers and return them after each
+read/forward operation, so idle flows retain no relay payload buffer.
+
+`network.memory_mb` defaults to 1024 MiB. Each public/cache TCP send and receive
+maximum is `L = clamp(budget_bytes / (2 * max_flows), 128 KiB, 4 MiB)`, including
+the initial buffer sizes. General TCP data buffers can therefore occupy at most
+`2 * max_flows * L`: 1 GiB at defaults. Reserved DNS/CRL TCP buffers add at most
+72 MiB at defaults; two 32 KiB copy buffers per public/cache/CRL relay add up to
+258 MiB. Concurrent UDP reads/forwards can additionally borrow up to
+`max_flows * (65507 + min(65507, MTU-28) + 1)` bytes (about 262 MiB at MTU 1500,
+320 MiB at the default 16384, 512 MiB at 65535), sharing the general ceiling with TCP. Pools can retain
+returned buffers until GC. These are payload-buffer bounds, not a whole-process
+RSS cap: endpoint/packet queues, DNS messages, connection metadata, goroutines
+and the Go runtime add memory; host kernel socket buffers are outside the child.
+The 128 KiB floor can exceed a small configured sizing target (65536 flows imply
+16 GiB of general TCP buffers at that floor). Helper, child and controller check
+FD headroom;
+insufficient limits fail clearly before VM launch.
+
+Only TCP `192.0.2.1:7443` selects the cache payload capability. The configurable
+host endpoint bound defaults to 256; the parent independently bounds grants and
+relays by that setting plus its reserved CRL budget. Guest bridge and stack add
+no equal payload cap. Each host listener accepts only its guest's grants/leases.
+TLS, upstream restrictions, expiry and revocation stay mandatory. CRLs use only
+GET/HEAD `/ca.crl` at `192.0.2.1:7444`, with independent stack/broker/listener
+capacity and proxy bypass. VSOCK carries only a six-byte port announcement and
+lifetime; losing it closes the guest loopback listener and streams. Cache outage
+permits direct public fallback through mandatory admission. Container-engine
+VSOCK remains separate. Cache TCP disables Nagle and shares the budget-derived
+buffer ceiling with public forwarding. Local benchmarks do not establish guest speed.
+
+MTU is configurable from 1500 to 65535, default 16384, chosen from live guest
+adoption and noisy bidirectional throughput measurements. The TCP sizing budget
+remains 1024 MiB independently of MTU. A non-1500 MTU needs the macOS 13
+attachment API; launches fail clearly without it. Container-pair Linux engine
+members stay at 1500 until their DHCP MTU adoption is validated. Large guest UDP datagrams above the real
+path MTU are fragmented by the host; ICMP fragmentation-needed messages do not
+reach the guest. TCP is terminated in the stack, so its upstream leg negotiates
+its own segment sizes. VZ attachment, stack IP MTU, DHCP option 26 and Ethernet
+bounds agree;
+channel/read buffers hold IP MTU plus 14, up to 65549 bytes. Truncated datagrams
+fail the attachment. Both socket ends prove 1 MiB send/4 MiB receive buffers and
+exchange a full-MTU datagram before handoff. No host-wide socket tuning occurs.
+The nonblocking ordered FIFO has byte budgets of `4096*1514` for data and
+`256*1514` for control, plus frame-count bounds. ACK, ARP, DHCP, DNS and CRL traffic
+retain reserved capacity; overflow is explicit loss recoverable by TCP.
+
+The child emits fixed numeric reports only: flow/DNS refusal and failure
+counters, plus active public TCP (including pending dials), UDP and cache-payload
+gauges sampled together under the slot-accounting lock. Reserved DNS/CRL
+operations do not enter these gauges. The helper logs changed snapshots at most
+once per minute and a final snapshot at exit. Its 1 MiB cap reserves terminal-line space. No addresses,
+names, packet contents or arbitrary child text reach these reports.
+
+Before credentials, JIT, status or adoption, durable state, provider metadata and
+live lock-holder arguments prove `--rootless-network` and the policy ID. Both
+container-pair members require proof. Old NAT/Softnet/unsandboxed helpers are
+refused; proven-owner cleanup still works. Drain old jobs before owner-controlled
+migration; no installed binary, VM, baseline, label or privilege changes implicitly.
+Read-only bootstrap shares remain an explicit opt-in for ordinary runners;
+container pairs prohibit shares. Graphics, input and typed machine options remain.
+
 Each VM is a directory in bivouac's VM store
 (`~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`):
 `disk.img`, `nvram.bin`, and `vm.json`, bivouac's versioned manifest. The
@@ -473,11 +624,11 @@ path fits `sun_path` whatever the name.
   memory (at least the manifest's minimums), then a rename into place
   (milliseconds). Then `bivouac.json` with controller and instance IDs.
 - Run: `bivouac vm run --dir <vm> --agent-port <port> --agent-socket <path>
-  [--input] [--share <dir>] [--softnet …] [--display WxH[@PPI]]
+  [--input] --rootless-network [--display WxH[@PPI]]
   [--disk-sync full|fsync|none]`, from the executable signed with
   `com.apple.security.virtualization`. The helper builds the VM with purego
-  bindings to Virtualization.framework (graphics device, virtio disk, NAT or
-  Softnet network, entropy, balloon, vsock; keyboard and pointer for runner
+  bindings to Virtualization.framework (graphics device, virtio disk,
+  rootless network for managed macOS runners, entropy, balloon, vsock; keyboard and pointer for runner
   guests; no console, audio, or clipboard). It holds an fcntl lock on the
   manifest for the VM's life and reads the manifest only through it; the
   provider reads running state and the helper's PID from that lock. A
@@ -497,12 +648,15 @@ path fits `sun_path` whatever the name.
   throttles low-priority I/O during boot, delaying agent startup and inherited
   runner commands. The agent and runner remain in the auto-login user's Aqua
   session with the same permissions and VM resource limits.
-- Ready: the agent runs `true`. Only an unreachable agent is retried; an
+- Ready: the agent runs `true`. DHCP supplies the isolated lease and virtual DNS service without guest sudo.
+  Live rootless proof precedes private setup and runner registration. Only an unreachable agent is retried; an
   agent of another protocol version names its own, and readiness fails at
   once. The bootstrap script is then copied to `/tmp/bivouac-guest`, and
   its `session` mode must report `Aqua`, or readiness fails.
 - Every guest command caps stdout (status 4 KiB, otherwise 64 KiB) and fails
-  when the cap is exceeded. Errors never include guest output.
+  when the cap is exceeded. Errors never include guest output. Ordinary commands
+  discard stderr; explicit lab diagnostics capture a bounded, sink-redacted
+  prefix separately from fixed error classes and numeric exit codes.
 - Every guest operation first checks the prefix and our marker.
 - Runner: `/tmp/bivouac-guest start <runner_dir>` with the JIT config on
   stdin. The guest agent is a LaunchAgent limited to the auto-login user's
@@ -864,49 +1018,26 @@ must already provide the selected client. Bivouac installs no package or tool.
 The Linux helper is cross-built alongside the host binary and transferred
 through stdin; it is not a host share.
 
-Both guests launch with a fixed Softnet policy, no host shares or extra disks,
-and audio/clipboard/input sharing disabled. Admission requires Softnet's
-`--block`/`@host` capabilities and a noninteractive privilege probe. Missing
-baselines, helpers, capabilities, or privileges fail before cloning; failed
-launches never fall back to NAT or another backend. Operator-controlled host
-privilege provisioning is outside bivouac. The policy explicitly blocks
-`@host`, private/reserved IPv4, and locally attached public addresses/subnets;
-it supplies no allow rules or port forwards. Softnet 0.19 drops guest IPv6.
-Only necessary DHCP/ARP control traffic is retained. Guests use public DNS
-resolvers because the host gateway DNS exception is blocked too. The host
-cache and bootstrap-share options are incompatible with this mode.
+Both guests launch with their own rootless network stack, no host shares or extra disks,
+and audio/clipboard/input sharing disabled. Admission checks local baselines/helpers and rootless policy availability.
+Missing prerequisites fail before cloning, and launch failure never falls back
+to NAT. No host privilege provisioning is required. Both live helper argument
+arrays prove the rootless transport. DHCP supplies filtered virtual DNS through the parent resolver capability;
+no guest DNS reconfiguration is performed. The host cache remains disabled for
+this optional topology; bootstrap shares remain prohibited.
 
-Source investigation: the installed-version [Softnet VM filter](https://github.com/openai/softnet/blob/0.19.0/lib/proxy/vm.rs)
-applies explicit blocks before its default global-address, gateway, and DNS
-exceptions. Its Ethernet dispatch accepts ARP/IPv4 only. The VM helper runs
-Softnet through its `--vm-fd` interface: a datagram socket pair, Softnet's
-end as its stdin,
-`--vm-fd 0 --vm-mac-address <mac> --block <policy>`, directly when SUID root
-or through `sudo -n` otherwise. Linux agent availability in a particular
-baseline still requires a live check.
-
-The macOS helper exposes a mode-0600 Unix socket in a mode-0700 guest directory.
-The runner gets `DOCKER_HOST` and `CONTAINER_HOST` pointing only there. A
-detached host supervisor attaches a guest agent stream to that helper and
-multiplexes opaque binary streams to fixed agent commands in the Linux companion.
-The Linux helper opens only `/var/run/docker.sock` or
-`/run/podman/podman.sock`. Frames contain connection IDs and bytes, never
-destinations, paths, or commands. There is no host network listener, daemon
-socket, client credential configuration, or workspace mount. Container API
-traffic and guest transport stderr are discarded from host logging and
-diagnostics. Up to 16 connections use 32 KiB frames and eight data credits
-per direction; malformed frames close the transport and stalled clients cannot
-grow queues without a bound. HTTP upgrades and half-closes remain opaque.
+The VM helper owns the stack and its datagram attachment. Any link/stack failure
+ends that helper and VM; there is no privileged external filter to lose or adopt.
+The container relay still carries only bounded opaque API streams over VSOCK.
 
 The supervisor verifies the durable record and both markers before connecting,
 before every new engine stream, and before stopping anything. It watches
-record/VM presence and the effective host network policy, polling once per
-second with bounded VM-status calls. Transport loss, engine loss, or a changed
-policy retires the pair; no reconnect to a personal or replacement daemon is
-attempted. This monitor is not an atomic firewall update when a new public
-interface appears: keep host public interfaces stable during jobs, and validate
-network transitions before claiming that scenario safe. Private ranges and
-`@host` remain blocked independently of the monitor.
+record/VM presence and rootless helper proof, polling once per second with bounded VM-status
+calls. Transport loss, engine loss, or failed ownership/transport proof retires
+the pair; no reconnect to a personal or replacement daemon is
+attempted. Rootless socket admission and per-flow revalidation handle network changes;
+the relay does not end healthy jobs merely because interface addresses changed.
+Network transition races remain documented above.
 
 Controller crashes leave the supervisor and pair running for adoption. Composite
 status reports existence until **both** VMs are absent. Stop/delete require the
@@ -1029,10 +1160,18 @@ to 4096 objects, including fills.
 Interrupted or corrupt objects are discarded. Archives are never
 extracted on the host, and no host directory is shared with a guest.
 
-On macOS the service binds every interface by default, because the vmnet
-bridge may not exist until a guest runs; TLS and per-guest capabilities gate
-access. The macOS adapter is installed in each owned
-clone, leaving the baseline unchanged. A Node preload observes only successful Actions v2 download
+On macOS the service uses literal loopback TLS identity. The provider starts a
+fixed guest helper through its owned VSOCK command channel. It opens a bounded
+guest-loopback TCP listener, publishes its decimal port, and forwards only to
+the synthetic cache endpoint. Payloads traverse virtual Ethernet, the sandboxed
+stack's cache-only FD capability, and the private per-VM Unix listener. Neither
+guest traffic nor descriptor requests can select host addresses, sockets, paths
+or commands. The host terminates TLS in the existing authenticated handler;
+each listener admits only its owner's grants/leases. Revocation closes its
+control, listener, HTTP requests and hijacked CONNECT tunnels. The six-byte
+listener-port handshake is bounded; no guest-controlled handshake text enters
+errors. No guest NIC exception or LAN cache listener is needed. The adapter
+changes only the disposable clone. A Node preload observes only successful Actions v2 download
 lookups and, with upload storage, cache creations. GitHub still handles
 authentication, branch/ref matching, cache versions and metadata. Bivouac
 stores archives, not a second cache-key database. Each new read validates its fresh signed URL with
@@ -1040,6 +1179,15 @@ an upstream HEAD, including on a local hit; expired or denied capabilities
 cannot expose cached bytes. Object identity excludes URL query credentials.
 A lease request carries only that URL. HEAD on a lease answers from the
 lease's upstream metadata without filling.
+The preload retains each rewritten download's original signed URL only in the
+Node process, with at most 4096 mappings. When full it leaves new lookups public
+instead of discarding an in-flight reader's recovery source. A failed local
+request, aborted/failed body or rejected lease switches subsequent SDK retries
+to that source, preserving byte ranges. Local rejections remain retryable.
+Public retries drop cache authentication, proxy authentication, private-hop CA
+and explicit local TLS identity, and use normal origin trust through mandatory
+network isolation. No signed URL or mapping is persisted or logged.
+
 
 A plain GET that starts a fill, of an archive or a release, receives bytes as
 they arrive, except the last, which waits until the body ends at the declared
@@ -1069,7 +1217,12 @@ CONNECT to `github.com`, `release-assets.githubusercontent.com`, and
 The proxy can see requests on these hosts, including uncached authenticated
 requests, but never persists their headers or bodies. Other public HTTPS
 destinations use opaque tunnels. Every host-side connection uses public-only
-DNS admission and normal upstream certificate validation. Each guest has at
+DNS admission and normal upstream certificate validation. For macOS, every
+resolved address must additionally lie outside the current host/route
+policy, and IPv6 is refused. HTTP connection reuse is retained. Each new request checks
+the actual connected peer, including a pooled connection, before sending; long
+streams/tunnels check the shared policy snapshot on every I/O. Routing changes still have
+a non-atomic observation window, including a pending dial. Each guest has at
 most 32 tunnels, closed on revocation, expiry, or daemon shutdown. Tunnel
 requests cannot change authority to reach another host.
 
@@ -1116,7 +1269,7 @@ URL can still write blocks to Azure directly, so the copy can differ from
 Azure's blob, but only for an entry that guest can write, whose readers already
 accept its bytes. A guest that can only read an entry cannot place it locally.
 Relay requests need the relay ID and the guest's own token: the official action logs
-the ID in debug output, and the macOS listener is reachable beyond the guest.
+the ID in debug output; the relay ID is not an authorization capability.
 
 Staging counts against cache capacity, evicting idle objects as needed, and an
 upload that does not fit is relayed without a copy. Staged files use the fill
@@ -1170,7 +1323,7 @@ unavailable metrics never fail jobs. Controller summaries appear about once a
 minute and on cache-service shutdown. No object keys, paths, request headers,
 URLs, capabilities or response content enter summaries or persistent state.
 The macOS provider uses the same private `cache-config.json` filename in its guest directory;
-summary reads accept the bootstrap's literal host IP as well as SSH loopback,
+summary reads accept the bootstrap's literal loopback IP,
 verify TLS and grant authorization, refuse redirects and never use ambient
 proxy settings. This works with Actions caching alone or the optional release
 proxy. The existing controller-session counters already serve both transports.
@@ -1231,12 +1384,12 @@ localhost management API and UI remain deferred.
   JWTs, PEM blocks, authorization headers, signed URL parameters, and long
   base64 runs. Streams hold at most 64 KiB without a newline, then flush at
   whitespace, quote, `<`, `>` or `&`; an unbroken longer run is masked whole.
-  The macOS launch log is the exception: the VM helper (and Softnet) write
+  The macOS launch log is the exception: the VM helper writes
   host-side status there through an inherited descriptor, neither redacted
   nor bounded, because the helper must outlive the daemon. The guest console
   is never attached, so no guest output reaches it.
-- Guests get no host directories except the optional read-only bootstrap
-  share. Host credentials never enter a guest.
+- Ordinary macOS runners may explicitly opt into read-only bootstrap shares; container pairs prohibit host shares.
+  Host credentials never enter a guest.
 - With `cache.store_uploads`, a guest's signed upload URLs reach host memory
   and the host forwards its saves; it stores only what it sent and Azure
   committed, and needs the guest's token on every relay request.

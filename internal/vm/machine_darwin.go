@@ -43,8 +43,9 @@ type machineOptions struct {
 	// macOS automount tag (/Volumes/My Shared Files/bivouac). Empty: none.
 	share string
 	// networkFD is a SOCK_DGRAM socket carrying the guest's Ethernet frames
-	// (Softnet's peer), or -1 for the framework's shared NAT.
-	networkFD int
+	// (the rootless stack's peer), or -1 for the framework's shared NAT.
+	networkFD  int
+	networkMTU int
 	// input attaches a keyboard and pointing devices.
 	input bool
 	// display is the macOS graphics display, defaults applied.
@@ -139,6 +140,13 @@ func buildConfiguration(f *framework, dir string, c Manifest, opts machineOption
 		}
 		attachment, err = f.make("VZFileHandleNetworkDeviceAttachment", "initWithFileHandle:", handle)
 		if err != nil {
+			return 0, err
+		}
+		mtu := opts.networkMTU
+		if mtu == 0 {
+			mtu = 1500
+		}
+		if err := f.setNetworkMTU(attachment, mtu); err != nil {
 			return 0, err
 		}
 	} else if attachment, err = f.make("VZNATNetworkDeviceAttachment", ""); err != nil {
@@ -374,4 +382,25 @@ func (m *machine) connect(port uint32, timeout time.Duration) (*os.File, error) 
 		}()
 		return nil, errors.New("guest vsock connection timed out")
 	}
+}
+
+// The default attachment needs no macOS 13 selector. Larger MTUs fail clearly
+// on older frameworks and must survive native readback before configuration.
+func (f *framework) setNetworkMTU(attachment objc.ID, mtu int) error {
+	if mtu == 1500 {
+		return nil
+	}
+	if mtu < 1500 || mtu > 65535 {
+		return errors.New("invalid network attachment MTU")
+	}
+	for _, selector := range []string{"setMaximumTransmissionUnit:", "maximumTransmissionUnit"} {
+		if !objc.Send[bool](attachment, f.sel("respondsToSelector:"), f.sel(selector)) {
+			return errors.New("non-default network MTU requires macOS 13 or later")
+		}
+	}
+	f.send(attachment, "setMaximumTransmissionUnit:", uintptr(mtu))
+	if actual := objc.Send[uintptr](attachment, f.sel("maximumTransmissionUnit")); actual != uintptr(mtu) {
+		return errors.New("network attachment MTU readback differs")
+	}
+	return nil
 }

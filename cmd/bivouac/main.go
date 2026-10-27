@@ -125,6 +125,13 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		return guestagent.RunAgent(ctx)
 	}
 	if cmd == "vm" {
+		if len(args) >= 2 && args[0] == "network" {
+			settings, err := vm.ParseNetworkArgs(args[2:])
+			if err != nil {
+				return err
+			}
+			return vm.RunNetwork(ctx, args[1], settings)
+		}
 		if len(args) == 0 || args[0] != "run" {
 			return errUsage
 		}
@@ -140,7 +147,7 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 		if len(args) == 1 {
 			switch args[0] {
 			case "check-isolation":
-				_, err := vz.CheckIsolation(ctx)
+				err := vz.CheckIsolation(ctx)
 				if err == nil {
 					fmt.Println("isolation preflight available; no VM started")
 				}
@@ -162,6 +169,10 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 	}
 	// The same native binary is copied into guests; this private adapter needs
 	// neither host configuration nor the host's credential store.
+	if cmd == "cache" && len(args) == 1 && args[0] == "endpoint" {
+		return cache.GuestEndpoint(ctx)
+	}
+
 	if cmd == "cache" && len(args) == 3 && args[0] == "proxy" {
 		return cache.RunGuestProxy(ctx, args[1], args[2])
 	}
