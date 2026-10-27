@@ -13,6 +13,7 @@ import (
 func TestOfflineDriverTransactions(t *testing.T) {
 	for _, mode := range []string{"nested", "hash", "missing", "unexpected", "existing", "link", "destination link", "mounted root"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			mount, snapshot := t.TempDir(), t.TempDir()
 			if mode == "mounted root" {
 				// The build's mount root is a volume access path, itself a reparse point.

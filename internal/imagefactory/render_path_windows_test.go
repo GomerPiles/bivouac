@@ -32,6 +32,7 @@ func renderPathFixture(t *testing.T) string {
 func TestPinnedRenderProbeOutputBridge(t *testing.T) {
 	for _, mode := range []string{"success", "existing", "task exists", "register error", "start error", "ACL error", "timeout", "oversize", "directory", "junction", "hardlink", "destination exists", "malformed"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			base, spike, outside := filepath.Join(root, "probe"), filepath.Join(root, "spike"), filepath.Join(root, "outside")
 			for _, directory := range []string{base, outside} {
