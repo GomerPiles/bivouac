@@ -307,19 +307,6 @@ type Driver struct {
 	Directories []string          `json:"-"`
 }
 
-func encodeDriverPlan(drivers []Driver) ([]byte, error) {
-	type tree struct {
-		Name        string            `json:"name"`
-		Files       map[string]string `json:"files"`
-		Directories []string          `json:"directories"`
-	}
-	plan := make([]tree, 0, len(drivers))
-	for _, driver := range drivers {
-		plan = append(plan, tree{driver.Name, driver.Files, driver.Directories})
-	}
-	return json.Marshal(plan)
-}
-
 // Manifest deliberately has no credential or private setup fields.
 type Manifest struct {
 	AutologonAccountMatches bool                 `json:"autologon_account_matches"`
@@ -347,10 +334,6 @@ type Manifest struct {
 	Started                 time.Time            `json:"started"`
 	Ended                   time.Time            `json:"ended"`
 	PhaseMS                 map[string]int64     `json:"phase_ms"`
-}
-
-func (m Manifest) tasksValid() bool {
-	return m.AgentTask.ValidAgent() && m.RunnerTask.Valid() && m.AutologonAccountMatches
 }
 
 // cleanupOwned makes absence the barrier before detaching or removing storage.
