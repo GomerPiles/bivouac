@@ -606,11 +606,15 @@ func validatePreparedProfile(profile ExecutionProfile) error {
 	if err != nil {
 		return err
 	}
-	var record PreparedLinuxImage
-	if json.Unmarshal(data, &record) != nil {
-		return errors.New("invalid prepared image marker")
+	return validateRunningPreparedProfile(data, profile)
+}
+
+func validateRunningPreparedProfile(data []byte, profile ExecutionProfile) error {
+	hash, err := HelperSHA256("/proc/self/exe")
+	if err != nil {
+		return err
 	}
-	_, err = DecodePreparedImage(data, profile, record.HelperSHA256)
+	_, err = DecodePreparedImage(data, profile, hash)
 	return err
 }
 

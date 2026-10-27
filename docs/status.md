@@ -152,9 +152,9 @@ The transport-neutral `internal/linuxguest` runtime supplies explicit Crosvm
 public-DNS/SSH and VZ DHCP profiles. Contract tests cover profile binding,
 DNS reports, helper pins and sanitation receipts; Linux-only behavioral tests
 cover persisted boot/profile validation, native listener status/cancellation
-and SSH unit selection. Hosted Ubuntu CI runs those tests. Local macOS checks
-cannot execute Linux-only tests. Linux-on-vz cache attachment is implemented;
-offline tests cover optional sudo, setup/cleanup refusal, endpoint authentication,
+and SSH unit selection. Hosted Ubuntu CI will run these Linux-only tests; they
+have not yet executed on this branch. Local macOS checks cannot run them.
+Linux-on-vz cache attachment is implemented; offline tests cover optional sudo, setup/cleanup refusal, endpoint authentication,
 CRL access, revocation, uncertain deletion and shared guest environment outage
 fallback. Live cache transfers and the rootless Linux gates remain open; the
 shared runtime has no new live guest evidence.

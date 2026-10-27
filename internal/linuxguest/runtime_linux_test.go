@@ -169,3 +169,22 @@ func TestProfileSanitationWritesOnlySSHUnits(t *testing.T) {
 		}
 	}
 }
+
+func TestPreparedMarkerBindsRunningHelper(t *testing.T) {
+	hash, err := HelperSHA256("/proc/self/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []ExecutionProfile{Crosvm, VZ} {
+		report := PreparedLinuxImage{Profile: profile, HelperSHA256: hash, RunnerUnconfigured: true, MachineIDCleared: true, DNSPrepared: profile == Crosvm, DNSDHCP: profile == VZ, SSHHostKeysRemoved: profile == Crosvm}
+		data, _ := json.Marshal(report)
+		if err := validateRunningPreparedProfile(data, profile); err != nil {
+			t.Fatal("matching running helper refused", err)
+		}
+		report.HelperSHA256 = strings.Repeat("0", 64)
+		data, _ = json.Marshal(report)
+		if err := validateRunningPreparedProfile(data, profile); err == nil {
+			t.Fatal("stale helper marker accepted")
+		}
+	}
+}
