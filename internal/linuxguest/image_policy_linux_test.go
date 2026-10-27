@@ -1,6 +1,6 @@
 //go:build linux
 
-package crosvm
+package linuxguest
 
 import (
 	"os"

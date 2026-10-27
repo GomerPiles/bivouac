@@ -99,6 +99,9 @@ bivouac crosvm build-image --options native-options.json --helper D:\RunnerTools
 The output directory must be absent, absolute, named `Linux-Images` and outside
 disposable instance storage. The command creates a fresh clone and invokes
 `guest linux prepare-image` as guest root with a JSON bootstrap binding on stdin.
+The SSH adapter supplies the required `crosvm-public-dns-ssh` execution profile
+in preparation and image requests; per-boot configuration and prepared-image
+provenance must agree. Missing or mismatched profiles are refused.
 It sanitizes factory runner state, prepares identities for renewal and schedules
 clean shutdown. Native absence and backing checks precede one-worker raw
 conversion. `manifest.json` is published last, after geometry checks and flush;

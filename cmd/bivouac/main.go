@@ -20,8 +20,8 @@ import (
 	"github.com/GomerPiles/bivouac/internal/control"
 	"github.com/GomerPiles/bivouac/internal/engine"
 	"github.com/GomerPiles/bivouac/internal/guestagent"
+	"github.com/GomerPiles/bivouac/internal/linuxguest"
 	"github.com/GomerPiles/bivouac/internal/paths"
-	"github.com/GomerPiles/bivouac/internal/provider/crosvm"
 	"github.com/GomerPiles/bivouac/internal/provider/vz"
 	"github.com/GomerPiles/bivouac/internal/vm"
 	"github.com/GomerPiles/bivouac/internal/winrunner"
@@ -105,7 +105,7 @@ func dispatch(ctx context.Context, cmd string, args []string) error {
 			return vz.RunGuest(ctx, args[1], args[2], os.Stdout)
 		}
 		if len(args) == 2 && args[0] == "linux" {
-			return crosvm.RunLinuxGuest(ctx, args[1], os.Stdin, os.Stdout)
+			return linuxguest.RunLinuxGuest(ctx, args[1], os.Stdin, os.Stdout)
 		}
 		if len(args) == 2 && args[0] == "windows" {
 			return winrunner.RunGuest(ctx, args[1], os.Stdout)

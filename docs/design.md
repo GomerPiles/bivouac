@@ -12,6 +12,7 @@ cmd/bivouac          CLI; `biv` is a symlink to the same binary
 internal/manager     control-mode loop, scale set pollers, instance lifecycle, budgets, reconcile
 internal/provider    provider contract; vz/ (macOS), crosvm/ and hcsvm/ (Windows hosts), fake/
 internal/vm          the VM store, VM manifests, Tart-format import, and the Virtualization.framework helper (`vm run`)
+internal/linuxguest  transport-neutral Linux runner runtime, execution profiles and image sanitation
 internal/guestagent  in-guest command agent over vsock, and its host client
 internal/engine      bounded opaque container API streams between disposable guests
 internal/github      scale set client wrapper (actions/scaleset) and test fake
@@ -1143,6 +1144,32 @@ commands, resource guards and validation prerequisites.
 Windowed jobs own their compositor inside the guest/container; hardware
 rendering plus wl_shm/Pixman presentation does not imply direct scanout or
 a logged-in desktop capability. See `docs/crosvm.md` for setup and gates.
+
+### Shared Linux guest runtime
+
+`internal/linuxguest` owns Linux operation dispatch, runner preparation, JIT,
+listener/status/cancel/diagnostics, cache integration, helper fingerprinting and
+image sanitation. Providers own transport and VM lifetime; Crosvm keeps SSH and
+its upload fallback. The CLI dispatches `guest linux` directly to this package.
+
+A required execution profile travels in bounded preparation stdin and is saved
+with the per-boot identity. Every subsequent command validates that record.
+Image preparation must match the saved profile; its bounded receipt and public
+root-owned provenance record carry the same profile. A reused prepared helper
+checks that provenance before creating bootstrap state. Unknown, missing or
+mismatched profiles fail closed. Producers and consumers change together; old
+helpers fail the selected helper hash and use Crosvm's existing upload fallback.
+
+`crosvm-public-dns-ssh` preserves fixed public resolvers on `eth0`, exact
+persistent/active/resolver checks, public-DNS reuse reports, GPU/CDI checks and
+SSH host-key regeneration units. `vz-dhcp` delegates DNS to the virtual DHCP
+lease without editing guest network profiles or resolver files, and installs
+no SSH units or SSH host-key sanitation. Its `dns_dhcp` observation records
+that delegation, not proof of public-DNS reuse or live virtual DNS reachability;
+`dns_reused` and `dns_prepared` remain false. Machine identity and random seed
+sanitation are shared. Runtime and prepared helper paths stay unchanged.
+The VZ profile is runtime groundwork; Linux runner admission and transport on
+vz remain separate work.
 
 ## Optional download caching
 

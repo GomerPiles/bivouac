@@ -131,6 +131,17 @@ Open:
   from guests and privileged containers, and crash/loss/accounting tests.
 - Production cutover from Tartelet.
 
+## Shared Linux runtime
+
+The transport-neutral `internal/linuxguest` runtime supplies explicit Crosvm
+public-DNS/SSH and VZ DHCP profiles. Contract tests cover profile binding,
+DNS reports, helper pins and sanitation receipts; Linux-only behavioral tests
+cover persisted boot/profile validation, native listener status/cancellation
+and SSH unit selection. Hosted Ubuntu CI runs those tests. Local macOS checks
+cannot execute Linux-only tests. Linux-on-vz runner transport, rootless DNS,
+cache parity and cold-clone sanitation remain open; earlier NAT/Softnet results
+do not validate them. The runtime extraction has no new live guest evidence.
+
 ## Windows host controls
 
 Native process tests reproduce a hidden portable-launch child being killed

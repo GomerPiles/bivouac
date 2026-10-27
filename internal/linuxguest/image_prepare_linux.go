@@ -1,6 +1,6 @@
 //go:build linux
 
-package crosvm
+package linuxguest
 
 import (
 	"context"
@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/GomerPiles/bivouac/internal/command"
 )
 
 // Image preparation is explicit guest-only factory work, after owned bootstrap
@@ -71,7 +73,7 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 	var request ImagePreparationRequest
 	d := json.NewDecoder(io.LimitReader(input, 4097))
 	d.DisallowUnknownFields()
-	if d.Decode(&request) != nil || d.Decode(new(any)) != io.EOF || !digest(request.HelperSHA256) {
+	if d.Decode(&request) != nil || d.Decode(new(any)) != io.EOF || !digest(request.HelperSHA256) || request.Profile.Validate() != nil {
 		return errors.New("invalid bounded image preparation request")
 	}
 	stage = 2
@@ -79,7 +81,7 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 	if err != nil {
 		return err
 	}
-	if cfg.Name != request.Name || cfg.ControllerID != request.ControllerID || cfg.BootID != request.BootID {
+	if cfg.Profile != request.Profile || cfg.Name != request.Name || cfg.ControllerID != request.ControllerID || cfg.BootID != request.BootID {
 		return errors.New("image factory bootstrap identity differs")
 	}
 	stage = 3
@@ -116,8 +118,13 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		return err
 	}
 	stage = 6
-	for _, path := range []string{"/", "/usr", "/usr/local", "/etc", "/etc/systemd", "/etc/systemd/system", "/etc/ssh", "/var", "/var/lib", "/var/lib/systemd", "/var/lib/dbus"} {
+	for _, path := range []string{"/", "/usr", "/usr/local", "/etc", "/etc/systemd", "/etc/systemd/system", "/var", "/var/lib", "/var/lib/systemd", "/var/lib/dbus"} {
 		if err = rootPath(path, true); err != nil {
+			return err
+		}
+	}
+	if cfg.Profile.sshSanitation() {
+		if err = rootPath("/etc/ssh", true); err != nil {
 			return err
 		}
 	}
@@ -126,7 +133,11 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		return errors.New("prepared image marker exists or cannot be inspected")
 	}
 	stage = 7
-	for _, path := range []string{"/usr/local/libexec", "/etc/bivouac", "/etc/systemd/system/ssh.service.d"} {
+	directories := []string{"/usr/local/libexec", "/etc/bivouac"}
+	if cfg.Profile.sshSanitation() {
+		directories = append(directories, "/etc/systemd/system/ssh.service.d")
+	}
+	for _, path := range directories {
 		// #nosec G301 -- Public guest helper/config directories need traversal by the dedicated non-root runner; only root may mutate.
 		if err = os.Mkdir(path, 0755); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
@@ -136,17 +147,19 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		}
 	}
 	stage = 8
-	unit, err := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", "--property=LoadState", "--value", "ssh.service").Output()
-	if err != nil || strings.TrimSpace(string(unit)) != "loaded" {
-		return errors.New("image factory needs the supported ssh.service")
+	if cfg.Profile.sshSanitation() {
+		unit, e := exec.CommandContext(ctx, "/usr/bin/systemctl", "show", "--property=LoadState", "--value", "ssh.service").Output()
+		if e != nil || strings.TrimSpace(string(unit)) != "loaded" {
+			return errors.New("image factory needs the supported ssh.service")
+		}
 	}
 	stage = 9
-	if _, err = persistentPublicDNS(ctx); err != nil {
+	if _, err = cfg.Profile.prepareDNS(func() (dnsPreparation, error) { return persistentPublicDNS(ctx) }); err != nil {
 		return err
 	}
 	stage = 10
 	// #nosec G302 -- The public root-owned helper must be executable by the dedicated non-root runner.
-	destination, err := os.OpenFile(preparedHelper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
+	destination, err := os.OpenFile(PreparedHelper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
 	if err != nil {
 		return errors.New("prepared helper already exists or cannot be installed")
 	}
@@ -158,15 +171,10 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		return err
 	}
 	stage = 11
-	if err = fixedImageFile("/etc/systemd/system/bivouac-ssh-hostkeys.service", []byte(sshHostKeyUnit), 0644); err != nil {
+	if err = installImageUnits(ctx, cfg.Profile, command.Native{}, fixedImageFile); err != nil {
 		return err
 	}
-	if err = fixedImageFile("/etc/systemd/system/ssh.service.d/bivouac-hostkeys.conf", []byte(sshHostKeyDependency), 0644); err != nil {
-		return err
-	}
-	if exec.CommandContext(ctx, "/usr/bin/systemctl", "daemon-reload").Run() != nil {
-		return errors.New("image factory unit reload failed")
-	}
+
 	// Stop seed persistence before deleting the factory seed; shutdown must not
 	// write it back. The normal service runs again on each subsequent cold boot.
 	stage = 12
@@ -174,7 +182,7 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		return errors.New("image factory random-seed shutdown failed")
 	}
 	stage = 13
-	for _, path := range []string{"/var/lib/systemd/random-seed", "/etc/ssh/ssh_host_rsa_key", "/etc/ssh/ssh_host_rsa_key.pub", "/etc/ssh/ssh_host_ecdsa_key", "/etc/ssh/ssh_host_ecdsa_key.pub", "/etc/ssh/ssh_host_ed25519_key", "/etc/ssh/ssh_host_ed25519_key.pub"} {
+	for _, path := range imageIdentityFiles(cfg.Profile) {
 		if _, e := os.Lstat(path); errors.Is(e, os.ErrNotExist) {
 			continue
 		}
@@ -226,7 +234,7 @@ func prepareLinuxImage(ctx context.Context, self string, input io.Reader, out io
 		return err
 	}
 	stage = 17
-	report := PreparedLinuxImage{HelperSHA256: request.HelperSHA256, RunnerUnconfigured: true, DNSPrepared: true, MachineIDCleared: true, SSHHostKeysRemoved: true}
+	report := PreparedLinuxImage{Profile: cfg.Profile, DNSDHCP: cfg.Profile == VZ, HelperSHA256: request.HelperSHA256, RunnerUnconfigured: true, DNSPrepared: cfg.Profile == Crosvm, MachineIDCleared: true, SSHHostKeysRemoved: cfg.Profile.sshSanitation()}
 	b, err := json.Marshal(report)
 	if err != nil {
 		return err
@@ -254,4 +262,31 @@ func linuxBootReport(ctx context.Context, out io.Writer) error {
 		}
 	}
 	return json.NewEncoder(out).Encode(report)
+}
+
+func installImageUnits(ctx context.Context, profile ExecutionProfile, commands guestCommands, write func(string, []byte, os.FileMode) error) error {
+	if err := profile.Validate(); err != nil {
+		return err
+	}
+	if !profile.sshSanitation() {
+		return nil
+	}
+	if err := write("/etc/systemd/system/bivouac-ssh-hostkeys.service", []byte(sshHostKeyUnit), 0644); err != nil {
+		return err
+	}
+	if err := write("/etc/systemd/system/ssh.service.d/bivouac-hostkeys.conf", []byte(sshHostKeyDependency), 0644); err != nil {
+		return err
+	}
+	if _, err := commands.Output(ctx, "/usr/bin/systemctl", []string{"daemon-reload"}); err != nil {
+		return errors.New("image factory unit reload failed")
+	}
+	return nil
+}
+
+func imageIdentityFiles(profile ExecutionProfile) []string {
+	files := []string{"/var/lib/systemd/random-seed"}
+	if profile.sshSanitation() {
+		files = append(files, "/etc/ssh/ssh_host_rsa_key", "/etc/ssh/ssh_host_rsa_key.pub", "/etc/ssh/ssh_host_ecdsa_key", "/etc/ssh/ssh_host_ecdsa_key.pub", "/etc/ssh/ssh_host_ed25519_key", "/etc/ssh/ssh_host_ed25519_key.pub")
+	}
+	return files
 }
