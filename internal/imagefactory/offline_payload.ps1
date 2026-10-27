@@ -75,11 +75,13 @@ function Copy-OfflineDrivers([string]$Mount,[string]$Snapshot,$Plan) {
   Assert-OfflinePath $Snapshot $source
   # Verify the exact snapshot inventory, so missing files and unexpected links
   # cannot become an apparently successful partial installation.
-  $files=@{};$directories=@{};$queue=[Collections.Generic.Queue[string]]::new();$queue.Enqueue($source);$entries=0
-  while($queue.Count){foreach($item in @(Get-ChildItem -LiteralPath ($queue.Dequeue()) -Force)){
+  # Relative names come from the walk itself: enumeration reports long names,
+  # so slicing FullName by an 8.3-spelled root's length would misname entries.
+  $files=@{};$directories=@{};$queue=[Collections.Generic.Queue[object]]::new();$queue.Enqueue(@($source,''));$entries=0
+  while($queue.Count){$row=$queue.Dequeue();foreach($item in @(Get-ChildItem -LiteralPath $row[0] -Force)){
    $entries++;if($entries -gt 16384 -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'snapshot link or bound'}
-   $relative=$item.FullName.Substring($source.Length+1)
-   if($item.PSIsContainer){$directories[$relative]=$true;$queue.Enqueue($item.FullName)}else{$files[$relative]=$item}
+   $relative=$item.Name;if($row[1]){$relative=$row[1]+'\'+$item.Name}
+   if($item.PSIsContainer){$directories[$relative]=$true;$queue.Enqueue(@($item.FullName,$relative))}else{$files[$relative]=$item}
   }}
   $expected=@($driver.files.PSObject.Properties)
   if(!$expected.Count -or $expected.Count -gt 8192 -or $files.Count -ne $expected.Count -or $directories.Count -ne @($driver.directories).Count){throw 'partial snapshot'}
