@@ -1294,8 +1294,10 @@ remove other preparation agents/accounts and credentials before capture.
    It verifies/extracts the archive, installs itself and its embedded agent unit,
    creates the non-root Docker-enabled user, prepares DHCP DNS/MTU without forced
    resolvers or a network restart, disables SSH/cloud-init provisioning, removes
-   standard authorization/history, and runs shared VZ image sanitation. Unknown
-   layouts refuse preparation; failures report only a numeric `failed_stage`.
+   standard authorization/history, and runs shared VZ image sanitation. If installed,
+   cloud-init must report `done` or `disabled` in bounded JSON before mutation;
+   degraded completion (exit 2) is accepted. Unknown layouts refuse preparation;
+   failures report only a numeric `failed_stage`.
    Inspect or replace a failed preparation image.
 4. After success, remove remaining staging/provisioning artifacts and shut down
    cleanly. Import the stopped image on the host:

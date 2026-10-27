@@ -175,7 +175,7 @@ func TestProvisionFilesystemAndFixedCommandFlow(t *testing.T) {
 	}
 }
 func TestProvisionRefusesBeforeCommands(t *testing.T) {
-	for _, kind := range []string{"digest", "archive-link", "network", "network-link", "account", "prepared", "runner", "unprotected-parent", "extra-nic", "non-virtio"} {
+	for _, kind := range []string{"digest", "archive-link", "network", "network-link", "account", "prepared", "runner", "unprotected-parent", "extra-nic", "non-virtio", "disabled-link", "disabled-writable"} {
 		t.Run(kind, func(t *testing.T) {
 			p, r, request, helper := provisionFilesystemFixture(t)
 			switch kind {
@@ -220,6 +220,20 @@ func TestProvisionRefusesBeforeCommands(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := p.root.Symlink("../../other", "sys/class/net/ens3/device/driver"); err != nil {
+					t.Fatal(err)
+				}
+			case "disabled-link":
+				if err := p.directory("etc/cloud"); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.root.Symlink("/tmp/unknown", "etc/cloud/cloud-init.disabled"); err != nil {
+					t.Fatal(err)
+				}
+			case "disabled-writable":
+				if err := p.install("etc/cloud/cloud-init.disabled", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := p.root.Chmod("etc/cloud/cloud-init.disabled", 0666); err != nil {
 					t.Fatal(err)
 				}
 			case "unprotected-parent":
@@ -333,10 +347,15 @@ func (s provisionExitStatus) Error() string { return "synthetic command exit" }
 func (s provisionExitStatus) ExitCode() int { return int(s) }
 
 func TestProvisionBulkOutputAndCloudCompletion(t *testing.T) {
-	for _, kind := range []string{"bulk-output", "recoverable-done", "recoverable-running", "fatal-done", "oversize-status"} {
+	for _, kind := range []string{"bulk-output", "recoverable-done", "disabled", "degraded-large", "recoverable-running", "fatal-done", "oversize-status"} {
 		t.Run(kind, func(t *testing.T) {
 			p, r, request, helper := provisionFilesystemFixture(t)
 			original := r.respond
+			if kind == "disabled" {
+				if err := p.install("etc/cloud/cloud-init.disabled", nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			r.respond = func(binary string, args []string, input []byte) ([]byte, error) {
 				if kind == "bulk-output" && binary == "/usr/bin/env" {
 					return bytes.Repeat([]byte("synthetic package progress\n"), 100000), nil
@@ -345,25 +364,42 @@ func TestProvisionBulkOutputAndCloudCompletion(t *testing.T) {
 					switch kind {
 					case "recoverable-done":
 						return []byte(`{"status":"done"}`), provisionExitStatus(2)
+					case "disabled":
+						return []byte(`{"status":"disabled"}`), nil
+					case "degraded-large":
+						return []byte(`{"status":"done","recoverable_errors":["` + strings.Repeat("x", 32000) + `"]}`), provisionExitStatus(2)
 					case "recoverable-running":
 						return []byte(`{"status":"running"}`), provisionExitStatus(2)
 					case "fatal-done":
 						return []byte(`{"status":"done"}`), provisionExitStatus(1)
 					case "oversize-status":
-						return bytes.Repeat([]byte(" "), 4097), nil
+						return bytes.Repeat([]byte(" "), provisionCloudStatusLimit+1), nil
 					}
 				}
 				return original(binary, args, input)
 			}
 			_, err := p.provision(context.Background(), request, helper)
-			valid := kind == "bulk-output" || kind == "recoverable-done"
+			valid := kind == "bulk-output" || kind == "recoverable-done" || kind == "disabled" || kind == "degraded-large"
 			if (err == nil) != valid {
 				t.Fatal("bulk/status result differs", err)
 			}
 			if !valid {
+				for _, call := range r.calls {
+					if call[0] != "/usr/bin/cloud-init" || call[1] != "status" {
+						t.Fatal("cloud-init refusal followed image mutation", call)
+					}
+				}
+				for _, name := range []string{"opt/actions-runner", "usr/local/bin/bivouac", "etc/cloud/cloud-init.disabled"} {
+					if _, err := p.root.Lstat(name); !errors.Is(err, fs.ErrNotExist) {
+						t.Fatal("cloud-init refusal changed filesystem", name, err)
+					}
+				}
+				if data, err := p.root.ReadFile("root/.ssh/authorized_keys"); err != nil || len(data) == 0 {
+					t.Fatal("cloud-init refusal removed preparation authorization", err)
+				}
 				var failure *provisionFailure
-				if !errors.As(err, &failure) || failure.Stage != 13 {
-					t.Fatal("unclassified sanitation failure", err)
+				if !errors.As(err, &failure) || failure.Stage != 6 {
+					t.Fatal("unclassified preflight failure", err)
 				}
 			}
 		})
@@ -376,7 +412,11 @@ func TestProvisionReportsOnlyNumericFailureStage(t *testing.T) {
 		t.Fatal("unbounded or missing failure receipt", err)
 	}
 	p, r, request, helper := provisionFilesystemFixture(t)
-	r.respond = func(string, []string, []byte) ([]byte, error) {
+	original := r.respond
+	r.respond = func(binary string, args []string, input []byte) ([]byte, error) {
+		if binary == "/usr/bin/cloud-init" {
+			return original(binary, args, input)
+		}
 		return nil, errors.New("synthetic-private-command-output")
 	}
 	_, err = p.provision(context.Background(), request, helper)

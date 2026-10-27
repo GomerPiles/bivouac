@@ -142,7 +142,7 @@ type provisionOutput struct {
 
 func (b *provisionOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	remaining := 4096 - len(b.data)
+	remaining := provisionCloudStatusLimit - len(b.data)
 	if len(p) > remaining {
 		b.overflow = true
 		p = p[:remaining]
@@ -297,6 +297,16 @@ func (p provisioner) provision(ctx context.Context, request ProvisionRequest, he
 		return empty, err
 	}
 	if _, err := p.accounts(); err != nil {
+		return empty, err
+	}
+	if err := p.cloudDisabledMarker(false); err != nil {
+		return empty, err
+	}
+	if _, err := p.root.Lstat("usr/bin/cloud-init"); err == nil {
+		if err := p.cloudStatus(ctx); err != nil {
+			return empty, err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return empty, err
 	}
 	stage = 7
@@ -667,13 +677,10 @@ func (p provisioner) sanitize(ctx context.Context, accounts map[string]provision
 		}
 	}
 	if _, err := p.root.Lstat("usr/bin/cloud-init"); err == nil {
-		if err := p.cloudStatus(ctx); err != nil {
-			return err
-		}
 		if _, err := p.run(ctx, "/usr/bin/cloud-init", []string{"clean", "--logs", "--seed"}, nil); err != nil {
 			return err
 		}
-		if err := p.install("etc/cloud/cloud-init.disabled", nil, 0600); err != nil {
+		if err := p.cloudDisabledMarker(true); err != nil {
 			return err
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -701,4 +708,30 @@ func (p provisioner) removePreparationFile(name string) error {
 		return errors.New("unknown preparation artifact")
 	}
 	return p.root.Remove(name)
+}
+
+// An already-disabled fresh image is supported. Never overwrite or follow an
+// unknown disable marker; validate it in preflight and again after cleanup.
+func (p provisioner) cloudDisabledMarker(create bool) error {
+	const name = "etc/cloud/cloud-init.disabled"
+	for _, prefix := range provisionParents("etc/cloud") {
+		parent, err := p.root.Lstat(prefix)
+		if errors.Is(err, fs.ErrNotExist) {
+			break
+		}
+		if err != nil || !parent.IsDir() || !p.protected(parent) {
+			return errors.New("unprotected cloud-init disable directory")
+		}
+	}
+	info, err := p.root.Lstat(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		if create {
+			return p.install(name, nil, 0600)
+		}
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || !p.protected(info) {
+		return errors.New("unprotected cloud-init disable marker")
+	}
+	return nil
 }

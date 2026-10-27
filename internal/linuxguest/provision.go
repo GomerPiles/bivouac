@@ -186,13 +186,15 @@ func provisionAccounts(data []byte) (map[string]provisionAccount, error) {
 	return result, nil
 }
 
-// cloud-init exit 2 means recoverable errors. It is accepted only after the
-// bounded machine-readable final state proves completion, never while running.
+const provisionCloudStatusLimit = 64 << 10
+
+// cloud-init exit 2 means recoverable errors. Only a completed or disabled
+// machine-readable final state is acceptable during the read-only preflight.
 func validateProvisionCloudStatus(data []byte, exit int) error {
 	var status struct {
 		Status string `json:"status"`
 	}
-	if len(data) > 4096 || json.Unmarshal(data, &status) != nil || status.Status != "done" || exit != 0 && exit != 2 {
+	if len(data) > provisionCloudStatusLimit || json.Unmarshal(data, &status) != nil || status.Status != "done" && status.Status != "disabled" || exit != 0 && exit != 2 {
 		return errors.New("cloud-init completion unconfirmed")
 	}
 	return nil

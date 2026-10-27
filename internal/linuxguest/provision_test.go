@@ -163,14 +163,16 @@ func TestProvisionArchivePlanningAndRefusals(t *testing.T) {
 	}
 }
 
-func TestProvisionCloudCompletionRequiresDoneAndRecoverableExit(t *testing.T) {
+func TestProvisionCloudCompletionRequiresTerminalStateAndRecoverableExit(t *testing.T) {
 	for _, tc := range []struct {
 		data  string
 		exit  int
 		valid bool
 	}{
-		{`{"status":"done"}`, 0, true}, {`{"status":"done","extended_status":"degraded done"}`, 2, true},
-		{`{"status":"running"}`, 2, false}, {`{"status":"error"}`, 2, false}, {`{"status":"done"}`, 1, false}, {`{"status":"done"}`, 3, false}, {`{"status":"done"} {}`, 0, false}, {strings.Repeat(" ", 4097), 0, false},
+		{`{"status":"done"}`, 0, true}, {`{"status":"disabled"}`, 0, true}, {`{"status":"disabled"}`, 2, true}, {`{"status":"disabled"}`, 1, false}, {`{"status":"done","extended_status":"degraded done"}`, 2, true},
+		{`{"status":"done","recoverable_errors":["` + strings.Repeat("x", 32000) + `"]}`, 2, true},
+		{`{"status":"disabled","unused":"` + strings.Repeat("x", provisionCloudStatusLimit) + `"}`, 0, false},
+		{`{"status":"running"}`, 2, false}, {`{"status":"error"}`, 2, false}, {`{"status":"done"}`, 1, false}, {`{"status":"done"}`, 3, false}, {`{"status":"done"} {}`, 0, false}, {strings.Repeat(" ", provisionCloudStatusLimit+1), 0, false},
 	} {
 		if err := validateProvisionCloudStatus([]byte(tc.data), tc.exit); (err == nil) != tc.valid {
 			t.Fatal("cloud-init final state/exit contract", tc.exit, err)
