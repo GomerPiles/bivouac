@@ -166,8 +166,8 @@ func runHostProcess(ctx context.Context, argv, env []string, input []byte, outpu
 		if e != nil || time.Now().After(deadline) {
 			_ = outR.Close()
 			_ = inW.Close()
-			<-readDone
-			<-writeDone
+			<-readDone  //nolint:errcheck // Only completion matters; absence is the failure.
+			<-writeDone //nolint:errcheck // Only completion matters; absence is the failure.
 			return 0, errors.New("image host worker absence unconfirmed")
 		}
 		if accounting.Active == 0 {
