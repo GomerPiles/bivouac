@@ -1053,12 +1053,11 @@ absence is still confirmed by name before its storage and network are removed.
 
 The guest's RTC holds host local time and the image reads it in its own time
 zone; the creation document has no time-sync channel. The image factory keeps
-the template's time zone and RTC handling, so the provider's `WaitReady` sets the
+the install image's time zone and RTC handling, so the provider's `WaitReady` sets the
 guest clock from the host's UTC time, sent on stdin to a fixed command, and
 refuses a guest still more than 5 s off. GitHub rejects a runner token from a
-skewed clock. The clock is set through local time, so in the guest's
-fall-back hour it can land an hour off; the check then refuses the guest
-rather than accept it. Likewise, the Windows runner launcher gives the runner
+skewed clock. The guest command sets UTC directly (`clock` below), so a
+daylight-saving transition cannot shift it. Likewise, the Windows runner launcher gives the runner
 a process-scope `RemoteSigned` execution
 policy when neither the CurrentUser nor the LocalMachine scope sets one that
 allows local scripts and none is inherited, because the runner dot-sources a
@@ -1128,47 +1127,221 @@ configuration or requests a reboot. Hyper-V's compute and network services
 must already be present.
 
 Prepared images are built once by the image factory (`internal/imagefactory`,
-`bivouac image`) from a generalized App Sandbox template and published as a
+`bivouac image`) from pinned Windows install media and published as a
 single standalone VHDX. At runtime they are pinned by file identity, protected
 ACL and deny-write handles, not hashed per job.
 
-- **Template safety:** the source template is immutable; the factory only reads
-  it. It copies the template into its own protected
-  workspace, hashing as it copies, and builds on a differencing child of the
-  copy. Mounts, VM access grants and the boot touch only files the build
-  created.
-- **Inspection gate:** before anything boots, an offline inspection of the
-  child must show a template generalized to OOBE with no answer-file pointer,
-  no configured runner and no bivouac job state. Its facts are public and
-  recorded; answer-file values and file contents are never read into them.
+- **Media and base disk:** `iso` and required `iso_sha256` replace template
+  paths and owner records. The source is pinned by a deny-write/delete handle
+  while copying and hashing into the protected workspace. Only that copy is
+  mounted, read-only without a drive letter. A bounded pure-Go UDF reader
+  inventories exactly one install.wim, unencrypted install.esd, or complete
+  install*.swm set; metadata comes from the uncompressed UTF-16LE WIM XML
+  resource, never localized DISM text. DTDs, malformed XML, unknown flags,
+  excessive sizes and incomplete/mismatched split sets refuse. Selection uses
+  EditionID `Professional` by default (`edition_id`) and x64 Client; an
+  explicit `image_index` (1-128) overrides the edition. XML INDEX must equal its 1-based position so selection
+  matches DISM. Display names are sanitized, bounded information.
+  Pinned file inputs (ISO, runner ZIP, render probe and factory executable)
+  need not be administrator-protected: copyPinned hashes exactly the bytes it
+  writes into the protected workspace in one pass, rejects a mismatch, and
+  only then permits use. Input handles deny write/delete while open. This
+  deliberately replaces source-ACL checks for all pinned file imports;
+  driver-directory validation remains separate.
+  Boot-manager generation comes from the applied image. A present, valid
+  embedded UEFI CA 2023 signature on EFI_EX\bootmgfw_EX.efi selects
+  `uefi_ca_2023`; absence of that file selects the embedded PCA 2011 normal
+  loader (`pca_2011`). A present EX file with any other/invalid signer refuses.
+  Embedded PKCS#7 parsing identifies the primary signer and counts signatures;
+  WinVerifyTrust validates that primary file signature with no UI, revocation
+  or network retrieval. Catalog answers are never used.
+  The owned ESP's BCD hive is marked as the guest's system store:
+  Description\KeyName is REG_SZ BCD00000000 and Description\System is DWORD 1,
+  with no FirmwareModified value. Windows specialize's BCD provider rejects
+  the non-system store initially produced by /createstore.
+- **Disk layout:** the factory creates a dynamic VHDX (`disk_gb`, default
+  127 GiB, bounded 64-256 GiB) with 512-byte sectors. Before GPT initialization it
+  cross-checks the mounted image's physical device, Storage disk path and
+  reverse device-to-owned-VHDX association. Windows generates the disk and
+  partition GUIDs once; later child inspection/staging selects the recorded
+  Windows partition GUID. Layout: 200 MiB FAT32 ESP, 16 MiB MSR, NTFS Windows
+  using the rest, no recovery partition. DISM applies the selected index with
+  `/CheckIntegrity` and `/SWMFile` for split media. The factory does not register
+  WinRE at apply time and creates no recovery partition; Windows setup may
+  subsequently register WinRE on the Windows volume. The manifest records
+  this apply-time policy, not the installed guest's final WinRE state.
+  The factory copies the applied image's normal EFI boot tree, fonts and
+  resources to the owned ESP. For the 2023 generation, the EX boot manager
+  replaces both bootmgfw.efi and bootx64.efi; each bootmgfw.efi.mui is mapped
+  from EFI_EX\<language>\bootmgfw_EX.efi.mui. Other EFI files and normal Fonts
+  and Resources keep their existing mapping. No further EX remapping is
+  inferred. It installs the fallback
+  loader and promotes the pending boot revocation policy to boot.stl, creating
+  an empty EFI\Microsoft\Recovery directory without registering WinRE.
+  Traversal refuses links and bounds depth, entries and bytes. Boot files
+  never come from the host. BCDBoot is not used: on the tested Windows host it
+  copied files but collided with the host's BCD00000000 hive when creating
+  the target store.
+  BCDEdit `/createstore` explicitly names a new owned ESP BCD file; every
+  subsequent command uses `/store` naming that file. BCD-Template is a merge
+  input, not a finished store, and is neither required nor copied.
+  Only bootmgr and one Windows loader are created. The loader GUID is recorded
+  before boot preparation. All required settings are direct: image default
+  locale, standard boot menu, nx OptIn, isolatedcontext Yes,
+  allowedinmemorysettings 0x15000075 and recovery disabled. No inheritance
+  objects or inherit element are created; no partially reconstructed template
+  settings remain. Bootmgr selects the loader by default/displayorder with
+  timeout zero. The minimal objects and direct settings follow Microsoft's
+  [BCDEdit commands](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdedit-command-line-options)
+  and [UEFI settings](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcd-system-store-settings-for-uefi).
+  No resume object is created: disposable CI guests always cold boot and never
+  hibernate. Hibernation and fast startup are not yet disabled inside the
+  guest (an open item in status.md). No memdiag object is created.
+  BCDEdit sets no device elements: on a host-attached VHD, its partition
+  references encode a nested host VHD path that cannot resolve in the guest.
+  Offreg writes the three device elements as exact 88-byte plain GPT
+  partition devices using the recorded partition/disk GUIDs in Windows byte
+  order. That same offreg pass validates the Description whitelist, sets
+  System=1 and deletes FirmwareModified. It requires absent element keys,
+  saves a new sibling hive, closes
+  the source and atomically replaces it on the owned ESP. Only after replacement
+  are that hive's BCD.LOG* transaction logs removed; other hives keep their logs.
+  No temporary
+  drive letters, firmware objects or system-store commands are used.
+  Newly formatted ESP and Windows volumes must have no drive letter.
+  The final table must be exactly three partitions in offset order with the
+  recorded GUIDs, ESP/MSR/basic-data types and expected sizes. If GPT
+  initialization creates its own MSR, the factory removes that one partition
+  before building the layout and records it; any other initial or extra
+  partition refuses. A refused table is reported as numbers only (type codes,
+  MiB offsets and sizes, GUID matches). The fallback EFI loader, Microsoft loader and BCD store
+  must exist. Both ESP loaders and the applied source boot manager must have
+  valid embedded signatures from the selected generation's issuer. The ESP
+  loaders must also match the selected source byte for byte, and mixed issuers
+  refuse. The manifest records generation, numeric issuer codes and embedded
+  signature counts for fallback, Microsoft and selected source loaders.
+  Read-only offreg verification requires exactly those two objects and checks
+  their types, descriptions, every set element, single-loader displayorder,
+  zero timeout, locales and byte-for-byte equality of all three complete plain
+  GPT device elements, including their type, length and reserved zero bytes.
+  Description must contain exactly KeyName (the NUL-terminated UTF-16LE
+  BCD00000000) and System (four-byte DWORD 1), with exact types and bytes;
+  unexpected Description values or subkeys refuse.
+  Nested VHD devices refuse even if they contain the recorded GUIDs.
+  Class-4 template elements and every unknown element
+  refuse, including inherit/resume references. Failures expose numeric codes,
+  never hive data. The manifest records the scratch-store method, loader GUID, verified flag, fixed
+  issuer codes and BCDEdit/DISM versions.
+  The base and ISO are detached before the differencing child is created.
+  Disk/partition GUIDs remain shared by clones; they are not randomized on
+  host attachment. TPM-bound BitLocker protectors are not supported.
+  Publication refuses any reported C: conversion or protection status other
+  than 0 (fully decrypted/protection off) and 0xFFFFFFFF (the diagnostic's
+  "unavailable" value). Missing/unreadable diagnostics remain best effort and
+  do not block publication.
+- **Failure retention:** `image build --retain-failed` (command line only)
+  keeps a failed build's workspace with the guest absent and disks detached
+  for offline inspection. The retained workspace still holds the setup ISO
+  and staged answer files with the build-time guest password, so it stays
+  administrator-only and is removed with `image cleanup --build <id>`.
+- **Ownership and cleanup:** ISO mount, base/child attachment and access paths
+  have durable intents before creation. Partitions share the
+  owned base attachment's lifetime; their GUIDs are recorded in the layout.
+  Fixed host helper processes and their DISM/BCDEdit descendants are atomically
+  assigned to a private kill-on-close job named in the Global namespace from
+  the durable workspace identity. Cancellation joins those processes only;
+  WMI providers and storage-service operations run outside that job and may
+  still be in flight. Cleanup from another session refuses a surviving named
+  worker. It proves guest absence, removes only recorded access paths on the
+  owned attachments (including RAW/partitionless bases), confirms detach, then
+  removes workspace files. Storage uncertainty retains the workspace.
+  No provider service journal or CI mode is touched. Applied-image TOTALBYTES,
+  ISO size and child/flatten headroom replace the template-copy space estimate.
+- **Inspection gate:** before boot, the child must be generalized to OOBE,
+  with no answer-file pointer, an absent/empty embedded answer directory,
+  no runner, agent installation, either guest task or bivouac job state. The reference
+  install image's pristine hives satisfy the existing setup-state gates.
+  Panther is optional before Setup: an absent Panther/Unattend is clean;
+  an existing Panther must be an ordinary directory.
+  `image inspect` instead hashes and inventories media without mounts, disk
+  creation or HCS. Facts are public; answer-file values are never reported.
 - **Offline staging:** the factory installs its own executable at
-  `guestagent.WindowsPath`, recording SHA-256 and `guestagent.Version` in the
-  manifest. The installation grants SYSTEM, Administrators and TrustedInstaller
+  `guestagent.WindowsPath`, recording its SHA-256 and the agent's Windows
+  contract (`windows_contract`) in the manifest; the wire protocol version is
+  checked per connection, not recorded. The installation grants SYSTEM, Administrators and TrustedInstaller
   full control and Users read/execute, without inherited user write access.
+  Fresh install images need not contain Panther, Setup\Scripts or
+  System32\HostDriverStore\FileRepository. Staging creates those parents and
+  Panther\Unattend one ordinary component at a time, refusing links/files.
+  New directories inherit the guest parent's DACL and take its owner;
+  existing ordinary parents retain their security. Unattend keeps its
+  protected SYSTEM/Administrators DACL; ProgramData\Bivouac\Image retains
+  its existing administrator-only policy. These directories belong to the
+  owned child disk and need no separate host cleanup record.
+  Only an absent/empty answer directory may be staged, with CreateNew files;
+  an existing agent installation refuses. Setup\Scripts is created empty;
+  media scripts/runner remain on the setup ISO until FirstLogon, which
+  registers the logon task.
+  Before first boot, child staging sets DWORD PreventDeviceEncryption=1 under
+  SYSTEM\ControlSet<current>\Control\BitLocker, using Select\Current offline.
+  An existing value other than DWORD 1 refuses. Offreg saves a fresh sibling
+  hive, preserves the source owner/DACL and atomically replaces SYSTEM;
+  already-1 is accepted without rewriting. Only a successful replacement removes
+  the replaced SYSTEM hive's LOG1/LOG2; an unchanged hive retains its logs. This policy belongs to the child
+  after inspection, leaving the base pristine, and is recorded in the manifest.
   A bounded, protected snapshot of each configured GPU driver tree is copied
   into `Windows\System32\HostDriverStore\FileRepository\<directory name>`.
   Exact file/directory inventories and SHA-256 checks refuse links, incomplete
   or changed snapshots. A temporary sibling is renamed only after verification;
   ownership and inherited ACLs come from the guest repository, never the host.
-  Existing destination trees are refused. The template remains read-only.
+  Existing destination trees are refused. Install media remains read-only.
 - **Build:** one elevated foreground process boots the child with GPU-PV,
   no NIC or Plan9 shares, and only `guestagent.ServiceID` with the base
   SYSTEM/Administrators descriptor. Validation, runner check and sanitation
   use bounded agent commands with fixed PowerShell argument arrays and framed
-  stdin, exclusively during build/lab work. Guest output never enters errors.
+  stdin, exclusively during build/lab work. Their bootstrap discards incidental
+  pipeline and host streams and suppresses progress; deliberate Console writes
+  use UTF-8 without a BOM. Guest script exit codes become the PowerShell process
+  exit code; terminating errors remain step 18. Without an explicit exit, the
+  last native exit code is propagated, or zero if none was set.
+  Validation decodes the entire bounded stdout as one
+  JSON value with the expected types, without extracting or repairing bytes.
+  Decode errors contain only numeric shape facts, never guest text.
+  The render probe has an explicit 180-second wait during first-boot factory
+  validation (`require_setup`), and 50 seconds otherwise; its task execution
+  limit exceeds that wait by 30 seconds. Probe failures emit at most 2 KiB of
+  fixed numeric/boolean facts: task state/result, console-session render count
+  and CPU time, present display/GPU-PV state, Explorer age and elapsed/budget
+  seconds. Observation flags distinguish unavailable facts from zero. Failed
+  validation errors append only a strictly decoded, complete schema; malformed,
+  oversized or unexpected output adds no guest bytes to errors.
+  After a preparation failure, cleanup may request shutdown of its proven
+  running guest through fixed agent argv (request capped at 10 seconds).
+  Memory-reserve cancellation skips grace and terminates immediately.
+  The two-minute cleanup budget reserves the last minute after termination/
+  absence, with the final 30 seconds reserved for detach after diagnostics.
+  Grace ends 30 seconds before the termination/absence deadline; its usual
+  maximum is 30 seconds. Refusal, timeout or an exhausted grace allocation
+  goes straight to termination and cannot turn the build into success.
   The build checks hardware D3D11, presentation and pixel readback, requires
   graceful shutdown, flattens the child and writes the manifest last.
 - **Setup assets:** a pinned render probe is required; `RUNNER.ZIP` is the
-  only optional setup asset (required when the template has no runner).
+  only setup asset and is required for every install-media build.
   No legacy agent, helper, display-driver or OpenSSH installer is accepted.
   Bivouac build scripts, helpers, markers and temporary probes live under
   protected `C:\ProgramData\Bivouac\Image`.
   The pinned prebuilt render probe still writes its report to the hard-coded
   `C:\ProgramData\BivouacHcsSpike\render.json`. Validation creates that temporary
-  directory with the same protected ACL as `Image\Probe`, refusing an existing
-  directory. It moves the ordinary, link-free report (at most 4 KiB) into
+  directory with CreateDirectoryW and security attributes containing owner
+  Administrators and the same protected DACL as `Image\Probe`. The native call
+  fails if the path exists, including a creation race; it never adopts that
+  directory. Before use, validation checks the owner, exact protected DACL,
+  ordinary directory type and an empty listing; refusal remains step 32.
+  It moves the ordinary, link-free report (at most 4 KiB) into
   `Image\Probe\render.json` and removes the spike directory. Render-step cleanup
-  runs on failure too; sanitation refuses a leftover spike directory. This path
+  runs on failure too; the primary failure step survives cleanup errors, and
+  step 34 reports cleanup failure only after a successful body. Sanitation
+  refuses a leftover spike directory. This path
   bridge goes away when the Go render probe replaces the prebuilt executable.
 - **Specialize:** before FirstLogon, stop/delete the legacy agent service,
   remove every legacy VDD device (including phantom nodes) and its driver
@@ -1257,10 +1430,18 @@ ACL and deny-write handles, not hashed per job.
   `C:\ProgramData\Bivouac\Agent` storage with delete-shared files, so sanitation
   can remove build logs without interrupting the command transport. No SSH
   configuration or host-key generation is part of sanitation or runtime boot.
-- **Inspection/manifest:** template inspection refuses an existing agent
-  installation, either task or Guest directory. Public agent presence/hash/task
-  facts replace legacy service and package facts; template VDD presence remains
-  informational. The manifest records source/asset/output/agent hashes, agent
+- **Inspection/manifest:** offline inspection refuses an existing agent
+  installation, either guest task or Guest directory. Public agent presence/hash/task
+  facts replace legacy service and package facts; legacy VDD presence remains
+  informational. The manifest records media/asset/output/agent hashes, selected image metadata,
+  host BCDEdit/DISM versions, selected boot generation, numeric embedded issuer
+  codes and signature counts, verified BCD,
+  apply-time WinRE policy, disk/partition GUIDs and
+  effective guest Secure Boot/TPM facts. Publication requires Secure Boot on
+  and TPM present (readiness is recorded). It records offline device-encryption
+  prevention and numeric C: BitLocker conversion/protection diagnostics;
+  reported statuses other than 0 and the unavailable value refuse
+  publication, while missing/unreadable statuses remain diagnostic. It also records agent
   Windows contract, guest identity, driver INF versions, probe/validation/autologon pins
   and bounded topology observations, plus public task facts for both definitions.
   Installation self-test runs at preparation and again before sanitation;
@@ -1287,7 +1468,7 @@ ACL and deny-write handles, not hashed per job.
   video, no VDD nodes, enabled/started synthetic video, and all existing render
   gates. Every desktop lab run also requires those topology gates and all
   probe-window checks. Windows Security observations are diagnostic only.
-- The image's time zone and execution policy are the template's.
+- The image's time zone and execution policy are inherited from install media.
 - Admission does not yet compare the host GPU driver with the one the image
   was built with; rebuild the image after a host driver update.
 
@@ -1707,7 +1888,7 @@ Linux installs clone-only root trust and uses its system
 bundle. Runner children inherit the Actions preload, standard proxy settings and
 curl/Git/Node trust paths without workflow edits. The release bridge lives in the
 existing guest listener process. Confirmed VM deletion revokes the grant and
-closes its SSH transport; manager/service loss closes transports and leaves
+closes its transport (SSH for Crosvm, the agent relay for HCS); manager/service loss closes transports and leaves
 normal upstream fallback in the guest. Off shuts down the cache with the manager,
 while its bounded opaque store persists across jobs/restarts. Startup stays opt-in.
 Docker/other containers with independent environments/trust stores need explicit
