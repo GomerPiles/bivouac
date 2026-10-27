@@ -277,8 +277,11 @@ HvSocket communication does not. An unregistered guest-to-host HvSocket
 callback was refused with Winsock 10061 even though the ordinary host could
 bind temporary wildcard/child listeners. No global service registration was
 attempted, and the reason for that refusal is unverified.
-The Windows host build, full non-live test suite, vet and repository-wide lint
-pass. Race checking was unavailable with the host's cgo-disabled toolchain.
+The Sandbox, discovery, HCS and VM-host tests, repository-wide vet and lint
+pass. The full non-live suite has two Crosvm native-job fixture failures:
+their job names already exist, so creation refuses adoption. Those objects
+were not stopped or cleaned up; their origin is unverified. Race checking was
+unavailable with the host's cgo-disabled toolchain.
 
 Open: deployment of shared-service discovery and its LocalSystem/reboot
 lifecycle, other-primary-account access
