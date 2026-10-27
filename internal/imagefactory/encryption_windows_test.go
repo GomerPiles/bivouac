@@ -64,7 +64,7 @@ foreach($mode in 0..7){
  if($mode -in @(0,1)){
   if([EncryptionFixture]::Read($path,2) -ne 1 -or [EncryptionFixture]::Read($path,1) -ne 0){throw 'wrong control set policy'}
   $a=Get-Acl -LiteralPath $path
-  if($a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $sddl -or !$a.GetOwner([Security.Principal.SecurityIdentifier]).Equals($owner)){throw 'hive security changed'}
+  if($a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $sddl -or !$a.GetOwner([Security.Principal.SecurityIdentifier]).Equals($owner)){throw ('hive security changed case={0} before={1} {2} after={3} {4}' -f $mode,$owner,$sddl,$a.GetOwner([Security.Principal.SecurityIdentifier]),$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access))}
   if(Test-Path -LiteralPath ($path+'.prevent-encryption')){throw 'saved sibling remains'}
   foreach($suffix in @('.LOG1','.LOG2')){
    if($mode -eq 0 -and (Test-Path -LiteralPath ($path+$suffix))){throw 'replaced SYSTEM log remains'}
