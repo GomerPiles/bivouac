@@ -148,9 +148,16 @@ func runTestPS(t *testing.T, script string, stdin []byte) string {
 	cmd := exec.Command(filepath.Join(system, "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
 	cmd.Env = hostPowerShellEnvironment(system)
 	cmd.Stdin = strings.NewReader(string(stdin))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	b, err := cmd.Output()
 	if err != nil {
-		t.Fatal("isolated PowerShell check failed")
+		// Fixture scripts handle only test data; their error text says which check failed.
+		detail := stderr.String()
+		if len(detail) > 2000 {
+			detail = detail[:2000]
+		}
+		t.Fatalf("isolated PowerShell check failed: %v\n%s", err, detail)
 	}
 	return string(b)
 }
