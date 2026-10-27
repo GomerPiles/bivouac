@@ -634,6 +634,10 @@ path fits `sun_path` whatever the name.
   receives `vz.guest_os` (`darwin` by default, or `linux`) and `vz.helper` for
   Linux. Linux requires explicit CPU/memory and prohibits Darwin display/share/
   slot options and companion engines; its baseline still must be supplied.
+  Guest-root provisioning uses a Go recipe registry, currently Ubuntu 24.04
+  ARM64/VZ only, reused unchanged by the future baseline builder. A later omitted
+  Linux baseline will resolve once during configuration preparation to a
+  bivouac-built recipe image; admission and instance specs consume that name.
 - Clone: `clonefile` of disk and NVRAM under a hidden staging name, a
   manifest with a fresh locally administered MAC and the configured CPU and
   memory (at least the manifest's minimums), then a rename into place

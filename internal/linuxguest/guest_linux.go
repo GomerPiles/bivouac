@@ -138,9 +138,12 @@ func listener(root string, cfg GuestConfig) (guestProcess, bool, error) {
 }
 
 // RunLinuxGuest is a private guest adapter, never a host daemon or credential
-// client. It installs no project tools. The immutable baseline supplies an
-// unconfigured official runner, Git, Docker and generic virtio/CDI runtime.
+// client. Explicit guest-root provisioning builds a baseline; ordinary runner
+// operations consume its unconfigured runner, Git, Docker and virtio/CDI runtime.
 func RunLinuxGuest(ctx context.Context, mode string, input io.Reader, out io.Writer) error {
+	if mode == "provision" {
+		return provisionLinux(ctx, input, out)
+	}
 	self, err := os.Executable()
 	if err != nil || (filepath.Base(self) != "bivouac-guest" && self != RuntimeHelper) {
 		return errors.New("linux adapter must run from its disposable guest installation")

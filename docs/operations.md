@@ -477,7 +477,7 @@ stopped Tart-format VM, which clones it when it is on the same volume and
 writes the manifest:
 
 ```bash
-bivouac vz import --runner-dir /Users/admin/actions-runner --sudo ~/.tart/vms/<vm> <baseline>
+bivouac vz import --runner-dir /Users/admin/actions-runner --sudo <stopped-image-directory> <baseline>
 ```
 
 Pass `--sudo` only if the guest user has passwordless sudo (the release
@@ -488,10 +488,9 @@ import again after installing a new agent. A Linux engine baseline needs no
 Bivouac does not see VMs in other tools' directories, so `foreign_slots`
 must reserve Apple's guest slots for any other manager.
 
-**macOS baseline.** Bivouac reaches the guest through its own agent, not
-Tart's (which exits on hosts that are not Tart). Until bivouac can prepare
-baselines itself, prepare one with Tart before importing it:
-boot it, then install the darwin/arm64 `bivouac` binary as
+**macOS baseline.** Prepare an operator-managed Tart-format image before
+importing it. Bivouac uses its own guest agent: boot the image, then install
+the darwin/arm64 `bivouac` binary as
 `/usr/local/bin/bivouac` (root:wheel, 0755) and
 [`dev.bivouac.guest-agent.plist`](../tools/macos/dev.bivouac.guest-agent.plist)
 in `/Library/LaunchAgents` (root:wheel, 0644). The baseline user must log in
@@ -507,8 +506,8 @@ rebuilding the host binary does not update existing baseline LaunchAgents.
 **Linux ARM64 runners on vz.** Import a stopped, prepared Tart-format Linux
 baseline with `--runner-dir /opt/actions-runner`. It must contain the matching
 non-root guest agent and a root-owned prepared helper built with the `vz-dhcp`
-profile; baseline preparation tooling follows separately. Configure the provider's
-vz section with:
+profile; use the [Go provisioning command](#preparing-a-linux-arm64-runner-baseline).
+Configure the provider's vz section with:
 
 ```toml
 guest_os = "linux"
@@ -1255,3 +1254,47 @@ Never manually erase a pair record to force cleanup: a pair without its durable
 record becomes unmanaged and is intentionally excluded from generic orphan
 cleanup. Restore ownership evidence before recovery. Stopping a live supervisor
 retires its recorded pair; it is not a transparent connection restart.
+
+## Preparing a Linux ARM64 runner baseline
+
+`vz.baseline` is required. The sole recipe supports a disposable Ubuntu 24.04
+Server ARM64 image with one virtio NIC. Use an operator-managed Tart-format image;
+remove other preparation agents/accounts and credentials before capture.
+
+1. Build the matching static helper on the host:
+
+   ```sh
+   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o linux-arm64 ./cmd/bivouac
+   ```
+
+2. Stage the helper and official ARM64 runner archive in the image, owned by root
+   and protected from other users' writes. Obtain the archive's published SHA-256;
+   never stage GitHub credentials, JIT input or personal keys.
+3. As guest root, run the fixed command with bounded JSON stdin:
+
+   ```sh
+   /tmp/linux-arm64 guest linux provision <<'JSON'
+   {"recipe":"ubuntu-24.04-arm64-vz-runner","runner_archive":"/tmp/runner.tar.gz","runner_sha256":"<published-sha256>"}
+   JSON
+   ```
+
+   It verifies/extracts the archive, installs itself and its embedded agent unit,
+   creates the non-root Docker-enabled user, prepares DHCP DNS/MTU without forced
+   resolvers or a network restart, disables SSH/cloud-init provisioning, removes
+   standard authorization/history, and runs shared VZ image sanitation. Unknown
+   layouts refuse preparation; a failed image must be inspected or replaced.
+4. After success, remove remaining staging/provisioning artifacts and shut down
+   cleanly. Import the stopped image on the host:
+
+   ```sh
+   bivouac vz import --runner-dir /opt/actions-runner <stopped-image-directory> ci-linux-arm64
+   ```
+
+   Add `--sudo` only for operator-verified passwordless guest sudo; the recipe adds
+   no sudo rules. Without it archive caching works and release trust is omitted.
+5. Run `doctor` and the isolated, gated Linux fixture above (optionally
+   `BIVOUAC_VZ_LINUX_CACHE=1`). Actual preparation, two fresh cold-clone identities,
+   DHCP DNS, Docker, isolation and cache behavior still need live validation.
+
+Package installation uses the image's Ubuntu repositories; this is not a
+reproducible OS-image builder. The default-baseline builder is a follow-up.

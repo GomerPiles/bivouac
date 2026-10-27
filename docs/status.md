@@ -142,6 +142,10 @@ not run on this implementation. Live runner jobs, rootless Linux DNS/MTU/Docker,
 crash/adoption and cold-clone sanitation remain open. Prior NAT/Softnet results
 do not validate these paths.
 
+The Go Ubuntu 24.04 ARM64/VZ recipe has portable offline checks; its Linux-only
+filesystem/command regressions await Ubuntu execution. Actual preparation and two
+cold clones remain unverified; default building and deny-list consolidation are deferred.
+
 ## Shared Linux runtime
 
 The transport-neutral `internal/linuxguest` runtime supplies explicit Crosvm
