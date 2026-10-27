@@ -49,6 +49,10 @@ public static class EncryptionFixture {
 }
 
 "@
+# The DACL's protection and ACEs, without its auto-inherited control bit:
+# SetNamedSecurityInfo sets that bit whenever it recomputes inheritance, and
+# it does not change access.
+function Get-AccessRules($acl){$s=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access);$i=$s.IndexOf('(');if($i -lt 0){$i=$s.Length};return ('protected={0} {1}' -f $acl.AreAccessRulesProtected,$s.Substring($i))}
 foreach($mode in 0..7){
  $mount=Join-Path $d.root ([string]$mode);$parent=Join-Path $mount 'Windows\System32\config';$null=New-Item -ItemType Directory -Path $parent
  $path=Join-Path $parent 'SYSTEM';[EncryptionFixture]::Seed($path,[math]::Min($mode,4))
@@ -57,14 +61,14 @@ foreach($mode in 0..7){
  if($mode -eq 6){$null=New-Item -ItemType Directory -Path ($path+'.prevent-encryption')}
  foreach($suffix in @('.LOG1','.LOG2','.LOG3','.other.LOG1')){[IO.File]::WriteAllText(($path+$suffix),'preserve')}
  if($mode -eq 7){Remove-Item -LiteralPath ($path+'.LOG2');$null=New-Item -ItemType Directory -Path ($path+'.LOG2')}
- $before=(Get-FileHash -LiteralPath $path).Hash;$acl=Get-Acl -LiteralPath $path;$sddl=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access);$owner=$acl.GetOwner([Security.Principal.SecurityIdentifier])
+ $before=(Get-FileHash -LiteralPath $path).Hash;$acl=Get-Acl -LiteralPath $path;$sddl=Get-AccessRules $acl;$owner=$acl.GetOwner([Security.Principal.SecurityIdentifier])
  $code=Set-OfflineEncryptionPolicy $mount
  $expected=0;if($mode -in @(2,3)){$expected=3};if($mode -eq 4){$expected=2};if($mode -in @(5,6)){$expected=9};if($mode -eq 7){$expected=13}
  if($code -ne $expected){throw ('case={0} code={1}' -f $mode,$code)}
  if($mode -in @(0,1)){
   if([EncryptionFixture]::Read($path,2) -ne 1 -or [EncryptionFixture]::Read($path,1) -ne 0){throw 'wrong control set policy'}
   $a=Get-Acl -LiteralPath $path
-  if($a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access) -cne $sddl -or !$a.GetOwner([Security.Principal.SecurityIdentifier]).Equals($owner)){throw ('hive security changed case={0} before={1} {2} after={3} {4}' -f $mode,$owner,$sddl,$a.GetOwner([Security.Principal.SecurityIdentifier]),$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access))}
+  if((Get-AccessRules $a) -cne $sddl -or !$a.GetOwner([Security.Principal.SecurityIdentifier]).Equals($owner)){throw ('hive security changed case={0} before={1} {2} after={3} {4}' -f $mode,$owner,$sddl,$a.GetOwner([Security.Principal.SecurityIdentifier]),(Get-AccessRules $a))}
   if(Test-Path -LiteralPath ($path+'.prevent-encryption')){throw 'saved sibling remains'}
   foreach($suffix in @('.LOG1','.LOG2')){
    if($mode -eq 0 -and (Test-Path -LiteralPath ($path+$suffix))){throw 'replaced SYSTEM log remains'}
