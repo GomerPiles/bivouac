@@ -234,10 +234,42 @@ entry, account/group membership or host policy is installed by this experiment.
 The lab broker requires the same account to approve elevation; a true standard
 account with a different administrator supplying credentials is unverified.
 
-### Smallest durable setup to implement
+### Shared-service integration
 
-The demonstrated approach needs a protected discovery helper and one trusted
-launch registration. I recommend a demand-start service for the durable form:
+Discovery now has a branch-only capability in the existing `bivouac-vmhost`
+service. No second installed service is needed. Add approved SIDs under
+`sandbox_accounts` in its administrator-protected configuration; existing
+`accounts` continues to grant HCS lifecycle operations. These are separate
+capabilities, with operation-level SID checks. Discovery-only users receive
+service start/query/read-control rights and pipe access, without service stop
+or HCS create/list/status/destroy authority.
+
+A Sandbox-only configuration has this shape:
+
+```json
+{
+  "root": "C:\\ProgramData\\Bivouac\\VMHost",
+  "sandbox_accounts": ["<approved-user-SID>"]
+}
+```
+
+It requires no HCS image, controller or limits and opens no HCS host journal.
+The service uses owner-filtered enumeration for bounded public Sandbox routing
+metadata; only the ordinary manager authenticates the guest/boot identity.
+The current installed service has not been upgraded or restarted. Fixture tests
+cover authorization and preservation of existing HCS guests; LocalSystem and
+reboot validation remain open. When sharing the service with HCS, preserve its
+existing lifecycle: stopping it destroys its owned HCS guests. A Sandbox manager
+must never stop it as an idle optimization.
+
+The original separate-service proposal below records the spike's evaluated
+footprint. The shared-service integration supersedes that deployment choice;
+it remains useful as a comparison with scheduled-task and registry alternatives.
+
+### Earlier standalone setup proposal
+
+The session experiment demonstrated a protected discovery helper and a trusted
+launch registration. The initially considered standalone footprint was:
 
 | Item | Exact scope |
 | --- | --- |
@@ -318,8 +350,8 @@ invoked explicitly; it does not mutate any compute system.
 
 ## Gates before a provider
 
-1. Implement and validate the proposed one-time broker installation and primary
-   host-account authorization. A session broker removes per-launch UAC, but
+1. Validate shared-service discovery deployment and primary host-account
+   authorization. A session broker removes per-launch UAC, but
    effective settings and safe recovery for
    ambiguous starts, launcher loss and reboot remain open.
 2. Extend the working private transport to manager adoption and real runner
@@ -332,6 +364,42 @@ invoked explicitly; it does not mutate any compute system.
 5. Resolve resource accounting, single-slot contention, artifact/cache
    transport, rebooting installers, and GUI/GPU behavior. Sandbox's documented
    configuration has no CPU-count setting or user-selected base image.
+
+## Tooling research and baseline
+
+The previous image-builder design specified `tools: ["pwsh", "git", "msvc", ...]`
+or repeated `--tool` selection, with reviewed version/SHA-256 pins, publisher
+checks where present, offline installation and per-tool validation. Its first
+wave was PowerShell 7, Git, 7-Zip, CMake, Ninja, Python, Node LTS, .NET SDK,
+LLVM and C++ Build Tools plus a Windows SDK. That was a design agreement;
+the merged HCS display/image stack does not implement this catalog. Missing
+catalog code does not establish what an existing customized image contains.
+
+An older guest image policy configured Defender scanning and Search, checked
+effective protection, and restored settings on failed verification. The current
+production image was not inspected or modified during this spike. The new
+`--baseline-probe` performs only a fresh guest inventory, bound to its CLI/boot
+identity. On the tested Sandbox it found no developer SDK/toolset and observed
+Defender already inactive; it therefore made no scanning changes. WSearch was
+stopped, with SysMain and Windows Update running. Absence on PATH is a discovery
+fact, not a general installation inventory or a functional tool test.
+
+For useful Sandbox tooling, keep one catalog shared with the image builder.
+Cache verified public payloads on the host, map them read-only, install into a
+fresh guest, and verify actual versions and a compiler/SDK build. Do not expose
+the checkout, credentials or an existing runner as a tool source. Build Tools
+needs a pinned complete offline layout, exact components/languages and package
+integrity; a bootstrapper hash alone does not pin what gets installed. Its
+per-guest install cost must be measured before claiming fast job readiness.
+Portable archives can reduce that cost for tools designed to run unpacked;
+copying an installed MSVC tree is not assumed to reproduce Visual Studio or
+MSBuild discovery. A prepared warm spare can hide setup latency, while each
+completed job must still discard its guest.
+
+The lab leaves 12 GiB free physical host memory beyond its 4-GiB guest by default
+(`--reserve-memory-mb`). The guard samples current headroom and refuses failure
+or insufficient capacity. It does not reserve memory against other providers,
+and no production resource configuration is changed.
 
 Microsoft references: [CLI](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-cli),
 [configuration](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file),

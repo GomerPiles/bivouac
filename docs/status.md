@@ -249,6 +249,22 @@ Live on Windows build 26300 with Sandbox CLI 0.8.107.0:
 - Successful lab launches were stopped by their recorded CLI ID after a fresh
   guest/boot challenge, and absence was confirmed. Cleanup failures retain
   records. No unrelated guest was stopped.
+- A read-only fresh-Sandbox baseline (guest Windows build 26100) observed
+  Defender's service and real-time protection off, Tamper Protection off,
+  Search stopped, and SysMain/Windows Update running. No guest or host policy
+  was changed. MSVC, MSBuild, Windows SDK, PowerShell 7, Git, 7-Zip, CMake, Ninja,
+  Python, Node on PATH, .NET SDK and LLVM were not found by the fixed probes;
+  the separately staged runner's Node was present. This does not inventory the
+  running production image. The lab now reserves 12 GiB free physical memory
+  beyond its 4-GiB guest by default; this is a sample-based development guard,
+  not shared-provider resource accounting.
+
+The existing VM-host service now has an opt-in `sandbox_accounts` discovery
+capability and a Sandbox-only configuration with no HCS images. Fixtures cover
+cross-capability denial, unchanged HCS ownership, sanitized metadata/errors and
+service permissions excluding stop for discovery-only accounts. The protected
+installed service, production configuration and other HCS worktree are unchanged;
+this integration and the owner-filtered enumeration require live validation.
 
 Unit tests cover wrong/stale ownership proofs, malformed/oversized inventory,
 RDP-session predicates, XML escaping/device defaults and real TLS handshakes
@@ -264,7 +280,7 @@ attempted, and the reason for that refusal is unverified.
 The Windows host build, full non-live test suite, vet and repository-wide lint
 pass. Race checking was unavailable with the host's cgo-disabled toolchain.
 
-Open: durable one-time broker installation and its LocalSystem/idle/reboot
+Open: deployment of shared-service discovery and its LocalSystem/reboot
 lifecycle, other-primary-account access
 (including Sandbox CLI/server management), effective settings, host-enforced
 public-only egress, real disposable runner registration/completion and

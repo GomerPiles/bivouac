@@ -396,6 +396,8 @@ func run(parent context.Context) error {
 			return json.NewEncoder(os.Stdout).Encode(record)
 		case "guest-discovery":
 			return guestDiscovery(ctx)
+		case "guest-baseline":
+			return guestBaseline(ctx)
 		case "loopback-probe":
 			return loopbackProbe(ctx, os.Stdout)
 		case "host-listen-check":

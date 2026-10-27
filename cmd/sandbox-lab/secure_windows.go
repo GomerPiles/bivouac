@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/guestagent"
-	"github.com/GomerPiles/bivouac/internal/hcs"
 	"github.com/GomerPiles/bivouac/internal/hvsock"
+	"github.com/GomerPiles/bivouac/internal/sandboxdiscovery"
 )
 
 type rejectionReport struct {
@@ -110,38 +110,13 @@ func sameGuest(observed, expected labRecord) bool {
 // This helper only reads Sandbox-class metadata. Authentication happens in
 // the ordinary manager; no private client key or guest RPC enters elevation.
 func nativeCandidates(ctx context.Context, out io.Writer) error {
-	items, err := enumerateNative()
-	if err != nil {
-		return err
-	}
-	api, err := hcs.Load()
+	items, err := sandboxdiscovery.Discover(ctx)
 	if err != nil {
 		return errors.New("candidate query unavailable")
 	}
 	candidates := []nativeBinding{}
 	for _, item := range items {
-		data, _ := json.Marshal(item)
-		var p hcs.Properties
-		if json.Unmarshal(data, &p) != nil {
-			return errors.New("candidate shape refused")
-		}
-		if p.Owner != "WindowsSandbox" || p.SystemType != hcs.SystemTypeVM || p.State != hcs.StateRunning || !validGUID(p.ID) {
-			continue
-		}
-		if len(candidates) >= 16 {
-			return errors.New("candidate bound exceeded")
-		}
-		system, err := api.Open(ctx, p.ID)
-		if err != nil {
-			return errors.New("candidate open unavailable")
-		}
-		current, err := system.Properties(ctx)
-		system.Close()
-		if err != nil {
-			return errors.New("candidate metadata unavailable")
-		}
-		owner := sha256.Sum256([]byte(current.Owner))
-		candidates = append(candidates, nativeBinding{NativeID: p.ID, Probe: nativeFacts{HCS: true, Running: current.State == hcs.StateRunning, IDMatches: strings.EqualFold(p.ID, current.ID), VM: current.SystemType == hcs.SystemTypeVM, Runtime: validGUID(current.RuntimeID), RuntimeID: current.RuntimeID, OwnerHash: hex.EncodeToString(owner[:])}})
+		candidates = append(candidates, nativeBinding{NativeID: item.ID, Probe: nativeFacts{HCS: true, Running: true, IDMatches: true, VM: true, Runtime: true, RuntimeID: item.RuntimeID, OwnerHash: sandboxOwnerHash()}})
 	}
 	return json.NewEncoder(out).Encode(candidates)
 }

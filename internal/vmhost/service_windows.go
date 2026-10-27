@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,11 +24,16 @@ const ServiceName = "bivouac-vmhost"
 
 // serviceDescriptor lets the configured accounts query, start and stop this
 // one service, so mode changes never need elevation, and nothing else.
-func serviceDescriptor(accounts []string) string {
+func serviceDescriptor(accounts, sandboxAccounts []string) string {
 	var b strings.Builder
 	b.WriteString("D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)")
 	for _, sid := range accounts {
 		b.WriteString("(A;;CCLCSWRPWPLOCRRC;;;" + sid + ")")
+	}
+	for _, sid := range sandboxAccounts {
+		if !slices.Contains(accounts, sid) {
+			b.WriteString("(A;;0x20014;;;" + sid + ")")
+		}
 	}
 	return b.String()
 }
@@ -44,40 +50,50 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	if err := protectedRoot(cfg.Root); err != nil {
 		return err
 	}
-	host, err := Open(cfg.Root, cfg.Controller)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = host.Close() }()
-	// Absence polls and network deletion retry until their context ends, so a
-	// guest or network that never settles must not hold startup forever.
-	recoverCtx, cancelRecover := context.WithTimeout(ctx, 2*time.Minute)
-	err = host.Recover(recoverCtx)
-	cancelRecover()
-	if err != nil {
-		log.Warn("guests retained from an earlier VM host", "error", err)
+	var host *Host
+	var err error
+	if cfg.HCSEnabled() {
+		host, err = Open(cfg.Root, cfg.Controller)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = host.Close() }()
+		// Absence polls and network deletion retry until their context ends, so a
+		// guest or network that never settles must not hold startup forever.
+		recoverCtx, cancelRecover := context.WithTimeout(ctx, 2*time.Minute)
+		err = host.Recover(recoverCtx)
+		cancelRecover()
+		if err != nil {
+			log.Warn("guests retained from an earlier VM host", "error", err)
+		}
 	}
 	// ListenPipe creates the first instance exclusively, so an existing
 	// server of this name, privileged or not, makes startup fail. The explicit
 	// Administrators owner is what clients trust, whatever the local policy
 	// for an administrator's default owner.
-	l, err := winio.ListenPipe(PipeName, &winio.PipeConfig{SecurityDescriptor: "O:BA" + pipeDescriptor(cfg.Accounts)})
+	l, err := winio.ListenPipe(PipeName, &winio.PipeConfig{SecurityDescriptor: "O:BA" + pipeDescriptor(cfg.PipeAccounts())})
 	if err != nil {
 		return fmt.Errorf("cannot serve the VM host pipe: %w", err)
 	}
 	server := NewServer(host, cfg)
 	guardCtx, stopGuard := context.WithCancel(ctx)
 	guarded := make(chan struct{})
-	go func() { defer close(guarded); server.Guard(guardCtx, GuardInterval) }()
+	if host != nil {
+		go func() { defer close(guarded); server.Guard(guardCtx, GuardInterval) }()
+	} else {
+		close(guarded)
+	}
 	log.Info("VM host serving", "controller", cfg.Controller, "max_instances", cfg.MaxInstances)
 	err = server.Serve(ctx, l)
 	stopGuard()
 	<-guarded
 	cleanup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if destroyErr := server.DestroyAll(cleanup); destroyErr != nil {
-		log.Error("guests retained at VM host exit", "error", destroyErr)
-		err = errors.Join(err, destroyErr)
+	if host != nil {
+		if destroyErr := server.DestroyAll(cleanup); destroyErr != nil {
+			log.Error("guests retained at VM host exit", "error", destroyErr)
+			err = errors.Join(err, destroyErr)
+		}
 	}
 	log.Info("VM host stopped")
 	return err
@@ -154,7 +170,7 @@ func Install(exe, configPath string, cfg Config) error {
 	}
 	s, err := m.CreateService(ServiceName, exe, mgr.Config{
 		DisplayName:  "bivouac VM host",
-		Description:  "Runs disposable bivouac CI guests through the Host Compute Service. Started and stopped by bivouac on and off.",
+		Description:  "Provides authorized bivouac HCS lifecycle operations and read-only Windows Sandbox discovery.",
 		StartType:    mgr.StartManual,
 		ErrorControl: mgr.ErrorNormal,
 	}, "vmhost", "service", "--config", configPath)
@@ -164,7 +180,7 @@ func Install(exe, configPath string, cfg Config) error {
 	defer func() { _ = s.Close() }()
 	err = s.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 10 * time.Second}}, 3600)
 	if err == nil {
-		err = setServiceDescriptor(s.Handle, serviceDescriptor(cfg.Accounts))
+		err = setServiceDescriptor(s.Handle, serviceDescriptor(cfg.Accounts, cfg.SandboxAccounts))
 	}
 	if err != nil {
 		return errors.Join(err, s.Delete())

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/hcs"
+	"github.com/GomerPiles/bivouac/internal/sandboxdiscovery"
 	"golang.org/x/sys/windows"
 )
 
@@ -27,9 +28,10 @@ const requestTimeout = 4 * time.Minute
 // by the caller's Windows account, and each guest by the account that created
 // it: one account can neither see nor stop another's guests.
 type Server struct {
-	host     *Host
-	cfg      Config
-	identify func(net.Conn) (string, error)
+	host            *Host
+	cfg             Config
+	identify        func(net.Conn) (string, error)
+	discoverSandbox func(context.Context) ([]sandboxdiscovery.Candidate, error)
 	// guardTimeout bounds the guard's work on one guest, including its
 	// quarantine.
 	guardTimeout time.Duration
@@ -60,7 +62,7 @@ type owned struct {
 }
 
 func NewServer(host *Host, cfg Config) *Server {
-	return &Server{host: host, cfg: cfg, identify: pipeCaller, guardTimeout: 30 * time.Second, guests: map[string]*owned{}}
+	return &Server{host: host, cfg: cfg, identify: pipeCaller, discoverSandbox: sandboxdiscovery.Discover, guardTimeout: 30 * time.Second, guests: map[string]*owned{}}
 }
 
 // Serve handles connections until ctx ends, then waits for requests in flight.
@@ -114,16 +116,17 @@ func (s *Server) DestroyAll(ctx context.Context) error {
 
 func (s *Server) handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(requestTimeout + 30*time.Second))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	var req Request
 	d := json.NewDecoder(io.LimitReader(conn, maxRequest))
 	d.DisallowUnknownFields()
 	resp := Response{Code: CodeRefused, Error: "invalid request"}
 	if d.Decode(&req) == nil {
 		// A pipe client can only be impersonated after its data was read.
-		if sid, err := s.identify(conn); err != nil || !slices.Contains(s.cfg.Accounts, sid) {
+		if sid, err := s.identify(conn); err != nil || !slices.Contains(s.cfg.PipeAccounts(), sid) {
 			resp = Response{Code: CodeRefused, Error: "caller is not an authorized account"}
 		} else {
+			_ = conn.SetDeadline(time.Now().Add(requestTimeout + 30*time.Second))
 			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 			resp = s.dispatch(ctx, sid, req)
 			cancel()
@@ -146,6 +149,29 @@ func failure(err error) Response {
 }
 
 func (s *Server) dispatch(ctx context.Context, sid string, req Request) Response {
+	if req.Op == "sandbox-candidates" {
+		if !slices.Contains(s.cfg.SandboxAccounts, sid) || req.Name != "" || req.Create != nil {
+			return refused("Sandbox discovery capability required")
+		}
+		step, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		items, err := s.discoverSandbox(step)
+		if err != nil {
+			return Response{Code: CodeFailed, Error: "Sandbox native discovery unavailable"}
+		}
+		if len(items) > 16 {
+			return refused("Sandbox discovery response exceeds bound")
+		}
+		for _, item := range items {
+			if !item.Valid() {
+				return refused("Sandbox discovery identity invalid")
+			}
+		}
+		return Response{SandboxCandidates: items}
+	}
+	if !s.cfg.HCSEnabled() || !slices.Contains(s.cfg.Accounts, sid) {
+		return refused("HCS lifecycle capability required")
+	}
 	switch req.Op {
 	case "info":
 		return Response{Info: s.info()}

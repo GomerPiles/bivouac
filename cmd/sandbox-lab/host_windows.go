@@ -283,6 +283,7 @@ type labResult struct {
 	DiscoveryChecked       bool               `json:"discovery_checked"`
 	Discovery              []discoveryAttempt `json:"discovery,omitempty"`
 	Smoke                  *smokeFacts        `json:"smoke,omitempty"`
+	Baseline               *baselineFacts     `json:"baseline,omitempty"`
 }
 
 func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
@@ -299,6 +300,8 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	secure := flags.Bool("secure-probe", false, "use per-launch mutual TLS for the native probe; requests read-only UAC discovery")
 	discovery := flags.Bool("discovery-probe", false, "try guest-local runtime UUID sources with no UAC or native enumeration")
 	broker := flags.String("broker", "", "use an already elevated lab metadata broker session; requires secure-probe and never requests UAC")
+	baseline := flags.Bool("baseline-probe", false, "inspect guest tools and effective protection without changing policy")
+	reserve := flags.Uint64("reserve-memory-mb", 12288, "physical host memory to leave free beyond this 4096 MiB lab guest")
 	if flags.Parse(args) != nil || flags.NArg() != 0 || *base == "" || *bivouac == "" || *runner == "" {
 		return errors.New("run requires --root, --bivouac, --runner and --runner-sha256")
 	}
@@ -351,6 +354,9 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	if len(ids) != 0 {
 		return errors.New("sandbox slot occupied; existing instances are never stopped")
 	}
+	if !labMemoryAvailable(*reserve) {
+		return errors.New("insufficient host memory for lab guest and reserve")
+	}
 	// Native elevation has an independent working directory. Keep mappings,
 	// helper executable and receipt arguments absolute across that boundary.
 	absoluteBase, err := filepath.Abs(*base)
@@ -386,6 +392,9 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 	}
 	if err := os.WriteFile(filepath.Join(h.input, "bootstrap.ps1"), []byte(bootstrapScript), 0o600); err != nil {
 		return errors.New("publish lab bootstrap")
+	}
+	if err := os.WriteFile(filepath.Join(h.input, "baseline.ps1"), []byte(baselineScript), 0o600); err != nil {
+		return errors.New("publish baseline script")
 	}
 	for _, path := range []string{filepath.Join(root, "record.json"), filepath.Join(h.input, "record.json")} {
 		if err := writeJSON(path, h.record); err != nil {
@@ -471,6 +480,11 @@ func runLab(ctx context.Context, args []string, out io.Writer) (retErr error) {
 		return err
 	}
 	result.Ownership = true
+	if *baseline {
+		if err := h.baselineProbe(ctx, &result); err != nil {
+			return err
+		}
+	}
 	if *discovery {
 		return h.discoveryProbe(ctx, &result)
 	}

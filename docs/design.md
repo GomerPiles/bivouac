@@ -854,16 +854,36 @@ guest/boot corroboration, journalling and cleanup. The lab helper ends after two
 successful metadata queries or a five-minute deadline with bounded drain; nothing
 is installed, and broker failure never causes an implicit per-launch UAC fallback.
 
-The proposed smallest durable deployment is one administrator-protected helper
-and a separate demand-start `bivouac-sandbox-discovery` service, with its approved
-account protected in the service configuration. Delegate only service start,
-query-status and read-control, plus the local metadata pipe; use no broad Hyper-V
-membership or changes to the HCS VM host. The service must not execute mutable
-worktree code or parse caller-provided service-start arguments. This installer,
-LocalSystem execution, idle/reboot behavior and another primary user remain
-unvalidated. A smaller guest-callback registry setup remains speculative: HCS
-exposes per-service/system `AllowWildcardBinds` policy, and registration alone
-has not been shown sufficient for Sandbox.
+Durable discovery reuses `bivouac-vmhost`. Its optional `sandbox_accounts` grants
+only `sandbox-candidates`; HCS `accounts` separately authorize lifecycle and
+image/limit information. Pipe admission uses the union, with Windows SID checks
+and operation-specific authorization. Discovery-only accounts receive service
+start, query-status and read-control (`0x20014`), never stop or configuration
+rights. Accounts explicitly in both capabilities retain their HCS rights.
+Sandbox-only service configuration requires a protected root and approved SIDs,
+with no HCS controller, images or limits. That mode opens no HCS host journal,
+runs no recovery/guard and destroys no guests at shutdown. Shared HCS service
+lifetime and cleanup remain unchanged; discovery never starts an idle-exit timer.
+
+The shared discovery package uses an owner-filtered HCS enumeration and returns
+only bounded running-Sandbox native/runtime UUIDs. It opens no VM handle and
+does not adopt Sandbox systems into HCS ownership. The lab uses the same query
+implementation. This integration has fixture coverage only; the installed
+service and its configuration have not been updated. LocalSystem/reboot and
+another primary client account remain live gates. A smaller guest-callback
+registry setup remains speculative because wildcard service/system policy is
+not exposed by Sandbox's documented configuration.
+
+The read-only baseline probe binds fixed tool/service/protection facts to the
+recorded guest boot. Fresh Sandbox build 26100 reports no developer SDK/toolset
+in the probed locations, with Defender service and real-time protection off and
+Tamper Protection off. These are default-Sandbox facts, not an inventory of the
+running production image or proof that every security mechanism is inactive.
+Developer tooling follows the previously agreed opt-in pinned catalog model;
+it is not implemented by the HCS display/image stack. Sandbox cannot bake a
+user-selected base image through its public configuration, so verified cached
+payloads and per-guest provisioning are required. Warm preparation may hide
+that cost; reuse after a job cannot preserve the fresh-guest guarantee.
 
 Explicit network probes run trusted code only. Direct and reverse TCP variants
 reuse the shared agent framing over TLS 1.3 with exact per-launch certificate
