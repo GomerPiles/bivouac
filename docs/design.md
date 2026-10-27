@@ -21,7 +21,7 @@ internal/config      one TOML file, validated, no secrets
 internal/secret      credential store (Keychain; native Windows Credential Manager)
 internal/diag        diagnostics collection with redaction, bounded guest archive extraction
 internal/command     argument-array subprocesses with bounded output and classified OpenSSH failures
-internal/netpolicy   IPv4 egress denials shared by Windows-hosted providers
+internal/netpolicy   reserved IPv4 list/reduction shared by every provider; Windows inventory validation/hashing
 internal/macnetwork  public-only macOS host/interface/route socket admission
 internal/rootnet     bounded rootless Ethernet, DHCP/DNS and TCP/UDP forwarding
 internal/cachelink   fixed virtual cache endpoint and cache-only descriptor broker
@@ -501,6 +501,8 @@ denial, and existing public flows close when denied. This is a non-atomic
 observation window. Public services leading back to host/LAN through NAT, reverse
 proxies or tunnels remain reachable unless their destination appears in denied
 routes. Networks represented only by Internet defaults cannot be classified as LAN.
+The reserved IPv4 list is shared through `internal/netpolicy`, with the native
+Rust copy pinned to it by a Go test.
 
 Virtual UDP/TCP DNS uses a fixed-function capability: the child validates and
 rebuilds one QUERY/IN question, with empty Answer/Authority and at most one OPT.

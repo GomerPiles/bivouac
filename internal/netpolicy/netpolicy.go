@@ -1,5 +1,5 @@
-// Package netpolicy derives the IPv4 egress denials shared by every
-// Windows-hosted provider, independently of how a provider enforces them.
+// Package netpolicy defines reserved IPv4 prefixes and canonical egress denials
+// shared by every provider, independently of how a provider enforces them.
 package netpolicy
 
 import (
@@ -11,12 +11,54 @@ import (
 	"strings"
 )
 
+// Reserved returns a fresh, canonically sorted list of non-public IPv4 ranges.
+// It includes the deprecated 6to4 relay anycast range (RFC 7526).
+func Reserved() []netip.Prefix {
+	texts := strings.Fields("0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 192.88.99.0/24 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4")
+	prefixes := make([]netip.Prefix, len(texts))
+	for i, text := range texts {
+		prefixes[i] = netip.MustParsePrefix(text)
+	}
+	return prefixes
+}
+
+// Reduce masks valid IPv4 prefixes, removes duplicates and prefixes covered by
+// broader inputs, and sorts by Prefix.String. It does not modify the input or
+// add reserved ranges; callers include Reserved when needed.
+func Reduce(prefixes []netip.Prefix) []netip.Prefix {
+	var masked []netip.Prefix
+	for _, prefix := range prefixes {
+		if prefix.IsValid() && prefix.Addr().Is4() {
+			masked = append(masked, prefix.Masked())
+		}
+	}
+	slices.SortFunc(masked, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
+	masked = slices.Compact(masked)
+	var reduced []netip.Prefix
+	for _, prefix := range masked {
+		covered := false
+		for _, outer := range masked {
+			if outer.Bits() < prefix.Bits() && outer.Contains(prefix.Addr()) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			reduced = append(reduced, prefix)
+		}
+	}
+	return reduced
+}
+
 // BlockedPrefixes includes non-public ranges and every host interface's
 // connected prefix (including public addresses). IPv6 is separately denied
 // entirely by the Windows providers. The returned snapshot identifies the host
 // interface inventory, so a caller can refuse a policy that changed during a job.
 func BlockedPrefixes(host []netip.Prefix) ([]string, string, error) {
-	result := strings.Fields("0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4")
+	var result []string
+	for _, prefix := range Reserved() {
+		result = append(result, prefix.String())
+	}
 	var identities []string
 	for _, prefix := range host {
 		if !prefix.IsValid() || prefix.Bits() == 0 {
@@ -55,23 +97,13 @@ func EffectiveDenial(host []netip.Prefix) ([]netip.Prefix, string, error) {
 			return nil, "", errors.New("invalid effective host denial")
 		}
 	}
-	var effective []netip.Prefix
-	var canonical []string
-	for i, prefix := range prefixes {
-		covered := false
-		for j, outer := range prefixes {
-			if i != j && outer.Bits() < prefix.Bits() && outer.Contains(prefix.Addr()) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			effective = append(effective, prefix)
-			canonical = append(canonical, prefix.String())
-		}
-	}
+	effective := Reduce(prefixes)
 	if len(effective) == 0 || len(effective) > 128 {
 		return nil, "", errors.New("effective host denial exceeds bound")
+	}
+	canonical := make([]string, len(effective))
+	for i, prefix := range effective {
+		canonical[i] = prefix.String()
 	}
 	hash := sha256.Sum256([]byte(strings.Join(canonical, "\n")))
 	return effective, hex.EncodeToString(hash[:]), nil
