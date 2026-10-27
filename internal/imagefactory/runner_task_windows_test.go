@@ -23,8 +23,9 @@ func TestRunnerTaskRegistrationXML(t *testing.T) {
 		t.Fatal("runner task registration may add a principal entry")
 	}
 	guardStart, guardEnd := strings.Index(guestSetup, "# Check both tasks"), strings.Index(guestSetup, "$principal=New-ScheduledTaskPrincipal")
-	if guardStart < 0 || guardEnd <= guardStart || guardEnd > strings.Index(guestSetup, "Register-ScheduledTask") {
-		t.Fatal("task prechecks do not precede registration")
+	runnerCall := strings.Index(guestSetup, "Register-RunnerTask $runnerXml")
+	if guardStart < 0 || guardEnd <= guardStart || guardEnd > strings.Index(guestSetup, "Register-ScheduledTask") || runnerCall < guardEnd {
+		t.Fatal("task prechecks do not precede both registrations")
 	}
 	for _, existing := range []string{"", "bivouac-guest-agent", "bivouac-guest-runner"} {
 		exists := existing != ""

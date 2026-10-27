@@ -1176,10 +1176,15 @@ ACL and deny-write handles, not hashed per job.
   so it also inherits the root task folder's SYSTEM and Administrators
   entries. The self-test requires explicit SYSTEM and Administrators full
   control and accepts inherited entries for those two only (any access); any
-  other principal, explicit or inherited, is refused. That a filtered
-  same-user process is refused task activation is a live gate. The existing
-  guest-directory user full-control ACE remains; narrowing it is outside this
-  change.
+  other principal, explicit or inherited, is refused. The opt-in lab proves
+  that a same-account SAFER normal-user token at medium integrity can read the
+  agent task but can neither read nor start the runner task, while an
+  elevated start is accepted. The agent logon task keeps Task Scheduler's
+  default read entry for its principal, so a filtered process of the account
+  can start it; that only launches the fixed, administrator-protected agent
+  binary, which is normally already running (IgnoreNew), and is accepted. The
+  existing guest-directory user full-control ACE remains; narrowing it is
+  outside this change.
 - **Launch safety:** before writing `launch-mode` or the single-use `launched`
   marker, structurally validate the runner task's bounded XML from
   `schtasks /Query /XML`. Runtime performs no PowerShell or descriptor query.
