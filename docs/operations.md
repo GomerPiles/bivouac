@@ -1309,8 +1309,7 @@ remove other preparation agents/accounts and credentials before capture.
    Add `--sudo` only for operator-verified passwordless guest sudo; the recipe adds
    no sudo rules. Without it archive caching works and release trust is omitted.
 5. Run `doctor` and the isolated, gated Linux fixture above (optionally
-   `BIVOUAC_VZ_LINUX_CACHE=1`). Actual preparation, two fresh cold-clone identities,
-   DHCP DNS, Docker, isolation and cache behavior still need live validation.
+   `BIVOUAC_VZ_LINUX_CACHE=1`) before using a new baseline.
 
 Package installation uses the image's Ubuntu repositories; this is not a
 reproducible OS-image builder. The default-baseline builder is a follow-up.
