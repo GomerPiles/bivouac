@@ -394,9 +394,10 @@ On every start the daemon reconciles before polling:
 
 - A record whose guest runs with a live runner is adopted and watched.
 - Any other record is torn down (stop, delete, deregister, remove).
-- A record whose status cannot be proven (not owned, corrupt, or no answer
-  within the provider deadline) keeps its record, reservation, and guest,
-  gets a recorded error, and waits for a later start. The rest continue.
+- A record whose retained clone contract or status cannot be proven (unreadable
+  manifest, changed guest OS, not owned, corrupt, or no answer within the deadline)
+  keeps its record, reservation, and guest, gets a recorded error, and waits for
+  a later start. The rest continue.
 - A guest with our prefix and our marker but no record is an orphan:
   deleted, its runner name deregistered if registered.
 - A guest with our prefix but another marker, or no marker, is reported in

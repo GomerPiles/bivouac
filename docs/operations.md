@@ -469,6 +469,13 @@ Restore the configured baseline/helper before new admissions; use `doctor` to
 check them. Retained operations use each clone's manifest and current ownership
 and isolation proof, without re-uploading helpers during adoption.
 
+An unreadable retained manifest or guest-OS mismatch parks only that record:
+no adoption, guest cleanup or registration withdrawal; its reservation remains,
+and other instances reconcile. Restore that clone's original manifest from
+trusted evidence (never substitute baseline metadata), or restore its original
+`guest_os`, then restart. Without that evidence, retain the record for owner
+recovery; do not erase it to force cleanup.
+
 **VM store.** Baselines and clones live in bivouac's VM store:
 `~/Library/Application Support/bivouac/vms`, or `vms` under `BIVOUAC_HOME`.
 `bivouac doctor` names it and checks the baseline's manifest and that the
@@ -847,13 +854,9 @@ controller), rather than Apple's NAT. Endpoint-security and network-filter
 software must allow the required public DNS/HTTPS traffic for that process.
 Bivouac does not reconfigure those tools or create a host/LAN exception.
 
-Before deploying, drain existing vz records (markers require the exact provider field) and rebuild Crosvm prepared images (their marker now carries the execution profile).
-
-For a later owner-controlled rollout, finish old NAT/Softnet/unsandboxed-rootless
-jobs with the
-installed binary and confirm empty records/registrations first. The new
-controller refuses their adoption. Validate a separate DHCP baseline and
-loopback cache config; only then schedule binary migration. This PR stages
+For a later owner-controlled rollout, follow the [upgrade prerequisite](#upgrade-prerequisite)
+with the installed binary; the new controller cannot adopt old clones. Validate
+a separate DHCP baseline and loopback cache config; only then schedule binary migration. This PR stages
 replacements and leaves the production VM backup, installed binary/config,
 labels and Tartelet untouched. Restore the old controller after validation
 when it is safe to resume its original routing. Do not merge before live gates

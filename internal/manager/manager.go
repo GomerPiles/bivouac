@@ -1141,13 +1141,6 @@ var ErrRefused = errors.New("configuration refused")
 func (m *Manager) Reconcile(ctx context.Context) error {
 	records := m.o.Store.List()
 	for _, inst := range records {
-		if inst.Phase != state.PhaseDeregistering {
-			if p, ok := m.o.Providers[inst.Provider].(interface{ ValidateRetained(string) error }); ok {
-				if err := p.ValidateRetained(inst.Name); err != nil {
-					return fmt.Errorf("%w: %w", ErrRefused, err)
-				}
-			}
-		}
 		pc := m.o.Config.Providers[inst.Provider]
 		if pc.VZ != nil && ((pc.VZ.Containers != nil) != (inst.EngineName != "")) {
 			return fmt.Errorf("%w: cannot change container topology with retained records; finish cleanup first", ErrRefused)
@@ -1173,6 +1166,17 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if inst.Phase == state.PhaseDeregistering {
 			resume = append(resume, inst)
 			continue
+		}
+		if validator, ok := p.(interface{ ValidateRetained(string) error }); ok {
+			if err := validator.ValidateRetained(inst.Name); err != nil {
+				// Keep the record in byName to prevent orphan cleanup. Do not
+				// track it: adoption and teardown both require its original contract.
+				m.o.Log.Error("retained guest validation; record kept untouched", "instance", inst.ID, "provider", inst.Provider, "error", err)
+				msg := "retained guest validation: " + err.Error()
+				_ = m.o.Store.RecordError(inst.ID, msg)
+				_, _ = m.o.Store.Update(inst.ID, func(i *state.Instance) { i.LastError = msg })
+				continue
+			}
 		}
 		var st provider.Status
 		err := bounded(ctx, m.operationTimeout(p), func(c context.Context) error {

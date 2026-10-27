@@ -323,6 +323,14 @@ func (m *Manager) converge(ctx context.Context, sess github.Session, p *poller, 
 	waiting := stats.TotalAssignedJobs - stats.TotalRunningJobs
 	var idle []*state.Instance
 	for _, inst := range m.activeFor(p.name) {
+		// Reconciliation may retain an unprovable record without adopting it.
+		// Its reservation remains, but we must not withdraw its registration.
+		m.mu.Lock()
+		_, tracked := m.runs[inst.ID]
+		m.mu.Unlock()
+		if !tracked {
+			continue
+		}
 		if !inst.Sweep && inst.Phase == state.PhaseListening && inst.Job == nil && time.Since(inst.ListenedAt) > m.o.SurplusGrace {
 			idle = append(idle, inst)
 		}

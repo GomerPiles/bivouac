@@ -39,7 +39,7 @@ func (p *Provider) ValidateRetained(name string) error {
 	}
 	m, err := vm.ReadManifest(p.vmDir(name))
 	if err != nil {
-		return errors.New("retained guest manifest is unavailable; restore it before reconciliation")
+		return errors.New("retained guest manifest is unavailable; restore its original manifest before retrying this record")
 	}
 	if m.OS != p.runner.OS {
 		return errors.New("cannot change guest_os with retained guests; finish cleanup first")
