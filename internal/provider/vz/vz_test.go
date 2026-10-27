@@ -457,22 +457,6 @@ func TestRunnerLaunchCarriesMachineOptions(t *testing.T) {
 	}
 }
 
-func TestReleaseProxyNeedsRecordedSudo(t *testing.T) {
-	p, _ := ownedFixture(t)
-	if err := p.checkReleaseProxy(fixtureName); err != nil {
-		t.Fatal(err)
-	}
-	m, _ := vm.ReadManifest(p.vmDir(fixtureName))
-	m.Guest.Sudo = false
-	data, _ := json.Marshal(m)
-	if err := os.WriteFile(filepath.Join(p.vmDir(fixtureName), vm.ManifestFile), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.checkReleaseProxy(fixtureName); err == nil {
-		t.Fatal("release proxy allowed without sudo")
-	}
-}
-
 func TestNestedVirtualizationOnlyForLinuxGuests(t *testing.T) {
 	r := newRecorder()
 	p := newProvider(t, r)

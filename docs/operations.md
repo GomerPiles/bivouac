@@ -526,10 +526,9 @@ memory_gb = 4
 
 Omit macOS slot, display, bootstrap-share and companion-engine settings. Linux
 uses DHCP virtual DNS without guest rewrites; helper hash mismatches require a
-rebuilt baseline. Linux uses the same optional host cache endpoint as Darwin;
-without recorded guest sudo, archive caching remains enabled and release-proxy
-trust is omitted. Setup failure revokes the grant and requires confirmed adapter
-removal before JIT can fall back to ordinary public downloads.
+rebuilt baseline. Both guest OSes keep archive caching without recorded sudo;
+only release-proxy trust is omitted. Setup failure revokes the grant and requires
+confirmed adapter removal before JIT can fall back to ordinary public downloads.
 
 For explicit live validation, use an isolated `BIVOUAC_HOME`, import/copy only a
 validation baseline, reserve CPU/memory, and set `BIVOUAC_EXE`,
@@ -1044,6 +1043,15 @@ store_uploads = true
   then, and both must finish directly and restore intact.
 - `fallback` expects caching disabled.
 - Every mode checks release downloads through fresh signed URLs.
+
+## Upgrade prerequisite
+
+- **Drain before deploying:** finish standalone and container-pair vz guests with
+  the installed binary and confirm empty records/registrations. Pre-upgrade
+  markers without the exact provider field become foreign: never adopted or
+  cleaned; running Darwin/unknown clones still consume host slots. Crosvm images
+  from an older helper need rebuilding with `require_prepared`; otherwise a
+  helper-hash mismatch uses the existing upload fallback.
 
 ## Cutover (after validation)
 

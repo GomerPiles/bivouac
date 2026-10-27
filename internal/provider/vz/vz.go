@@ -274,20 +274,6 @@ func (p *Provider) guestContract(name string) (vm.Guest, error) {
 	return m.Guest, nil
 }
 
-// checkReleaseProxy refuses the release proxy for a guest whose image does
-// not record passwordless sudo, which installing its trust needs; the
-// caller then runs the job without the cache.
-func (p *Provider) checkReleaseProxy(name string) error {
-	guest, err := p.guestContract(name)
-	if err != nil {
-		return err
-	}
-	if !guest.Sudo {
-		return errors.New("the release proxy needs passwordless sudo, which the baseline does not record")
-	}
-	return nil
-}
-
 // runnerDir is the runner directory name's image records.
 func (p *Provider) runnerDir(name string) (string, error) {
 	g, err := p.guestContract(name)
@@ -536,9 +522,24 @@ func (p *Provider) installCache(ctx context.Context, name string) error {
 	if err = json.Unmarshal(bootstrap, &settings); err != nil {
 		return errors.New("invalid cache bootstrap")
 	}
-	if settings.ReleaseProxy {
-		if err := p.checkReleaseProxy(name); err != nil {
-			return err
+	guest, err := p.guestContract(name)
+	if err != nil {
+		return err
+	}
+	if settings.ReleaseProxy && !guest.Sudo {
+		settings.ReleaseProxy = false
+		ordinary, err := json.Marshal(settings)
+		if err != nil {
+			return errors.New("prepare archive-only cache bootstrap")
+		}
+		defer clear(ordinary)
+		bootstrap = ordinary
+	}
+	if !settings.ReleaseProxy {
+		// guest.sh selects proxy/trust environment by this file's presence.
+		// A stale release adapter must not turn archive-only setup into a proxy.
+		if _, err := p.output(ctx, name, []string{"rm", "-f", "/tmp/bivouac-cache-env", "/tmp/bivouac-cache-roots.pem", "/tmp/bivouac-cache-ca.pem"}, nil); err != nil {
+			return errors.New("remove inactive guest release proxy adapter")
 		}
 	}
 	// dd writes the private bootstrap without echoing it back to the host.

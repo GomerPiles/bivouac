@@ -7,12 +7,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GomerPiles/bivouac/internal/cache"
 	"github.com/GomerPiles/bivouac/internal/engine"
+	"github.com/GomerPiles/bivouac/internal/vm"
 )
 
 func enableFixtureCache(t *testing.T, p *Provider) {
@@ -240,5 +243,48 @@ func TestCacheFallbackRequiresProvenRemovalBeforeJIT(t *testing.T) {
 		if len(call) > 3 && call[0] == "Exec" && call[2] == guestPath && call[3] == "start" {
 			t.Fatal("JIT delivery attempted despite uncertain cache cleanup")
 		}
+	}
+}
+
+func TestDarwinCacheKeepsArchivesWithOptionalSudo(t *testing.T) {
+	for _, sudo := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without-sudo", true: "with-sudo"}[sudo], func(t *testing.T) {
+			p, r := ownedFixture(t)
+			manifest, err := vm.ReadManifest(p.vmDir(fixtureName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.Guest.Sudo = sudo
+			data, _ := json.Marshal(manifest)
+			if err := os.WriteFile(filepath.Join(p.vmDir(fixtureName), vm.ManifestFile), data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			enableFixtureCache(t, p)
+			if err := p.StartRunner(context.Background(), fixtureName, []byte("synthetic-jit")); err != nil {
+				t.Fatal(err)
+			}
+			var bootstrap cache.Bootstrap
+			if err := json.Unmarshal([]byte(r.stdin["Exec "+fixtureName+" dd of=/tmp/bivouac/cache-config.json status=none"]), &bootstrap); err != nil {
+				t.Fatal("archive config missing", err)
+			}
+			if bootstrap.ReleaseProxy != sudo || bootstrap.Token == "" || bootstrap.CA == "" {
+				t.Fatal("sudo gate removed ordinary cache capability")
+			}
+			trust, remove, preload, jit := false, false, -1, -1
+			for index, call := range r.calls {
+				text := strings.Join(call, " ")
+				trust = trust || strings.Contains(text, guestPath+" cache-setup") || strings.Contains(text, "of=/tmp/bivouac-cache-ca.pem")
+				remove = remove || strings.Contains(text, "rm -f /tmp/bivouac-cache-env /tmp/bivouac-cache-roots.pem /tmp/bivouac-cache-ca.pem")
+				if strings.Contains(text, "dd of=/tmp/bivouac-cache-preload.cjs") {
+					preload = index
+				}
+				if strings.Contains(text, guestPath+" start") {
+					jit = index
+				}
+			}
+			if trust != sudo || remove == sudo || preload < 0 || jit <= preload {
+				t.Fatal("archive/preload/JIT or release trust ordering differs")
+			}
+		})
 	}
 }
